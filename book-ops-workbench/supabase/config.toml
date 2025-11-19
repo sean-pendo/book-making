@@ -1,0 +1,37 @@
+[project]
+ref = "cidcquodkigtffycgxvh"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public"]
+max_rows = 1000
+
+[auth]
+enabled = true
+port = 54322
+external_url = "http://localhost:3000"
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://localhost:3000"]
+jwt_expiry = 3600
+refresh_token_rotation_enabled = true
+security_refresh_token_reuse_interval = 10
+
+[functions.process-large-import]
+verify_jwt = false
+
+[functions.recalculate-accounts]
+verify_jwt = false
+
+[functions.generate-assignment-rule]
+verify_jwt = false
+
+[functions.ai-balance-optimizer]
+verify_jwt = false
+
+[functions.parse-ai-balancer-config]
+verify_jwt = false
+
+[functions.manager-ai-assistant]
+verify_jwt = false

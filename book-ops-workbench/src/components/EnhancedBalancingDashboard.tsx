@@ -1,0 +1,451 @@
+import React, { useState, useEffect } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Loader2, Users, Building, TrendingUp, AlertTriangle, RotateCcw } from 'lucide-react';
+import { useEnhancedBalancing, RepMetrics } from '@/hooks/useEnhancedBalancing';
+import { useEnhancedAccountCalculations } from '@/hooks/useEnhancedAccountCalculations';
+import { SalesRepDetailModal } from '@/components/SalesRepDetailModal';
+import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
+
+interface EnhancedBalancingDashboardProps {
+  buildId?: string;
+}
+
+interface BalanceMetrics {
+  totalCustomerARR: number;
+  totalCustomerAccounts: number;
+  totalProspectAccounts: number;
+  avgCustomerARRPerRep: number;
+  avgCustomerAccountsPerRep: number;
+  avgProspectAccountsPerRep: number;
+  arrBalance: 'Balanced' | 'Unbalanced';
+  accountBalance: 'Balanced' | 'Unbalanced';
+  maxArrVariance: number;
+  maxAccountVariance: number;
+  ownerRetentionRate: number;
+  avgRegionalAlignment: number;
+  prospectRetentionRate: number;
+  prospectRegionalAlignment: number;
+}
+
+export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboardProps) => {
+  const [selectedRep, setSelectedRep] = useState<RepMetrics | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const { data, isLoading, error, refetch, generateRebalancingPlan } = useEnhancedBalancing(buildId);
+  const { recalculateAccountValues, recalculateAccountValuesAsync, isCalculating, progress } = useEnhancedAccountCalculations(buildId);
+  const [thresholds, setThresholds] = useState<any>(null);
+
+  useEffect(() => {
+    const fetchThresholds = async () => {
+      if (!buildId) return;
+      
+      const { data: config } = await supabase
+        .from('assignment_configuration')
+        .select('*')
+        .eq('build_id', buildId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (config) {
+        setThresholds(config);
+      }
+    };
+    
+    fetchThresholds();
+  }, [buildId]);
+
+  const handleRefresh = async () => {
+    if (!buildId) return;
+    
+    try {
+      // First recalculate account values to apply updated ATR logic
+      await recalculateAccountValuesAsync(buildId);
+      
+      // Then refetch the balancing data
+      await refetch();
+      
+      toast.success('Data refreshed successfully with updated ATR calculations');
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+      toast.error('Failed to refresh data. Please try again.');
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="p-6 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin mr-2" />
+        <span>Loading enhanced balancing data...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <Alert className="border-red-200 bg-red-50">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            Error loading balancing data: {error}
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="p-6 space-y-4">
+        <Alert className="border-yellow-200 bg-yellow-50">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            <strong>No Assignment Data Available</strong>
+            <p className="mt-2 text-sm">
+              No balanced assignments have been generated yet for this build. 
+              Please navigate to the Assignment Engine to generate territory assignments.
+            </p>
+          </AlertDescription>
+        </Alert>
+        <div className="flex items-center gap-2">
+          <Button onClick={handleRefresh} variant="outline" size="sm">
+            <RotateCcw className="h-4 w-4 mr-2" />
+            Refresh Data
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const balanceMetrics: BalanceMetrics = {
+    totalCustomerARR: data.customerMetrics.totalARR,
+    totalCustomerAccounts: data.customerMetrics.totalAccounts,
+    totalProspectAccounts: data.prospectMetrics.totalAccounts,
+    avgCustomerARRPerRep: data.customerMetrics.avgARRPerRep,
+    avgCustomerAccountsPerRep: data.customerMetrics.totalAccounts / (data.repMetrics.length || 1),
+    avgProspectAccountsPerRep: data.prospectMetrics.avgAccountsPerRep,
+    arrBalance: data.customerMetrics.balance,
+    accountBalance: data.prospectMetrics.balance,
+    maxArrVariance: data.customerMetrics.maxVariance,
+    maxAccountVariance: data.prospectMetrics.maxVariance,
+    ownerRetentionRate: data.retentionMetrics.ownerRetentionRate,
+    avgRegionalAlignment: data.retentionMetrics.avgRegionalAlignment,
+    prospectRetentionRate: data.retentionMetrics.prospectRetentionRate,
+    prospectRegionalAlignment: data.retentionMetrics.prospectRegionalAlignment
+  };
+
+  const repMetrics: RepMetrics[] = data.repMetrics;
+
+  const getBalanceStatusColor = (status: string) => {
+    switch (status) {
+      case 'Balanced': return 'bg-green-500';
+      case 'Unbalanced': return 'bg-red-500';
+      case 'Overloaded': return 'bg-red-500';
+      case 'Light': return 'bg-blue-500';
+      default: return 'bg-gray-500';
+    }
+  };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  };
+
+  const handleRepClick = (rep: RepMetrics) => {
+    setSelectedRep(rep);
+    setIsModalOpen(true);
+  };
+
+  const handleModalClose = () => {
+    setIsModalOpen(false);
+    setSelectedRep(null);
+  };
+
+  const getRepWarnings = (rep: RepMetrics) => {
+    const warnings: { type: string; message: string }[] = [];
+    
+    if (!thresholds) return warnings;
+
+    // Check CRE threshold (use override if set, otherwise use calculated max)
+    const creMax = thresholds.cre_max_override ?? thresholds.cre_max;
+    if (creMax && rep.creCount >= creMax) {
+      warnings.push({
+        type: 'CRE',
+        message: `${rep.creCount} CREs (max: ${creMax})`
+      });
+    }
+
+    // Check ATR threshold (use override if set, otherwise use calculated max)
+    const atrMax = thresholds.atr_max_override ?? thresholds.atr_max;
+    if (atrMax && rep.customerATR >= atrMax) {
+      warnings.push({
+        type: 'ATR',
+        message: `$${(rep.customerATR / 1000000).toFixed(1)}M ATR (max: $${(atrMax / 1000000).toFixed(1)}M)`
+      });
+    }
+
+    // Check Q1 renewals (use override if set, otherwise use calculated max)
+    const q1Max = thresholds.q1_renewal_max_override ?? thresholds.q1_renewal_max;
+    if (q1Max && rep.renewalsQ1 >= q1Max) {
+      warnings.push({
+        type: 'Q1',
+        message: `${rep.renewalsQ1} Q1 renewals (max: ${q1Max})`
+      });
+    }
+
+    // Check Q2 renewals (use override if set, otherwise use calculated max)
+    const q2Max = thresholds.q2_renewal_max_override ?? thresholds.q2_renewal_max;
+    if (q2Max && rep.renewalsQ2 >= q2Max) {
+      warnings.push({
+        type: 'Q2',
+        message: `${rep.renewalsQ2} Q2 renewals (max: ${q2Max})`
+      });
+    }
+
+    // Check Q3 renewals (use override if set, otherwise use calculated max)
+    const q3Max = thresholds.q3_renewal_max_override ?? thresholds.q3_renewal_max;
+    if (q3Max && rep.renewalsQ3 >= q3Max) {
+      warnings.push({
+        type: 'Q3',
+        message: `${rep.renewalsQ3} Q3 renewals (max: ${q3Max})`
+      });
+    }
+
+    // Check Q4 renewals (use override if set, otherwise use calculated max)
+    const q4Max = thresholds.q4_renewal_max_override ?? thresholds.q4_renewal_max;
+    if (q4Max && rep.renewalsQ4 >= q4Max) {
+      warnings.push({
+        type: 'Q4',
+        message: `${rep.renewalsQ4} Q4 renewals (max: ${q4Max})`
+      });
+    }
+
+    return warnings;
+  };
+
+  return (
+    <>
+      <div className="p-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Territory Balancing Dashboard</h1>
+            <p className="text-muted-foreground mt-1">
+              Analyze account distribution and rep performance across territories
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              onClick={handleRefresh}
+              variant="outline"
+              size="sm"
+              className="flex items-center gap-2"
+              disabled={isCalculating}
+            >
+              <RotateCcw className={`h-4 w-4 ${isCalculating ? 'animate-spin' : ''}`} />
+              {isCalculating ? 'Recalculating...' : 'Refresh Data'}
+            </Button>
+          </div>
+        </div>
+
+        {/* Balance Status Alert */}
+        <Alert className={balanceMetrics.arrBalance === 'Unbalanced' ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}>
+          <TrendingUp className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Territory Status:</strong> {balanceMetrics.arrBalance}
+            {balanceMetrics.arrBalance === 'Unbalanced' && (
+              <span className="ml-2 text-sm">Territory rebalancing may be needed for optimal distribution.</span>
+            )}
+          </AlertDescription>
+        </Alert>
+
+        {/* Summary Cards */}
+        <div className="grid gap-4 md:grid-cols-6">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Customer Accounts</CardTitle>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{balanceMetrics.totalCustomerAccounts.toLocaleString()}</div>
+              <p className="text-xs text-muted-foreground">
+                Avg: {Math.round(balanceMetrics.avgCustomerAccountsPerRep)} per rep
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Prospect Accounts</CardTitle>
+              <Building className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{balanceMetrics.totalProspectAccounts.toLocaleString()}</div>
+              <p className="text-xs text-muted-foreground">
+                Avg: {Math.round(balanceMetrics.avgProspectAccountsPerRep)} per rep
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Customer Retention</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{balanceMetrics.ownerRetentionRate.toFixed(1)}%</div>
+              <p className="text-xs text-muted-foreground">
+                Customer accounts with same owner
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Customer Regional Alignment</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{balanceMetrics.avgRegionalAlignment.toFixed(1)}%</div>
+              <p className="text-xs text-muted-foreground">
+                Customer accounts in rep's region
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Prospect Retention</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{balanceMetrics.prospectRetentionRate.toFixed(1)}%</div>
+              <p className="text-xs text-muted-foreground">
+                Prospects with same owner
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Prospect Regional Alignment</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{balanceMetrics.prospectRegionalAlignment.toFixed(1)}%</div>
+              <p className="text-xs text-muted-foreground">
+                Prospects in rep's region
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Sales Representatives List */}
+        <div className="w-full">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Users className="h-5 w-5" />
+                Sales Representatives ({data.repMetrics.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3">
+                {data.repMetrics.map((rep) => {
+                  const warnings = getRepWarnings(rep);
+                  
+                  return (
+                    <Card 
+                      key={rep.rep_id} 
+                      className={`cursor-pointer transition-colors hover:bg-muted/50 ${warnings.length > 0 ? 'border-l-4 border-l-amber-500' : ''}`}
+                      onClick={() => handleRepClick(rep)}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-1 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="font-semibold">{rep.name}</h3>
+                              <Badge className={getBalanceStatusColor(rep.status)}>
+                                {rep.status}
+                              </Badge>
+                              {warnings.length > 0 && (
+                                <Badge variant="outline" className="border-amber-500 text-amber-700 bg-amber-50">
+                                  <AlertTriangle className="h-3 w-3 mr-1" />
+                                  {warnings.length} {warnings.length === 1 ? 'Warning' : 'Warnings'}
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {rep.team} • {rep.region}
+                            </p>
+                          </div>
+                          <div className="text-right space-y-1">
+                            <div className="text-sm">
+                              <span className="font-medium">{rep.customerAccounts}</span>
+                              <span className="text-muted-foreground"> customers</span>
+                            </div>
+                            <div className="text-sm">
+                              <span className="font-medium">{rep.prospectAccounts}</span>
+                              <span className="text-muted-foreground"> prospects</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <span className="text-muted-foreground">Customer ARR: </span>
+                            <span className="font-medium">{formatCurrency(rep.customerARR)}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Customer ATR: </span>
+                            <span className="font-medium">{formatCurrency(rep.customerATR)}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Renewals: </span>
+                            <span className="font-medium">{rep.totalRenewals}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">CREs: </span>
+                            <span className="font-medium">{rep.creCount}</span>
+                          </div>
+                        </div>
+
+                        {warnings.length > 0 && (
+                          <div className="mt-3 pt-3 border-t space-y-1">
+                            {warnings.map((warning, idx) => (
+                              <div key={idx} className="text-xs text-amber-700 flex items-center gap-1">
+                                <AlertTriangle className="h-3 w-3" />
+                                <span className="font-medium">{warning.type}:</span>
+                                <span>{warning.message}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Sales Rep Detail Modal */}
+        <SalesRepDetailModal
+          open={isModalOpen}
+          onOpenChange={handleModalClose}
+          rep={selectedRep}
+          buildId={buildId}
+          availableReps={data.repMetrics}
+          onDataRefresh={refetch}
+        />
+
+      </div>
+    </>
+  );
+};
