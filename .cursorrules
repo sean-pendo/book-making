@@ -1,0 +1,29 @@
+# Project Context: Book Builder
+
+## Overview
+This project is a territory balancing and assignment tool for sales operations ("Book Builder"). It helps RevOps teams distribute accounts fairly among sales representatives based on various metrics like ARR, customer count, and risk.
+
+## Tech Stack
+- **Frontend**: React, Vite, TypeScript
+- **UI Library**: Shadcn UI, Tailwind CSS, Lucide Icons
+- **Backend**: Supabase (PostgreSQL, Edge Functions)
+- **State**: TanStack Query (React Query)
+
+## Key Directories
+- `src/pages`: Main application routes and views.
+- `src/components`: Reusable UI components. `src/components/ui` contains Shadcn primitives.
+- `src/services`: Logic for data processing, API calls, and algorithmic balancing.
+- `src/config`: Configuration constants (e.g., `aiBalancingConfig.ts`).
+- `docs/`: Project documentation (Architecture, Ideas, QA Log).
+
+## Coding Guidelines
+1. **Language**: Use simple, clear English.
+2. **Documentation**: Keep documentation in the `docs/` directory, not mixed with source code files unless it's inline code comments.
+3. **Patterns**: Follow existing React/Hook patterns. Use functional components and hooks.
+4. **QA Focused**: We are currently in a QA phase. Prioritize stability and bug fixing over new features unless requested.
+5. **File Operations**: Always check if a file exists before creating it. Prefer editing over overwriting if preserving context is important.
+
+## Deployment
+- Deployment instructions are intentionally kept minimal in the main README to avoid clutter.
+- The project is deployed via Supabase and a static frontend host.
+
