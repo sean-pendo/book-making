@@ -9,6 +9,9 @@ All notable changes to this project will be documented in this file.
   - Fixes $0 Total ARR bug caused by missing `is_parent` classification
   - Eliminates need for manual SQL function execution after import
   - Added debug logging for first 5 rows to track parent/child classification
+- **Fix**: Added missing favicon link in index.html
+  - Favicon.png (200x200 PNG) now displays correctly in browser tabs
+  - Added `<link rel="icon" type="image/png" href="/favicon.png" />` to HTML head
 
 ## [2025-11-20] - Critical Bug Fixes (v1.0.1)
 - **Security**: Enabled JWT verification on all Edge Functions (`verify_jwt = true`)
