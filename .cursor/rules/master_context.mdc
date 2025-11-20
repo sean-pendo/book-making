@@ -1,0 +1,43 @@
+---
+description: Master context for the Book Builder project, including architecture, QA state, and critical debugging rules.
+globs: **/*
+---
+# Project Context: Book Builder (QA Phase)
+
+## 1. Project Overview
+**Book Builder** is a territory balancing and assignment tool for Sales Operations. It allows RevOps to import data (Accounts, Reps), define rules, and generate fair account assignments based on ARR, geography, and other metrics.
+
+## 2. Tech Stack
+- **Frontend**: React (Vite), TypeScript, Shadcn UI, Tailwind CSS.
+- **Backend**: Supabase (PostgreSQL, Edge Functions).
+- **State Management**: TanStack Query (React Query).
+- **Persistence**: `localStorage` (for import state) + Supabase (for data).
+
+## 3. Architecture & System Map
+### Data Pipeline
+1.  **Import**: `DataImport.tsx` -> `BatchImportService.ts` -> Supabase.
+    *   *Note*: Uses "Optimized Import" which deletes existing records before inserting. High risk of data loss if insert fails.
+2.  **Storage**: Core tables are `accounts`, `sales_reps`, `assignments`, `assignment_rules`.
+
+### Assignment Engine
+Multiple services exist (fragmentation risk). Always verify which is active:
+1.  **`RebalancingAssignmentService.ts`**: The main/modern engine ("Complete Overhaul").
+2.  **`CollaborativeAssignmentService.ts`**: Rule-based legacy engine.
+3.  **`SophisticatedAssignmentService.ts`**: Multi-pass legacy engine.
+
+## 4. QA Status & Known Issues (v1.0)
+We are currently in **QA Mode**. The codebase is unstable.
+
+### Critical Blockers
+*   **Generation Flow**: Assignments fail to generate or return blank results.
+*   **Data Import**: Users see "0 Accounts" after import until hard refresh. State sync issue between React <-> Supabase.
+
+### Debugging Strategy
+1.  **Trust Nothing**: Verify data in Supabase first. If it's not in the DB, the UI is lying.
+2.  **Isolate Flow**: When fixing Generation, check `RebalancingAssignmentService` logs first.
+3.  **Local Dev**: Debug locally with a connected Supabase instance to reproduce "0 Accounts" bug.
+
+## 5. Coding Standards
+*   **Docs First**: Update `docs/qa_log.md` and `docs/architecture.md` before complex code changes.
+*   **Simple Language**: Use clear, non-jargon English in comments and docs.
+*   **Safety**: Check for file existence before creation. prefer `edit` over `overwrite`.
