@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-20] - Data Import Enhancement (v1.0.2)
+- **Fix**: Automatic `is_parent` field calculation during account CSV import
+  - System now automatically sets `is_parent = true` when `ultimate_parent_id` is NULL/empty
+  - System automatically sets `is_parent = false` when `ultimate_parent_id` has a value
+  - Fixes $0 Total ARR bug caused by missing `is_parent` classification
+  - Eliminates need for manual SQL function execution after import
+  - Added debug logging for first 5 rows to track parent/child classification
+
 ## [2025-11-20] - Critical Bug Fixes (v1.0.1)
 - **Security**: Enabled JWT verification on all Edge Functions (`verify_jwt = true`)
   - `process-large-import`, `recalculate-accounts`, `generate-assignment-rule`

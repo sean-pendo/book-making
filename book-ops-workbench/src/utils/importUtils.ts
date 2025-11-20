@@ -299,12 +299,27 @@ export const validateMappedData = (
         const value = mappedRow[field];
         return !value || value === null || value === '' || value === 'undefined';
       });
-      
+
       if (missingCriticalFields.length > 0) {
         criticalErrors.push(`Row ${rowNum}: Missing critical fields: ${missingCriticalFields.join(', ')}`);
         hasCriticalErrors = true;
       }
-      
+
+      // Automatically calculate is_parent based on ultimate_parent_id
+      // If ultimate_parent_id is NULL/empty, this account IS a parent
+      // If ultimate_parent_id has a value, this account is a child
+      const ultimateParentId = mappedRow['ultimate_parent_id'];
+      mappedRow['is_parent'] = !ultimateParentId || ultimateParentId === null ||
+                                (typeof ultimateParentId === 'string' && ultimateParentId.trim() === '');
+
+      // Debug logging for first few rows
+      if (index < 5) {
+        console.log(`🔍 Row ${rowNum} is_parent calculation:`, {
+          ultimate_parent_id: ultimateParentId,
+          is_parent: mappedRow['is_parent']
+        });
+      }
+
       // Optional fields - generate warnings but don't block import
       if (!mappedRow['owner_id']) {
         warnings.push(`Row ${rowNum}: Missing owner_id - record will be imported but may need manual assignment`);
