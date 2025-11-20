@@ -514,11 +514,11 @@ export const DataImport = () => {
     try {
       // Delete the actual data from Supabase based on file type
       if (fileToDelete.type === 'accounts') {
-        console.log('🗑️ Deleting accounts from Supabase for build:', selectedBuildId);
+        console.log('🗑️ Deleting accounts from Supabase for build:', currentBuildId);
         const { error } = await supabase
           .from('accounts')
           .delete()
-          .eq('build_id', selectedBuildId);
+          .eq('build_id', currentBuildId);
 
         if (error) {
           console.error('❌ Error deleting accounts:', error);
@@ -527,11 +527,11 @@ export const DataImport = () => {
         console.log('✅ Accounts deleted from Supabase');
 
       } else if (fileToDelete.type === 'opportunities') {
-        console.log('🗑️ Deleting opportunities from Supabase for build:', selectedBuildId);
+        console.log('🗑️ Deleting opportunities from Supabase for build:', currentBuildId);
         const { error } = await supabase
           .from('opportunities')
           .delete()
-          .eq('build_id', selectedBuildId);
+          .eq('build_id', currentBuildId);
 
         if (error) {
           console.error('❌ Error deleting opportunities:', error);
@@ -540,11 +540,11 @@ export const DataImport = () => {
         console.log('✅ Opportunities deleted from Supabase');
 
       } else if (fileToDelete.type === 'sales_reps') {
-        console.log('🗑️ Deleting sales reps from Supabase for build:', selectedBuildId);
+        console.log('🗑️ Deleting sales reps from Supabase for build:', currentBuildId);
         const { error } = await supabase
           .from('sales_reps')
           .delete()
-          .eq('build_id', selectedBuildId);
+          .eq('build_id', currentBuildId);
 
         if (error) {
           console.error('❌ Error deleting sales reps:', error);
@@ -579,7 +579,7 @@ export const DataImport = () => {
         variant: "destructive"
       });
     }
-  }, [files, selectedFile?.id, selectedBuildId, toast]);
+  }, [files, selectedFile?.id, currentBuildId, toast]);
 
   const autoMapAllFields = (file: ImportFile) => {
     if (!file.autoMappings) return;
