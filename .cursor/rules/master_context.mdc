@@ -37,7 +37,16 @@ We are currently in **QA Mode**. The codebase is unstable.
 2.  **Isolate Flow**: When fixing Generation, check `RebalancingAssignmentService` logs first.
 3.  **Local Dev**: Debug locally with a connected Supabase instance to reproduce "0 Accounts" bug.
 
-## 5. Coding Standards
+## 5. Rules & Guidelines
+
+### 📜 Documentation Rules
 *   **Docs First**: Update `docs/qa_log.md` and `docs/architecture.md` before complex code changes.
+*   **Changelog Maintenance**: **MANDATORY**. You must maintain a `CHANGELOG.md` file in the root.
+    *   Every time you make a code change (fix, feature, refactor), you must append an entry to `CHANGELOG.md`.
+    *   Format: `[YYYY-MM-DD] - {Type}: {Description}`.
+    *   Types: `Fix`, `Feature`, `Refactor`, `Docs`.
 *   **Simple Language**: Use clear, non-jargon English in comments and docs.
-*   **Safety**: Check for file existence before creation. prefer `edit` over `overwrite`.
+
+### 🛡️ Safety & Coding
+*   **File Operations**: Always check if a file exists before creation. Prefer `edit` over `overwrite`.
+*   **No Magic**: Do not assume deployment environments. Check env vars first.
