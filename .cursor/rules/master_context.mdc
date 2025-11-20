@@ -40,7 +40,10 @@ We are currently in **QA Mode**. The codebase is unstable.
 ## 5. Rules & Guidelines
 
 ### 📜 Documentation Rules
-*   **Docs First**: Update `docs/qa_log.md` and `docs/architecture.md` before complex code changes.
+*   **Structure**:
+    *   `docs/core/`: Strategy & Architecture (e.g., `architecture.md`).
+    *   `docs/ops/`: QA & Operations (e.g., `qa_log.md`).
+*   **Docs First**: Update `docs/ops/qa_log.md` or `docs/core/architecture.md` before complex changes.
 *   **Changelog Maintenance**: **MANDATORY**. You must maintain a `CHANGELOG.md` file in the root.
     *   Every time you make a code change (fix, feature, refactor), you must append an entry to `CHANGELOG.md`.
     *   Format: `[YYYY-MM-DD] - {Type}: {Description}`.
