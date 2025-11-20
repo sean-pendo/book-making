@@ -18,6 +18,12 @@ All notable changes to this project will be documented in this file.
   - Now properly deletes accounts, opportunities, or sales_reps from Supabase when delete button clicked
   - Prevents duplicate data issues when re-uploading same file type
   - Shows success/error toast notifications for delete operations
+- **Feature**: Auto-load existing imported data from Supabase
+  - Import page now checks Supabase for existing data on page load
+  - Displays imported data in "Uploaded Files" table even if not in localStorage
+  - Shows row counts for accounts, opportunities, and sales reps
+  - Enables delete functionality on data imported in previous sessions
+  - No longer dependent on localStorage state
 
 ## [2025-11-20] - Critical Bug Fixes (v1.0.1)
 - **Security**: Enabled JWT verification on all Edge Functions (`verify_jwt = true`)

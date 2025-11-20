@@ -199,6 +199,88 @@ export const DataImport = () => {
     }
   }, [currentBuildId]);
 
+  // Load existing imported data from Supabase to show in "Uploaded Files" table
+  useEffect(() => {
+    const loadExistingData = async () => {
+      if (!currentBuildId) return;
+
+      console.log('🔍 Checking for existing imported data in build:', currentBuildId);
+
+      try {
+        // Check what data exists in Supabase for this build
+        const [accountsRes, oppsRes, repsRes] = await Promise.all([
+          supabase.from('accounts').select('id', { count: 'exact', head: true }).eq('build_id', currentBuildId),
+          supabase.from('opportunities').select('id', { count: 'exact', head: true }).eq('build_id', currentBuildId),
+          supabase.from('sales_reps').select('id', { count: 'exact', head: true }).eq('build_id', currentBuildId)
+        ]);
+
+        const existingFiles: ImportFile[] = [];
+
+        // Add accounts if they exist
+        if (accountsRes.count && accountsRes.count > 0) {
+          existingFiles.push({
+            id: 'existing-accounts',
+            name: 'Imported Accounts',
+            type: 'accounts',
+            size: 0,
+            data: [],
+            headers: [],
+            rowCount: accountsRes.count,
+            status: 'completed',
+            fieldMappings: {},
+            validationResult: null
+          });
+          console.log(`✅ Found ${accountsRes.count} accounts in Supabase`);
+        }
+
+        // Add opportunities if they exist
+        if (oppsRes.count && oppsRes.count > 0) {
+          existingFiles.push({
+            id: 'existing-opportunities',
+            name: 'Imported Opportunities',
+            type: 'opportunities',
+            size: 0,
+            data: [],
+            headers: [],
+            rowCount: oppsRes.count,
+            status: 'completed',
+            fieldMappings: {},
+            validationResult: null
+          });
+          console.log(`✅ Found ${oppsRes.count} opportunities in Supabase`);
+        }
+
+        // Add sales reps if they exist
+        if (repsRes.count && repsRes.count > 0) {
+          existingFiles.push({
+            id: 'existing-sales-reps',
+            name: 'Imported Sales Reps',
+            type: 'sales_reps',
+            size: 0,
+            data: [],
+            headers: [],
+            rowCount: repsRes.count,
+            status: 'completed',
+            fieldMappings: {},
+            validationResult: null
+          });
+          console.log(`✅ Found ${repsRes.count} sales reps in Supabase`);
+        }
+
+        // Only update files if we found existing data and files array is empty
+        if (existingFiles.length > 0 && files.length === 0) {
+          console.log(`📊 Loading ${existingFiles.length} existing data files into UI`);
+          setFiles(existingFiles);
+        }
+
+      } catch (error) {
+        console.error('❌ Error loading existing data:', error);
+      }
+    };
+
+    loadExistingData();
+  }, [currentBuildId, files.length]);
+
   const createBuild = async () => {
     if (!newBuildName.trim()) {
       toast({
