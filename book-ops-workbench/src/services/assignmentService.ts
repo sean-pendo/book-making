@@ -180,7 +180,7 @@ class AssignmentService {
       const conflicts: AssignmentProposal[] = [];
       const processedAccountIds = new Set<string>();
       const repsByUSRegion = this.groupRepsByUSRegion(salesReps);
-      const workloadTracker = this.initializeEnhancedWorkloadTracker(salesReps, accounts);
+      const workloadTracker = await this.initializeEnhancedWorkloadTracker(buildId, salesReps, accounts);
 
       // Sort rules by priority (1 = highest priority)
       const sortedRules = assignmentRules
@@ -1857,44 +1857,101 @@ class AssignmentService {
   }
 
   /**
+   * Calculate renewal counts by quarter from opportunities
+   */
+  private async calculateRenewalsByQuarter(buildId: string, repId: string): Promise<{ q1: number; q2: number; q3: number; q4: number }> {
+    try {
+      const { data: opportunities, error } = await supabase
+        .from('opportunities')
+        .select('close_date, owner_id')
+        .eq('build_id', buildId)
+        .eq('owner_id', repId)
+        .not('close_date', 'is', null);
+
+      if (error) {
+        console.warn(`[AssignmentService] Warning fetching opportunities for ${repId}:`, error);
+        return { q1: 0, q2: 0, q3: 0, q4: 0 };
+      }
+
+      const renewals = { q1: 0, q2: 0, q3: 0, q4: 0 };
+      const currentYear = new Date().getFullYear();
+
+      opportunities?.forEach(opp => {
+        if (!opp.close_date) return;
+
+        const closeDate = new Date(opp.close_date);
+        const month = closeDate.getMonth() + 1; // 1-12
+        const year = closeDate.getFullYear();
+
+        // Only count renewals for current calendar year
+        if (year !== currentYear) return;
+
+        if (month >= 1 && month <= 3) renewals.q1++;
+        else if (month >= 4 && month <= 6) renewals.q2++;
+        else if (month >= 7 && month <= 9) renewals.q3++;
+        else if (month >= 10 && month <= 12) renewals.q4++;
+      });
+
+      return renewals;
+    } catch (error) {
+      console.warn(`[AssignmentService] Error calculating renewals for ${repId}:`, error);
+      return { q1: 0, q2: 0, q3: 0, q4: 0 };
+    }
+  }
+
+  /**
    * Initialize enhanced workload tracker (maintains existing assignments for continuity)
    */
-  private initializeWorkloadTracker(salesReps: SalesRep[], accounts: Account[]): Map<string, any> {
+  private async initializeWorkloadTracker(buildId: string, salesReps: SalesRep[], accounts: Account[]): Promise<Map<string, any>> {
     const tracker = new Map<string, any>();
-    
-    salesReps.forEach(rep => {
+
+    // Fetch renewals for all reps in parallel
+    const renewalPromises = salesReps.map(rep =>
+      this.calculateRenewalsByQuarter(buildId, rep.rep_id)
+    );
+    const renewalResults = await Promise.all(renewalPromises);
+
+    salesReps.forEach((rep, index) => {
       // Count existing assignments
       const existingAccounts = accounts.filter(acc => acc.owner_id === rep.rep_id);
       const tier1Count = existingAccounts.filter(acc => {
         const arr = acc.arr || acc.calculated_arr || 0;
         return arr > 100000 || acc.enterprise_vs_commercial === 'Enterprise';
       }).length;
-      
+
       const totalARR = existingAccounts.reduce((sum, acc) => {
         return sum + (acc.arr || acc.calculated_arr || 0);
       }, 0);
 
+      const renewals = renewalResults[index];
       tracker.set(rep.rep_id, {
         accountCount: existingAccounts.length,
         tier1Count,
         totalARR,
-        renewalsQ1: 0, // TODO: Calculate from renewal dates
-        renewalsQ2: 0,
-        renewalsQ3: 0,
-        renewalsQ4: 0
+        renewalsQ1: renewals.q1,
+        renewalsQ2: renewals.q2,
+        renewalsQ3: renewals.q3,
+        renewalsQ4: renewals.q4
       });
     });
-    
+
+    console.log(`[AssignmentService] 📅 Renewal tracking initialized for ${salesReps.length} reps`);
     return tracker;
   }
 
   /**
    * Initialize ENHANCED workload tracker with ARR-weighted balancing
    */
-  private initializeEnhancedWorkloadTracker(salesReps: SalesRep[], accounts: Account[]): Map<string, any> {
+  private async initializeEnhancedWorkloadTracker(buildId: string, salesReps: SalesRep[], accounts: Account[]): Promise<Map<string, any>> {
     const tracker = new Map<string, any>();
-    
-    salesReps.forEach(rep => {
+
+    // Fetch renewals for all reps in parallel
+    const renewalPromises = salesReps.map(rep =>
+      this.calculateRenewalsByQuarter(buildId, rep.rep_id)
+    );
+    const renewalResults = await Promise.all(renewalPromises);
+
+    salesReps.forEach((rep, index) => {
       // Initialize with current account counts and ARR for baseline
       const currentAccounts = accounts.filter(acc => acc.owner_id === rep.rep_id);
       const totalARR = currentAccounts.reduce((sum, acc) => sum + (acc.calculated_arr || acc.arr || 0), 0);
@@ -1902,7 +1959,8 @@ class AssignmentService {
         const arr = acc.calculated_arr || acc.arr || 0;
         return arr > 100000 || acc.enterprise_vs_commercial === 'Enterprise';
       }).length;
-      
+
+      const renewals = renewalResults[index];
       tracker.set(rep.rep_id, {
         accountCount: 0, // Start assignments from 0 for new balance calculation
         currentAccountCount: currentAccounts.length, // Track existing baseline
@@ -1911,13 +1969,13 @@ class AssignmentService {
         totalARR: 0, // New ARR assignments
         currentARR: totalARR, // Existing ARR baseline
         workloadScore: 0, // Composite score for assignment prioritization
-        renewalsQ1: 0,
-        renewalsQ2: 0,
-        renewalsQ3: 0,
-        renewalsQ4: 0
+        renewalsQ1: renewals.q1,
+        renewalsQ2: renewals.q2,
+        renewalsQ3: renewals.q3,
+        renewalsQ4: renewals.q4
       });
     });
-    
+
     console.log(`[AssignmentService] 🔄 Enhanced ARR-weighted workload tracker initialized for ${salesReps.length} reps`);
     return tracker;
   }

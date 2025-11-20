@@ -47,19 +47,19 @@ secret = ""
 redirect_uri = ""
 
 [functions.process-large-import]
-verify_jwt = false
+verify_jwt = true
 
 [functions.recalculate-accounts]
-verify_jwt = false
+verify_jwt = true
 
 [functions.generate-assignment-rule]
-verify_jwt = false
+verify_jwt = true
 
 [functions.ai-balance-optimizer]
-verify_jwt = false
+verify_jwt = true
 
 [functions.parse-ai-balancer-config]
-verify_jwt = false
+verify_jwt = true
 
 [functions.manager-ai-assistant]
-verify_jwt = false
+verify_jwt = true

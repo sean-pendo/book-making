@@ -145,16 +145,30 @@ export class EnhancedCSVParser {
     // Parse headers
     let headers: string[] = [];
     try {
-      headers = this.parseCSVLine(lines[0], delimiter).map(h => h.replace(/^"|"$/g, '').trim());
-      
+      const rawHeaders = this.parseCSVLine(lines[0], delimiter).map(h => h.replace(/^"|"$/g, '').trim());
+
+      // Filter out completely empty headers but preserve valid ones
+      headers = rawHeaders.filter((h, index) => {
+        if (!h || h.trim() === '' || typeof h !== 'string') {
+          warnings.push(`Empty or invalid header found at column ${index + 1} - will be excluded from field mappings`);
+          return false;
+        }
+        return true;
+      });
+
       // Validate headers
       if (headers.length === 0) {
         errors.push({
           row: 1,
           type: 'structural',
           severity: 'critical',
-          message: 'No headers found in the first row'
+          message: 'No valid headers found in the first row - all headers are empty or invalid',
+          suggestedFix: 'Ensure the first row contains valid column names'
         });
+      }
+
+      if (rawHeaders.length > headers.length) {
+        warnings.push(`Filtered out ${rawHeaders.length - headers.length} empty/invalid header(s) from ${rawHeaders.length} total columns`);
       }
 
       // Check for duplicate headers
@@ -165,14 +179,7 @@ export class EnhancedCSVParser {
 
       Object.entries(headerCounts).forEach(([header, count]) => {
         if (count > 1) {
-          warnings.push(`Duplicate header found: "${header}" appears ${count} times`);
-        }
-      });
-
-      // Check for empty headers
-      headers.forEach((header, index) => {
-        if (!header || header.trim() === '') {
-          warnings.push(`Empty header found at column ${index + 1}`);
+          warnings.push(`Duplicate header found: "${header}" appears ${count} times - this may cause field mapping issues`);
         }
       });
 

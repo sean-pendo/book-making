@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-20] - Critical Bug Fixes (v1.0.1)
+- **Security**: Enabled JWT verification on all Edge Functions (`verify_jwt = true`)
+  - `process-large-import`, `recalculate-accounts`, `generate-assignment-rule`
+  - `ai-balance-optimizer`, `parse-ai-balancer-config`, `manager-ai-assistant`
+  - Fixes critical security vulnerability allowing unauthenticated function calls
+- **Fix**: Implemented Q2-Q4 renewal date calculations in assignment engine
+  - Added `calculateRenewalsByQuarter()` method to fetch and calculate quarterly renewals
+  - Updated `initializeWorkloadTracker()` and `initializeEnhancedWorkloadTracker()` to be async
+  - Renewals now properly distributed across all quarters instead of hardcoded to 0
+- **Fix**: Enhanced CSV header validation in data import
+  - Filter out empty/invalid headers before rendering field mapping dropdowns
+  - Better error messages for malformed CSV files
+  - Prevents UI crashes from null/undefined headers
+- **Fix**: Added API retry logic with exponential backoff for Edge Functions
+  - Implemented `fetchWithRetry()` with 3 retry attempts (1s, 2s, 4s delays)
+  - Automatic retry on 429 (rate limit) and network errors
+  - Better error messages for rate limits and depleted credits
+
 ## [2025-11-20] - Lovable.dev Independence & Multi-Platform Hosting
 - **Refactor**: Removed all Lovable.dev dependencies from codebase.
 - **Refactor**: Removed `lovable-tagger` package from devDependencies.
