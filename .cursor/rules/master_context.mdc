@@ -53,3 +53,11 @@ We are currently in **QA Mode**. The codebase is unstable.
 ### 🛡️ Safety & Coding
 *   **File Operations**: Always check if a file exists before creation. Prefer `edit` over `overwrite`.
 *   **No Magic**: Do not assume deployment environments. Check env vars first.
+*   
+
+## 6. Git Suggestions
+This is a very important project when the time is approriate. Please let me know when I should push updates to GitHub
+
+
+## 7. Learning Log
+Maintain a learning log so as we build this app I continune to understand what we are doing, and why

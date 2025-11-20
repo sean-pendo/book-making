@@ -9,6 +9,7 @@ DECLARE
     result_count integer := 0;
     parent_result_count integer := 0;
     child_result_count integer := 0;
+    temp_count integer := 0;
 BEGIN
     -- Set is_parent = true for accounts where ultimate_parent_id is NULL
     UPDATE accounts 
@@ -27,7 +28,8 @@ BEGIN
       AND ultimate_parent_id != ''
       AND is_parent != false;
 
-    GET DIAGNOSTICS result_count = result_count + ROW_COUNT;
+    GET DIAGNOSTICS temp_count = ROW_COUNT;
+    result_count := result_count + temp_count;
     
     -- Get final counts
     SELECT COUNT(*) INTO parent_result_count

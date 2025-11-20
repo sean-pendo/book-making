@@ -4,7 +4,7 @@ CREATE TABLE public.assignment_rules (
   build_id UUID REFERENCES public.builds(id),
   name TEXT NOT NULL,
   priority INTEGER NOT NULL,
-  rule_type TEXT NOT NULL CHECK (rule_type IN ('GEO_FIRST', 'CONTINUITY', 'TIER_BALANCE', 'ROUND_ROBIN', 'CUSTOM')),
+  rule_type TEXT NOT NULL CHECK (rule_type IN ('GEO_FIRST', 'CONTINUITY', 'TIER_BALANCE', 'ROUND_ROBIN', 'CUSTOM', 'LOAD_BALANCE')),
   conditions JSONB NOT NULL DEFAULT '{}',
   enabled BOOLEAN NOT NULL DEFAULT true,
   description TEXT,

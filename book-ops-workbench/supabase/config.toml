@@ -1,5 +1,18 @@
-[project]
-ref = "cidcquodkigtffycgxvh"
+project_id = "lolnbotrdamhukdrrsmh"
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
 
 [api]
 enabled = true
@@ -10,13 +23,28 @@ max_rows = 1000
 
 [auth]
 enabled = true
-port = 54322
-external_url = "http://localhost:3000"
-site_url = "http://localhost:3000"
-additional_redirect_urls = ["https://localhost:3000"]
+site_url = "http://localhost:8080"
+additional_redirect_urls = ["https://localhost:8080"]
 jwt_expiry = 3600
-refresh_token_rotation_enabled = true
-security_refresh_token_reuse_interval = 10
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = true
+
+[auth.external.google]
+enabled = false
+client_id = ""
+secret = ""
+redirect_uri = ""
+
+[auth.external.github]
+enabled = false
+client_id = ""
+secret = ""
+redirect_uri = ""
 
 [functions.process-large-import]
 verify_jwt = false

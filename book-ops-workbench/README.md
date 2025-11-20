@@ -1,73 +1,177 @@
-# Welcome to your Lovable project
+# Book Builder - Territory Assignment Platform
 
-## Project info
+A comprehensive territory balancing and assignment tool for Sales Operations (RevOps). Book Builder enables teams to import sales data, configure assignment rules, and generate fair territory assignments based on ARR, geography, and other business metrics.
 
-**URL**: https://lovable.dev/projects/bf4623ea-ccde-484b-bceb-6594ad2b4b65
+## Project Status
 
-## How can I edit this code?
+**Version**: 1.0 (QA Phase)
+**Status**: Active Development
 
-There are several ways of editing your application.
+## Tech Stack
 
-**Use Lovable**
+- **Frontend**: React 18 + TypeScript + Vite
+- **UI Framework**: Shadcn UI + Tailwind CSS
+- **State Management**: TanStack Query (React Query)
+- **Backend**: Supabase (PostgreSQL + Edge Functions)
+- **Routing**: React Router v6
+- **Form Handling**: React Hook Form + Zod
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/bf4623ea-ccde-484b-bceb-6594ad2b4b65) and start prompting.
+## Prerequisites
 
-Changes made via Lovable will be committed automatically to this repo.
+- Node.js 18+ ([install with nvm](https://github.com/nvm-sh/nvm))
+- npm or yarn
+- Supabase CLI (for database management)
 
-**Use your preferred IDE**
+## Getting Started
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### 1. Clone the Repository
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
+```bash
 git clone <YOUR_GIT_URL>
+cd book-ops-workbench
+```
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+### 2. Install Dependencies
 
-# Step 3: Install the necessary dependencies.
-npm i
+```bash
+npm install
+```
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+### 3. Environment Setup
+
+Copy the example environment file and configure your Supabase credentials:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and add your Supabase credentials:
+
+```env
+VITE_SUPABASE_URL=https://lolnbotrdamhukdrrsmh.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key-here
+```
+
+Get your credentials from:
+https://app.supabase.com/project/lolnbotrdamhukdrrsmh/settings/api
+
+### 4. Start Development Server
+
+```bash
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+The application will be available at `http://localhost:8080`
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Available Scripts
 
-**Use GitHub Codespaces**
+```bash
+# Development server (port 8080)
+npm run dev
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+# Production build
+npm run build
 
-## What technologies are used for this project?
+# Development build (with source maps)
+npm run build:dev
 
-This project is built with:
+# Lint code
+npm run lint
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+# Preview production build
+npm run preview
+```
 
-## How can I deploy this project?
+## Database Management
 
-Simply open [Lovable](https://lovable.dev/projects/bf4623ea-ccde-484b-bceb-6594ad2b4b65) and click on Share -> Publish.
+### Install Supabase CLI
 
-## Can I connect a custom domain to my Lovable project?
+```bash
+brew install supabase/tap/supabase
+# OR
+npm install -g supabase
+```
 
-Yes, you can!
+### Database Commands
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+```bash
+# Link to remote Supabase project
+supabase link --project-ref lolnbotrdamhukdrrsmh
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+# Push migrations to remote database
+supabase db push
+
+# Reset local database (useful for testing)
+supabase db reset
+
+# View database in Supabase Studio
+supabase studio
+```
+
+## Project Structure
+
+```
+book-ops-workbench/
+├── src/
+│   ├── components/        # React components
+│   ├── pages/            # Route-level components
+│   ├── services/         # Business logic & assignment engines
+│   ├── hooks/            # Custom React hooks
+│   ├── contexts/         # React Context providers
+│   ├── integrations/     # Supabase client & types
+│   └── lib/              # Utilities
+├── supabase/
+│   ├── migrations/       # Database migrations
+│   └── functions/        # Edge Functions
+├── docs/                 # Project documentation
+│   ├── core/            # Architecture & strategy
+│   └── ops/             # QA logs & operations
+└── public/              # Static assets
+```
+
+## Key Features
+
+- **Data Import**: CSV upload for Accounts, Sales Reps, and Opportunities
+- **Assignment Engine**: Rule-based territory assignment with multiple strategies
+- **Balancing Dashboard**: Visualize and optimize territory distribution
+- **Manager Dashboard**: Review and approve assignments
+- **Governance**: Audit trail and assignment history
+
+## Deployment
+
+See [DEPLOYMENT.md](../DEPLOYMENT.md) for comprehensive deployment instructions including:
+- Supabase setup and migration
+- Edge Functions deployment
+- Hosting configuration (Vercel/Netlify)
+- Auth provider setup
+
+## Documentation
+
+- **[CLAUDE.md](../CLAUDE.md)** - Guide for AI assistants working on this codebase
+- **[DEPLOYMENT.md](../DEPLOYMENT.md)** - Production deployment guide
+- **[CHANGELOG.md](../CHANGELOG.md)** - Project changelog
+- **[docs/core/architecture.md](../docs/core/architecture.md)** - System architecture
+- **[docs/ops/qa_log.md](../docs/ops/qa_log.md)** - QA tracking
+
+## Contributing
+
+This project follows a structured development workflow:
+
+1. **Make changes** in a feature branch
+2. **Update CHANGELOG.md** with all changes
+3. **Test locally** using `npm run dev`
+4. **Build** using `npm run build` to verify no errors
+5. **Commit** with descriptive messages
+6. **Push** to GitHub
+
+## Known Issues
+
+Currently in QA phase. See [docs/ops/qa_log.md](../docs/ops/qa_log.md) for active issues and tracking.
+
+## Support
+
+For issues or questions, open an issue on GitHub.
+
+## License
+
+Private - All Rights Reserved

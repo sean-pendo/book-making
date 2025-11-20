@@ -3,7 +3,7 @@ ALTER TABLE assignment_rules DROP CONSTRAINT IF EXISTS assignment_rules_rule_typ
 
 -- Add the new constraint with MIN_THRESHOLDS included
 ALTER TABLE assignment_rules ADD CONSTRAINT assignment_rules_rule_type_check 
-CHECK (rule_type IN ('GEO_FIRST', 'CONTINUITY', 'TIER_BALANCE', 'ROUND_ROBIN', 'MIN_THRESHOLDS', 'CUSTOM'));
+CHECK (rule_type IN ('GEO_FIRST', 'CONTINUITY', 'TIER_BALANCE', 'ROUND_ROBIN', 'MIN_THRESHOLDS', 'CUSTOM', 'LOAD_BALANCE'));
 
 -- Now create the default minimum thresholds rule
 INSERT INTO assignment_rules (build_id, name, priority, rule_type, conditions, enabled, description, created_at, updated_at)

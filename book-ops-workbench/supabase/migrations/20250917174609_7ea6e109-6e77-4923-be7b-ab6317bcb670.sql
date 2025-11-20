@@ -54,7 +54,4 @@ BEGIN
         AND o.build_id = p_build_id
     );
 END;
-$function$
-
--- Run the updated calculation for the current build
-SELECT public.update_account_calculated_values('8fc766cc-b091-44b6-bd1c-4d5f9b8409dd');
+$function$;

@@ -1,10 +1,12 @@
--- Fix GEO_FIRST rule territory mappings completely
-UPDATE assignment_rules 
-SET conditions = jsonb_set(
-  jsonb_set(
-    jsonb_set(
-      jsonb_set(
-        jsonb_set(
+-- Fix GEO_FIRST rule territory mappings completely (wrapped in DO block)
+DO $$
+DECLARE
+    target_build_id UUID := 'e783d327-162a-4962-ba41-4f4df6f71eea';
+BEGIN
+    -- Only proceed if the build exists
+    IF EXISTS (SELECT 1 FROM builds WHERE id = target_build_id) THEN
+        UPDATE assignment_rules
+        SET conditions = jsonb_set(
           jsonb_set(
             jsonb_set(
               jsonb_set(
@@ -20,46 +22,52 @@ SET conditions = jsonb_set(
                                   jsonb_set(
                                     jsonb_set(
                                       jsonb_set(
-                                        conditions,
-                                        '{territoryMappings,BOSTON}', '"North East"'
+                                        jsonb_set(
+                                          jsonb_set(
+                                            jsonb_set(
+                                              jsonb_set(
+                                                conditions,
+                                                '{territoryMappings,BOSTON}', '"North East"'
+                                              ),
+                                              '{territoryMappings,"NY E"}', '"North East"'
+                                            ),
+                                            '{territoryMappings,"NY S"}', '"North East"'
+                                          ),
+                                          '{territoryMappings,"MID-ATLANTIC"}', '"North East"'
+                                        ),
+                                        '{territoryMappings,"NEW ENGLAND"}', '"North East"'
                                       ),
-                                      '{territoryMappings,"NY E"}', '"North East"'
+                                      '{territoryMappings,CHESAPEAKE}', '"South East"'
                                     ),
-                                    '{territoryMappings,"NY S"}', '"North East"'
+                                    '{territoryMappings,"GULF COAST"}', '"South East"'
                                   ),
-                                  '{territoryMappings,"MID-ATLANTIC"}', '"North East"'
+                                  '{territoryMappings,"SOUTH EAST"}', '"South East"'
                                 ),
-                                '{territoryMappings,"NEW ENGLAND"}', '"North East"'
+                                '{territoryMappings,"GREAT LAKES N-CA"}', '"Central"'
                               ),
-                              '{territoryMappings,CHESAPEAKE}', '"South East"'
+                              '{territoryMappings,"GREATER ONTARIO-CA"}', '"Central"'
                             ),
-                            '{territoryMappings,"GULF COAST"}', '"South East"'
+                            '{territoryMappings,"PAC NW-CA"}', '"West"'
                           ),
-                          '{territoryMappings,"SOUTH EAST"}', '"South East"'
+                          '{territoryMappings,"AUSTRALIA"}', '"Central"'
                         ),
-                        '{territoryMappings,"GREAT LAKES N-CA"}', '"Central"'
+                        '{territoryMappings,"CHINA"}', '"Central"'
                       ),
-                      '{territoryMappings,"GREATER ONTARIO-CA"}', '"Central"'
+                      '{territoryMappings,"DACH"}', '"Central"'
                     ),
-                    '{territoryMappings,"PAC NW-CA"}', '"West"'
+                    '{territoryMappings,"JAPAN"}', '"Central"'
                   ),
-                  '{territoryMappings,"AUSTRALIA"}', '"Central"'
+                  '{territoryMappings,"APAC"}', '"Central"'
                 ),
-                '{territoryMappings,"CHINA"}', '"Central"'
+                '{territoryMappings,"EMEA"}', '"Central"'
               ),
-              '{territoryMappings,"DACH"}', '"Central"'
+              '{territoryMappings,"UK & IRELAND"}', '"Central"'
             ),
-            '{territoryMappings,"JAPAN"}', '"Central"'
+            '{territoryMappings,"NORDICS"}', '"Central"'
           ),
-          '{territoryMappings,"APAC"}', '"Central"'
-        ),
-        '{territoryMappings,"EMEA"}', '"Central"'
-      ),
-      '{territoryMappings,"UK & IRELAND"}', '"Central"'
-    ),
-    '{territoryMappings,"NORDICS"}', '"Central"'
-  ),
-  '{territoryMappings,"BENELUX"}', '"Central"'
-)
-WHERE rule_type = 'GEO_FIRST'
-  AND build_id = 'e783d327-162a-4962-ba41-4f4df6f71eea';
+          '{territoryMappings,"BENELUX"}', '"Central"'
+        )
+        WHERE rule_type = 'GEO_FIRST'
+          AND build_id = target_build_id;
+    END IF;
+END $$;
