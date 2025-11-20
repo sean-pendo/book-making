@@ -819,13 +819,19 @@ export const DataImport = () => {
 
   const validateMappedFile = async (file: ImportFile) => {
     console.log('🔍 validateMappedFile called for:', file.name, 'with data length:', file.data?.length);
-    
+
+    // Skip validation for auto-loaded existing data (already in Supabase)
+    if (file.id.startsWith('existing-')) {
+      console.log('⏭️ Skipping validation for existing Supabase data:', file.name);
+      return;
+    }
+
     // Enhanced validation - check all required data exists
     if (!file.data || !Array.isArray(file.data)) {
-      console.error('❌ File has no valid data array:', { 
-        fileName: file.name, 
-        dataType: typeof file.data, 
-        isArray: Array.isArray(file.data) 
+      console.error('❌ File has no valid data array:', {
+        fileName: file.name,
+        dataType: typeof file.data,
+        isArray: Array.isArray(file.data)
       });
       toast({
         title: "Data Missing", 
