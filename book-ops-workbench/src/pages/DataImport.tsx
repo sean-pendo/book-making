@@ -128,9 +128,11 @@ export const DataImport = () => {
 
   // Persist state changes with error handling
   useEffect(() => {
-    console.log('💾 Persisting files to localStorage:', files.length, 'files');
+    // Filter out auto-loaded existing files before persisting to localStorage
+    const filesToPersist = files.filter(f => !f.id.startsWith('existing-'));
+    console.log('💾 Persisting files to localStorage:', filesToPersist.length, 'files (excluding', files.length - filesToPersist.length, 'existing)');
     try {
-      saveDataImportState.files(files);
+      saveDataImportState.files(filesToPersist);
     } catch (error) {
       console.error('Failed to persist files:', error);
       
