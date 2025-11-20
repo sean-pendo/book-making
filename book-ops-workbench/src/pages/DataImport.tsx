@@ -501,26 +501,85 @@ export const DataImport = () => {
     });
   };
 
-  const handleDeleteFile = useCallback((fileId: string) => {
+  const handleDeleteFile = useCallback(async (fileId: string) => {
     console.log('🗑️ DELETING FILE:', fileId);
-    
-    setFiles(prev => {
-      const filtered = prev.filter(f => f.id !== fileId);
-      console.log('📊 Files after deletion:', filtered.length);
-      return filtered;
-    });
-    
-    // Close mapping dialog if the deleted file was selected
-    if (selectedFile?.id === fileId) {
-      setSelectedFile(null);
-      setShowMappingDialog(false);
+
+    // Find the file to get its type and determine what data to delete
+    const fileToDelete = files.find(f => f.id === fileId);
+    if (!fileToDelete) {
+      console.warn('File not found:', fileId);
+      return;
     }
-    
-    toast({
-      title: "File Removed",
-      description: "File has been removed from the import list",
-    });
-  }, [selectedFile?.id, toast]);
+
+    try {
+      // Delete the actual data from Supabase based on file type
+      if (fileToDelete.type === 'accounts') {
+        console.log('🗑️ Deleting accounts from Supabase for build:', selectedBuildId);
+        const { error } = await supabase
+          .from('accounts')
+          .delete()
+          .eq('build_id', selectedBuildId);
+
+        if (error) {
+          console.error('❌ Error deleting accounts:', error);
+          throw error;
+        }
+        console.log('✅ Accounts deleted from Supabase');
+
+      } else if (fileToDelete.type === 'opportunities') {
+        console.log('🗑️ Deleting opportunities from Supabase for build:', selectedBuildId);
+        const { error } = await supabase
+          .from('opportunities')
+          .delete()
+          .eq('build_id', selectedBuildId);
+
+        if (error) {
+          console.error('❌ Error deleting opportunities:', error);
+          throw error;
+        }
+        console.log('✅ Opportunities deleted from Supabase');
+
+      } else if (fileToDelete.type === 'sales_reps') {
+        console.log('🗑️ Deleting sales reps from Supabase for build:', selectedBuildId);
+        const { error } = await supabase
+          .from('sales_reps')
+          .delete()
+          .eq('build_id', selectedBuildId);
+
+        if (error) {
+          console.error('❌ Error deleting sales reps:', error);
+          throw error;
+        }
+        console.log('✅ Sales reps deleted from Supabase');
+      }
+
+      // Remove from UI state
+      setFiles(prev => {
+        const filtered = prev.filter(f => f.id !== fileId);
+        console.log('📊 Files after deletion:', filtered.length);
+        return filtered;
+      });
+
+      // Close mapping dialog if the deleted file was selected
+      if (selectedFile?.id === fileId) {
+        setSelectedFile(null);
+        setShowMappingDialog(false);
+      }
+
+      toast({
+        title: "File and Data Deleted",
+        description: `${fileToDelete.type} data has been removed from the database`,
+      });
+
+    } catch (error) {
+      console.error('💥 Error deleting file data:', error);
+      toast({
+        title: "Delete Failed",
+        description: error instanceof Error ? error.message : "Failed to delete data from database",
+        variant: "destructive"
+      });
+    }
+  }, [files, selectedFile?.id, selectedBuildId, toast]);
 
   const autoMapAllFields = (file: ImportFile) => {
     if (!file.autoMappings) return;

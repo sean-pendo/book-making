@@ -12,6 +12,11 @@ All notable changes to this project will be documented in this file.
 - **Fix**: Added missing favicon link in index.html
   - Favicon.png (200x200 PNG) now displays correctly in browser tabs
   - Added `<link rel="icon" type="image/png" href="/favicon.png" />` to HTML head
+- **Fix**: File delete button now actually deletes data from Supabase
+  - Previously only removed file from UI state, leaving data in database
+  - Now properly deletes accounts, opportunities, or sales_reps from Supabase when delete button clicked
+  - Prevents duplicate data issues when re-uploading same file type
+  - Shows success/error toast notifications for delete operations
 
 ## [2025-11-20] - Critical Bug Fixes (v1.0.1)
 - **Security**: Enabled JWT verification on all Edge Functions (`verify_jwt = true`)
