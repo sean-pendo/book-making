@@ -306,16 +306,25 @@ export const validateMappedData = (
       }
 
       // Automatically calculate is_parent based on ultimate_parent_id
-      // If ultimate_parent_id is NULL/empty, this account IS a parent
-      // If ultimate_parent_id has a value, this account is a child
+      // Parent accounts are identified by:
+      // 1. ultimate_parent_id is NULL/empty, OR
+      // 2. Self-referencing: sfdc_account_id = ultimate_parent_id (Salesforce pattern)
       const ultimateParentId = mappedRow['ultimate_parent_id'];
-      mappedRow['is_parent'] = !ultimateParentId || ultimateParentId === null ||
-                                (typeof ultimateParentId === 'string' && ultimateParentId.trim() === '');
+      const sfdcAccountId = mappedRow['sfdc_account_id'];
+
+      const isNullOrEmpty = !ultimateParentId || ultimateParentId === null ||
+                            (typeof ultimateParentId === 'string' && ultimateParentId.trim() === '');
+      const isSelfReferencing = ultimateParentId && sfdcAccountId &&
+                                ultimateParentId === sfdcAccountId;
+
+      mappedRow['is_parent'] = isNullOrEmpty || isSelfReferencing;
 
       // Debug logging for first few rows
       if (index < 5) {
         console.log(`🔍 Row ${rowNum} is_parent calculation:`, {
+          sfdc_account_id: sfdcAccountId,
           ultimate_parent_id: ultimateParentId,
+          is_self_referencing: isSelfReferencing,
           is_parent: mappedRow['is_parent']
         });
       }
