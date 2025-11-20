@@ -98,6 +98,12 @@ export const DataImport = () => {
     
     // Validate restored files for missing essential data
     const validatedFiles = restored.map((file: any) => {
+      // Skip validation for auto-loaded existing data (already in Supabase)
+      if (file.id && file.id.startsWith('existing-')) {
+        console.log(`⏭️ Skipping header validation for existing Supabase data: ${file.name}`);
+        return file;
+      }
+
       if (!file.headers || !Array.isArray(file.headers) || file.headers.length === 0) {
         console.warn(`🚫 File "${file.name}" missing headers, marking for re-upload`);
         return {
