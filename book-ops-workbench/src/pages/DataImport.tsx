@@ -228,7 +228,7 @@ export const DataImport = () => {
         if (accountsRes.count && accountsRes.count > 0) {
           existingFiles.push({
             id: 'existing-accounts',
-            name: 'Imported Accounts',
+            name: 'Accounts',
             type: 'accounts',
             size: 0,
             data: [],
@@ -245,7 +245,7 @@ export const DataImport = () => {
         if (oppsRes.count && oppsRes.count > 0) {
           existingFiles.push({
             id: 'existing-opportunities',
-            name: 'Imported Opportunities',
+            name: 'Opportunities',
             type: 'opportunities',
             size: 0,
             data: [],
@@ -262,7 +262,7 @@ export const DataImport = () => {
         if (repsRes.count && repsRes.count > 0) {
           existingFiles.push({
             id: 'existing-sales-reps',
-            name: 'Imported Sales Reps',
+            name: 'Sales Reps',
             type: 'sales_reps',
             size: 0,
             data: [],
@@ -275,21 +275,31 @@ export const DataImport = () => {
           console.log(`✅ Found ${repsRes.count} sales reps in Supabase`);
         }
 
-        // Add existing files that aren't already in the files array
+        // Merge Supabase data with localStorage files, replacing CSV files with Supabase entries
         if (existingFiles.length > 0) {
           setFiles(prev => {
-            // Filter out existing files that are already in the array
+            // Remove CSV files for types that now exist in Supabase
+            const typesInSupabase = new Set(existingFiles.map(f => f.type));
+            const filteredPrev = prev.filter(file => {
+              // Keep files that aren't in Supabase yet (not imported)
+              const shouldKeep = !typesInSupabase.has(file.type);
+              if (!shouldKeep) {
+                console.log(`🔄 Replacing CSV file "${file.name}" with Supabase data for ${file.type}`);
+              }
+              return shouldKeep;
+            });
+
+            // Add Supabase entries (using generic names like "Accounts", not CSV filenames)
             const newFiles = existingFiles.filter(
-              newFile => !prev.some(existingFile => existingFile.id === newFile.id)
+              newFile => !filteredPrev.some(existingFile => existingFile.id === newFile.id)
             );
 
             if (newFiles.length > 0) {
-              console.log(`📊 Adding ${newFiles.length} existing data files to UI (${prev.length} already present)`);
-              return [...prev, ...newFiles];
+              console.log(`📊 Adding ${newFiles.length} Supabase data entries to UI`);
+              return [...filteredPrev, ...newFiles];
             }
 
-            console.log(`ℹ️ All ${existingFiles.length} existing files already in UI`);
-            return prev;
+            return filteredPrev;
           });
         }
 

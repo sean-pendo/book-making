@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-21] - Assignment Engine Fixes (v1.0.4)
+- **Fix**: Filter out UI-only fields from `assignment_configuration` database updates
+  - Root cause: `BalanceThresholdCalculator.calculateThresholds()` returns object with both database columns (`atr_target`, `cre_target`) and UI display fields (`totalATR`, `totalCRE`)
+  - Code was blindly updating database with entire object, causing schema error: "Could not find the 'totalATR' column"
+  - Fixed by destructuring to filter out `total*` fields before update in `useAssignmentEngine.ts:481`
+  - Assignment generation now completes without schema errors
+- **Fix**: Added `is_customer` field classification to sync with ARR-based customer logic
+  - Created migration `20251121000000_fix_is_customer_classification.sql`
+  - Updates `is_customer = true` for parent accounts with `hierarchy_bookings_arr_converted > 0`
+  - Fixes Assignment Engine showing 0 customers despite having 410 customer accounts
+  - Added index on `(is_customer, is_parent)` for performance
+- **Fix**: Added missing `account_scope` column to `assignment_configuration` table
+  - Created migration `20251121000001_add_account_scope_to_config.sql`
+  - Column values: 'customers', 'prospects', or 'all'
+  - Fixes "Configure Assignment Targets" dialog error
+- **Docs**: Comprehensive ARR vs ATR documentation added to CLAUDE.md
+  - Clarified that ATR is a subset/temporal slice of ARR, NOT additive
+  - Documented ATR business logic: flat renewal, upsell, downgrade scenarios
+  - Added data source summary with SQL examples
+  - Included account classification rules and parent detection logic
+
 ## [2025-11-20] - Critical Import Bug Fix (v1.0.3)
 - **Fix**: CRITICAL - Fixed `is_parent` calculation being overwritten in `transformAccountData()`
   - Root cause: `transformAccountData()` in importUtils.ts:647 was using simple null-check logic: `is_parent: !sanitizeIdField(row.ultimate_parent_id)`
