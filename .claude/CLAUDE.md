@@ -8,6 +8,124 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Current Status**: v1.0 QA Phase - The codebase is unstable with known critical issues in assignment generation and data import flows.
 
+## Business Terminology
+
+### ARR vs ATR
+
+**CRITICAL: ARR and ATR are NOT additive - ATR is a subset/temporal slice of existing ARR.**
+
+- **ARR (Annual Recurring Revenue)**: The primary metric for account value and territory balancing
+  - Source: `accounts.hierarchy_bookings_arr_converted` field (from Accounts CSV import)
+  - Fallback: `accounts.calculated_arr` (sum of opportunities if primary is null)
+  - Used for: Customer classification, dashboard totals, territory balancing
+  - Represents: **Total current recurring revenue** for the account
+
+- **ATR (Available To Renew)**: The baseline revenue amount available for renewal on each renewal opportunity
+  - Source: `opportunities.available_to_renew` field (only for `opportunity_type = 'Renewals'`)
+  - Calculated per account: `accounts.calculated_atr` = SUM of ATR from all renewal opportunities
+  - Used for: Renewal forecasting, net ARR calculation, upsell/churn tracking
+  - Represents: **Portion of ARR that is up for renewal** (not separate money)
+
+**Example:**
+- Account has $100K ARR
+- Of that $100K, $50K is coming up for renewal (ATR = $50K)
+- Total company revenue = $100K (NOT $150K)
+- ATR is a planning metric showing "how much ARR is at risk or opportunity for expansion"
+
+### ATR Business Logic
+
+**ATR represents the baseline amount from the previous contract that is "available to renew".**
+
+Every renewal opportunity has an ATR value that remains constant for that specific opportunity:
+
+1. **Flat Renewal**: `ARR = ATR` (customer renews at same price)
+2. **Upsell**: `ARR > ATR` → Net ARR is positive (customer increased spend)
+3. **Downgrade/Churn**: `ARR < ATR` → Net ARR is negative (customer decreased spend or churned)
+
+**Important**: ATR is tied to each distinct renewal opportunity and doesn't change within that opportunity. When a new renewal opportunity is created in the next cycle, the ATR updates to reflect the current ARR from the previous renewal.
+
+**Example Flow**:
+```
+Year 1: Customer signs for $100K → ARR = $100K
+Year 2: Renewal opportunity created → ATR = $100K (baseline from Year 1)
+        Customer renews at $120K → ARR = $120K (upsell, Net ARR = +$20K)
+Year 3: New renewal opportunity created → ATR = $120K (baseline from Year 2)
+        Customer renews at $115K → ARR = $115K (downgrade, Net ARR = -$5K)
+```
+
+**Database Implementation**: The `recalculate_account_values_db()` function sums ATR from all renewal opportunities per account and stores it in `accounts.calculated_atr`.
+
+### Data Source Summary
+
+**For ARR Calculation:**
+```sql
+-- Primary source: Accounts table
+SELECT hierarchy_bookings_arr_converted
+FROM accounts
+WHERE is_parent = true AND build_id = ?
+
+-- Dashboard Total ARR
+SUM(hierarchy_bookings_arr_converted) WHERE hierarchy_bookings_arr_converted > 0
+```
+
+**For ATR Calculation:**
+```sql
+-- Source: Opportunities table (renewal type only)
+SELECT SUM(available_to_renew) as calculated_atr
+FROM opportunities
+WHERE opportunity_type = 'Renewals'
+  AND build_id = ?
+GROUP BY sfdc_account_id
+
+-- Result stored in: accounts.calculated_atr
+```
+
+**Import Requirements:**
+- **Accounts CSV must have:** `hierarchy_bookings_arr_converted` field
+- **Opportunities CSV must have:** `available_to_renew` field (for renewal opportunities)
+- System calculates ATR by summing `available_to_renew` from all renewal opportunities per account
+
+### Account Classification Rules
+
+**ONLY parent accounts are classified as Customer or Prospect. Child accounts do not count.**
+
+- **Customer Account**: Parent account (`is_parent = true`) **AND** `hierarchy_bookings_arr_converted > 0`
+- **Prospect Account**: Parent account (`is_parent = true`) **AND** `hierarchy_bookings_arr_converted ≤ 0` (or NULL)
+- **Child Account**: Account where `is_parent = false` (rolls up to parent via `ultimate_parent_id`, NOT counted separately)
+
+**Classification Logic (from buildDataService.ts):**
+```typescript
+const parentAccounts = accounts.filter(a => a.is_parent);
+
+const customerAccounts = parentAccounts.filter(a =>
+  a.hierarchy_bookings_arr_converted && a.hierarchy_bookings_arr_converted > 0
+);
+
+const prospectAccounts = parentAccounts.filter(a =>
+  !a.hierarchy_bookings_arr_converted || a.hierarchy_bookings_arr_converted <= 0
+);
+
+// Dashboard metrics
+customerCount = customerAccounts.length;
+prospectCount = prospectAccounts.length;
+totalARR = customerAccounts.reduce((sum, a) =>
+  sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || 0), 0
+);
+```
+
+**IMPORTANT**:
+- Opportunities do NOT determine account classification
+- Classification is based solely on `hierarchy_bookings_arr_converted` from Accounts CSV
+- Child accounts are excluded from all counts
+- Only parent-level accounts are classified and counted
+
+### Parent Account Detection
+Salesforce uses a self-referencing pattern for parent accounts:
+- **Parent account**: `sfdc_account_id = ultimate_parent_id` OR `ultimate_parent_id` is NULL/empty
+- **Child account**: `ultimate_parent_id` points to a different `sfdc_account_id`
+
+This logic is implemented in `src/utils/importUtils.ts` during CSV import validation.
+
 ## Tech Stack
 
 - **Frontend**: React 18 + TypeScript + Vite
