@@ -643,8 +643,15 @@ export const transformAccountData = (mappedData: any[], buildId: string) => {
       has_customer_hierarchy: toBoolean(row.has_customer_hierarchy),
       in_customer_hierarchy: toBoolean(row.in_customer_hierarchy),
       include_in_emea: toBoolean(row.include_in_emea),
-       // Calculate is_parent based on ultimate_parent_id instead of CSV value
-       is_parent: !sanitizeIdField(row.ultimate_parent_id), // true if ultimate_parent_id is null/empty
+       // Calculate is_parent based on ultimate_parent_id (accounting for self-referencing pattern)
+       // Parent accounts are: (1) ultimate_parent_id is NULL/empty OR (2) Self-referencing (sfdc_account_id = ultimate_parent_id)
+       is_parent: (() => {
+         const ultimateParentId = sanitizeIdField(row.ultimate_parent_id);
+         const sfdcAccountId = row.sfdc_account_id;
+         const isNullOrEmpty = !ultimateParentId;
+         const isSelfReferencing = ultimateParentId && sfdcAccountId && ultimateParentId === sfdcAccountId;
+         return isNullOrEmpty || isSelfReferencing;
+       })(),
       is_2_0: toBoolean(row.is_2_0),
       owners_lifetime_count: toNumber(row.owners_lifetime_count),
       inbound_count: toNumber(row.inbound_count),

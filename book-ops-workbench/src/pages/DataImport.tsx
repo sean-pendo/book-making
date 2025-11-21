@@ -275,10 +275,22 @@ export const DataImport = () => {
           console.log(`✅ Found ${repsRes.count} sales reps in Supabase`);
         }
 
-        // Only update files if we found existing data and files array is empty
-        if (existingFiles.length > 0 && files.length === 0) {
-          console.log(`📊 Loading ${existingFiles.length} existing data files into UI`);
-          setFiles(existingFiles);
+        // Add existing files that aren't already in the files array
+        if (existingFiles.length > 0) {
+          setFiles(prev => {
+            // Filter out existing files that are already in the array
+            const newFiles = existingFiles.filter(
+              newFile => !prev.some(existingFile => existingFile.id === newFile.id)
+            );
+
+            if (newFiles.length > 0) {
+              console.log(`📊 Adding ${newFiles.length} existing data files to UI (${prev.length} already present)`);
+              return [...prev, ...newFiles];
+            }
+
+            console.log(`ℹ️ All ${existingFiles.length} existing files already in UI`);
+            return prev;
+          });
         }
 
       } catch (error) {
@@ -602,45 +614,51 @@ export const DataImport = () => {
     }
 
     try {
+      // Check authentication status
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log('🔐 Auth session:', session ? 'Active' : 'No session');
+      console.log('👤 User ID:', session?.user?.id);
+      console.log('📧 User email:', session?.user?.email);
+
       // Delete the actual data from Supabase based on file type
       if (fileToDelete.type === 'accounts') {
         console.log('🗑️ Deleting accounts from Supabase for build:', currentBuildId);
-        const { error } = await supabase
+        const { error, count } = await supabase
           .from('accounts')
-          .delete()
+          .delete({ count: 'exact' })
           .eq('build_id', currentBuildId);
 
         if (error) {
           console.error('❌ Error deleting accounts:', error);
           throw error;
         }
-        console.log('✅ Accounts deleted from Supabase');
+        console.log('✅ Accounts deleted from Supabase. Count:', count);
 
       } else if (fileToDelete.type === 'opportunities') {
         console.log('🗑️ Deleting opportunities from Supabase for build:', currentBuildId);
-        const { error } = await supabase
+        const { error, count } = await supabase
           .from('opportunities')
-          .delete()
+          .delete({ count: 'exact' })
           .eq('build_id', currentBuildId);
 
         if (error) {
           console.error('❌ Error deleting opportunities:', error);
           throw error;
         }
-        console.log('✅ Opportunities deleted from Supabase');
+        console.log('✅ Opportunities deleted from Supabase. Count:', count);
 
       } else if (fileToDelete.type === 'sales_reps') {
         console.log('🗑️ Deleting sales reps from Supabase for build:', currentBuildId);
-        const { error } = await supabase
+        const { error, count } = await supabase
           .from('sales_reps')
-          .delete()
+          .delete({ count: 'exact' })
           .eq('build_id', currentBuildId);
 
         if (error) {
           console.error('❌ Error deleting sales reps:', error);
           throw error;
         }
-        console.log('✅ Sales reps deleted from Supabase');
+        console.log('✅ Sales reps deleted from Supabase. Count:', count);
       }
 
       // Remove from UI state

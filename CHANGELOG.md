@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-20] - Critical Import Bug Fix (v1.0.3)
+- **Fix**: CRITICAL - Fixed `is_parent` calculation being overwritten in `transformAccountData()`
+  - Root cause: `transformAccountData()` in importUtils.ts:647 was using simple null-check logic: `is_parent: !sanitizeIdField(row.ultimate_parent_id)`
+  - This overwrote the correct self-referencing parent detection logic from validation step
+  - Fixed by implementing self-referencing detection in transform function: parent if (1) ultimate_parent_id is NULL/empty OR (2) ultimate_parent_id === sfdc_account_id
+  - Solves $0 Total ARR bug caused by all self-referencing parents being marked as children
+  - User confirmed fix working: Total ARR now shows correct $34,521,335 with 129 customer accounts
+- **Fix**: DELETE RLS policies added for accounts, opportunities, and sales_reps tables
+  - Created migration 20251120000000_add_delete_policies.sql
+  - Policies already existed in database (likely from previous session)
+  - Allows REVOPS and FLM users to delete records via UI delete button
+- **Fix**: Profile authentication issue identified and resolved
+  - User profile exists with REVOPS role (sean.muse@pendo.io)
+  - DELETE operations now work with proper authentication
+- **Fix**: Enhanced delete debugging with auth session logging and row count
+  - Added authentication status, user ID, and email logging to delete operations
+  - Added `count: 'exact'` to DELETE queries to show how many rows actually deleted
+  - Helps diagnose RLS policy issues vs authentication issues
+- **Fix**: Auto-load now merges with existing localStorage files instead of replacing
+  - Previously only loaded if files array was empty (`files.length === 0`)
+  - Now intelligently merges Supabase data with localStorage cached files
+  - Filters out duplicates by file ID to prevent showing same data twice
+  - Shows all three data types (accounts, opportunities, sales_reps) even if one is cached
+
 ## [2025-11-20] - Data Import Enhancement (v1.0.2)
 - **Fix**: Automatic `is_parent` field calculation during account CSV import
   - System now automatically sets `is_parent = true` when `ultimate_parent_id` is NULL/empty **OR** self-referencing
