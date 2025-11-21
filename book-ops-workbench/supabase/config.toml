@@ -50,7 +50,7 @@ redirect_uri = ""
 verify_jwt = true
 
 [functions.recalculate-accounts]
-verify_jwt = true
+verify_jwt = false
 
 [functions.generate-assignment-rule]
 verify_jwt = true

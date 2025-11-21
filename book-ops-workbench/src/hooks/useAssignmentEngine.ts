@@ -477,9 +477,11 @@ export const useAssignmentEngine = (buildId?: string) => {
             console.log(`   Q1: ${calculated.q1_renewal_target}, Q2: ${calculated.q2_renewal_target}, Q3: ${calculated.q3_renewal_target}, Q4: ${calculated.q4_renewal_target}`);
             
             // Update config in database with account_scope filter
+            // Filter out total* fields which are for UI display only, not database columns
+            const { totalCRE, totalATR, totalTier1, totalTier2, totalQ1, totalQ2, totalQ3, totalQ4, ...dbFields } = calculated;
             const { error: updateError } = await supabase
               .from('assignment_configuration')
-              .update(calculated)
+              .update(dbFields)
               .eq('build_id', buildId)
               .eq('account_scope', 'all');
             
