@@ -1,0 +1,1 @@
+Log our dicussion to the learning log doc. Focus on my development as a SWE connect it to other ideas in the doc.

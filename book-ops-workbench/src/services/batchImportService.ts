@@ -461,7 +461,18 @@ export class BatchImportService {
     const averageRps = processed / (duration / 1000);
 
     console.log(`🏁 Opportunities batch import completed in ${duration}ms. Processed: ${processed}, Imported: ${imported}, Failed: ${failed}, Average RPS: ${averageRps.toFixed(1)}`);
-    
+
+    // Auto-calculate ATR for accounts after opportunities import
+    if (imported > 0) {
+      try {
+        console.log('📊 Auto-calculating ATR from renewal opportunities...');
+        await this.calculateATRFromOpportunities(buildId);
+      } catch (atrError) {
+        console.warn('⚠️ ATR calculation failed (non-fatal):', atrError);
+        // Don't fail the import if ATR calculation fails
+      }
+    }
+
     return {
       success: imported > 0,
       recordsProcessed: processed,
@@ -585,5 +596,84 @@ export class BatchImportService {
       duration,
       averageRps
     };
+  }
+
+  /**
+   * Calculate ATR (Available To Renew) from renewal opportunities and update accounts
+   * Only updates accounts where calculated_atr is NULL or 0
+   */
+  static async calculateATRFromOpportunities(buildId: string): Promise<void> {
+    console.log(`📊 Calculating ATR for build ${buildId}...`);
+
+    try {
+      // First check if there are any accounts for this build
+      const { count: accountCount, error: countError } = await supabase
+        .from('accounts')
+        .select('id', { count: 'exact', head: true })
+        .eq('build_id', buildId);
+
+      if (countError) throw countError;
+
+      if (!accountCount || accountCount === 0) {
+        console.log('ℹ️ No accounts found for this build, skipping ATR calculation');
+        return;
+      }
+
+      // Get all renewal opportunities with ATR values
+      const { data: renewalOpps, error: oppsError } = await supabase
+        .from('opportunities')
+        .select('sfdc_account_id, available_to_renew')
+        .eq('build_id', buildId)
+        .eq('opportunity_type', 'Renewals')
+        .not('available_to_renew', 'is', null);
+
+      if (oppsError) throw oppsError;
+
+      if (!renewalOpps || renewalOpps.length === 0) {
+        console.log('ℹ️ No renewal opportunities with ATR found, skipping calculation');
+        return;
+      }
+
+      // Aggregate ATR by account
+      const atrByAccount = new Map<string, number>();
+      renewalOpps.forEach(opp => {
+        const currentATR = atrByAccount.get(opp.sfdc_account_id) || 0;
+        atrByAccount.set(opp.sfdc_account_id, currentATR + (opp.available_to_renew || 0));
+      });
+
+      console.log(`📊 Calculated ATR for ${atrByAccount.size} accounts from ${renewalOpps.length} renewal opportunities`);
+
+      // Update accounts in batches (only where calculated_atr is NULL or 0)
+      const updates: Array<{sfdc_account_id: string, calculated_atr: number}> = [];
+      for (const [accountId, atr] of atrByAccount.entries()) {
+        // First check if account needs updating
+        const { data: account } = await supabase
+          .from('accounts')
+          .select('calculated_atr')
+          .eq('build_id', buildId)
+          .eq('sfdc_account_id', accountId)
+          .single();
+
+        // Only update if calculated_atr is NULL or 0
+        if (!account || account.calculated_atr === null || account.calculated_atr === 0) {
+          const { error: updateError } = await supabase
+            .from('accounts')
+            .update({ calculated_atr: atr })
+            .eq('build_id', buildId)
+            .eq('sfdc_account_id', accountId);
+
+          if (updateError) {
+            console.warn(`⚠️ Failed to update ATR for account ${accountId}:`, updateError);
+          } else {
+            updates.push({ sfdc_account_id: accountId, calculated_atr: atr });
+          }
+        }
+      }
+
+      console.log(`✅ ATR calculation completed: Updated ${updates.length} accounts`);
+    } catch (error) {
+      console.error('❌ ATR calculation failed:', error);
+      throw error;
+    }
   }
 }

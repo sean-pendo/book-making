@@ -129,6 +129,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
               is_customer,
               arr,
               calculated_arr,
+              hierarchy_bookings_arr_converted,
               owner_id,
               owner_name,
               new_owner_id,
@@ -145,7 +146,6 @@ export const useEnhancedBalancing = (buildId?: string) => {
             `)
             .eq('build_id', buildId)
             .eq('is_parent', true)
-            .not('new_owner_id', 'is', null)
             .range(from, from + batchSize - 1);
 
           if (error) throw error;
@@ -202,7 +202,11 @@ export const useEnhancedBalancing = (buildId?: string) => {
       console.log('[useEnhancedBalancing] Split:', customers.length, 'customers,', prospects.length, 'prospects');
 
       // Calculate customer metrics
-      const totalCustomerARR = customers.reduce((sum, acc) => sum + (acc.calculated_arr || acc.arr || 0), 0);
+      const totalCustomerARR = customers.reduce((sum, acc) => {
+        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
+        return sum + arrValue;
+      }, 0);
+      console.log(`[useEnhancedBalancing] ✅ v1.0.5-FIXED Total Customer ARR: $${(totalCustomerARR / 1000000).toFixed(2)}M from ${customers.length} customers`);
       const avgCustomerARRPerRep = totalCustomerARR / reps.length;
 
       // Calculate prospect metrics
@@ -226,12 +230,13 @@ export const useEnhancedBalancing = (buildId?: string) => {
           ((a.new_owner_id || a.owner_id) === rep.rep_id) && !a.is_customer
         );
 
-        // Calculate customer-only retention rate
-        const customerRetentionCount = customerAccounts.filter(acc => 
-          acc.owner_id === (acc.new_owner_id || acc.owner_id)
+        // Calculate customer-only retention rate (only count assigned accounts that stayed with same owner)
+        const assignedCustomerAccounts = customerAccounts.filter(acc => acc.new_owner_id);
+        const customerRetentionCount = assignedCustomerAccounts.filter(acc =>
+          acc.new_owner_id && acc.owner_id === acc.new_owner_id
         ).length;
-        const customerRetentionRate = customerAccounts.length > 0 ? 
-          (customerRetentionCount / customerAccounts.length) * 100 : 0;
+        const customerRetentionRate = assignedCustomerAccounts.length > 0 ?
+          (customerRetentionCount / assignedCustomerAccounts.length) * 100 : 0;
 
         // Phase 3: Calculate customer-only regional alignment using dynamic territory mappings
         let alignedCustomerCount = 0;
@@ -313,7 +318,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
           return {
             sfdc_account_id: acc.sfdc_account_id,
             account_name: acc.account_name,
-            arr: acc.calculated_arr || acc.arr || 0,
+            arr: parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0,
             atr: atrAmount,
             renewals: renewalCount,
             renewal_date: acc.renewal_date,
@@ -354,26 +359,27 @@ export const useEnhancedBalancing = (buildId?: string) => {
         });
       });
 
-      // Calculate overall retention metrics for CUSTOMERS ONLY
-      const totalCustomerAccounts = accounts.filter(a => a.is_customer).length;
-      const retainedCustomerAccounts = accounts.filter(acc => 
-        acc.is_customer && acc.owner_id === (acc.new_owner_id || acc.owner_id)
+      // Calculate overall retention metrics for CUSTOMERS ONLY (only count assigned accounts)
+      const assignedCustomers = accounts.filter(a => a.is_customer && a.new_owner_id);
+      const retainedCustomerAccounts = assignedCustomers.filter(acc =>
+        acc.new_owner_id && acc.owner_id === acc.new_owner_id
       ).length;
-      const ownerRetentionRate = totalCustomerAccounts > 0 ? (retainedCustomerAccounts / totalCustomerAccounts) * 100 : 0;
+      const ownerRetentionRate = assignedCustomers.length > 0 ? (retainedCustomerAccounts / assignedCustomers.length) * 100 : 0;
 
       // Calculate average regional alignment for CUSTOMERS ONLY
       const avgRegionalAlignment = repMetricsData.length > 0 ? 
         repMetricsData.reduce((sum, rep) => sum + rep.regionalAlignment, 0) / repMetricsData.length : 0;
 
-      // Calculate prospect retention rate
-      const prospectsWithSameOwner = prospects.filter(acc => 
-        acc.owner_id && acc.new_owner_id && acc.owner_id === acc.new_owner_id
+      // Calculate prospect retention rate (only count assigned prospects)
+      const assignedProspects = prospects.filter(acc => acc.new_owner_id);
+      const prospectsWithSameOwner = assignedProspects.filter(acc =>
+        acc.new_owner_id && acc.owner_id === acc.new_owner_id
       ).length;
-      const prospectRetentionRate = prospects.length > 0 
-        ? (prospectsWithSameOwner / prospects.length) * 100 
+      const prospectRetentionRate = assignedProspects.length > 0
+        ? (prospectsWithSameOwner / assignedProspects.length) * 100
         : 0;
 
-      console.log(`[useEnhancedBalancing] Prospect Retention: ${prospectsWithSameOwner}/${prospects.length} (${prospectRetentionRate.toFixed(1)}%)`);
+      console.log(`[useEnhancedBalancing] Prospect Retention: ${prospectsWithSameOwner}/${assignedProspects.length} assigned (${prospectRetentionRate.toFixed(1)}%)`);
 
       // Calculate prospect regional alignment using territory mapping
       const salesReps = reps;
@@ -395,11 +401,11 @@ export const useEnhancedBalancing = (buildId?: string) => {
         return accountRegion === repRegion;
       }).length;
 
-      const prospectRegionalAlignment = prospects.length > 0
-        ? (prospectsWithRegionalAlignment / prospects.length) * 100
+      const prospectRegionalAlignment = assignedProspects.length > 0
+        ? (prospectsWithRegionalAlignment / assignedProspects.length) * 100
         : 0;
 
-      console.log(`[useEnhancedBalancing] Prospect Regional Alignment: ${prospectsWithRegionalAlignment}/${prospects.length} (${prospectRegionalAlignment.toFixed(1)}%)`);
+      console.log(`[useEnhancedBalancing] Prospect Regional Alignment: ${prospectsWithRegionalAlignment}/${assignedProspects.length} assigned (${prospectRegionalAlignment.toFixed(1)}%)`);
 
       // Calculate overall balance status based on account distribution
       const accountCounts = repMetricsData.map(r => r.totalAccounts);

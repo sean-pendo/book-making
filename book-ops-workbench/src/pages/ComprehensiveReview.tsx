@@ -83,6 +83,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
           is_parent,
           ultimate_parent_id,
           has_split_ownership,
+          hierarchy_bookings_arr_converted,
           calculated_arr,
           calculated_atr,
           arr,
@@ -118,6 +119,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
           new_owner_id,
           new_owner_name,
           is_parent,
+          hierarchy_bookings_arr_converted,
           calculated_arr,
           arr,
           cre_risk,
@@ -197,8 +199,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
     if (!assignmentChanges) return [];
     
     return assignmentChanges.filter(change => {
-      const arr = change.calculated_arr || change.arr || 0;
-      
+      const arr = parseFloat(change.hierarchy_bookings_arr_converted) || parseFloat(change.calculated_arr) || parseFloat(change.arr) || 0;
+
       // ARR filter
       if (arr < minArrFilter) return false;
       
@@ -254,7 +256,10 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
 
     // Calculate total metrics with split ownership
     const totalAccounts = parentAccounts.length;
-    const totalParentARR = parentAccounts.reduce((sum, acc) => sum + (acc.calculated_arr || acc.arr || 0), 0);
+    const totalParentARR = parentAccounts.reduce((sum, acc) => {
+      const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
+      return sum + arrValue;
+    }, 0);
     const splitOwnershipChildrenARR = childAccounts
       .filter(acc => {
         const parentId = acc.ultimate_parent_id;
@@ -263,9 +268,15 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         const parentOwnerId = parentOwnerMap.get(parentId);
         return childOwnerId !== parentOwnerId;
       })
-      .reduce((sum, acc) => sum + (acc.calculated_arr || acc.arr || 0), 0);
+      .reduce((sum, acc) => {
+        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
+        return sum + arrValue;
+      }, 0);
     const totalARR = totalParentARR + splitOwnershipChildrenARR;
-    const totalATR = parentAccounts.reduce((sum, acc) => sum + (acc.calculated_atr || acc.atr || 0), 0);
+    const totalATR = parentAccounts.reduce((sum, acc) => {
+      const atrValue = parseFloat(acc.calculated_atr) || parseFloat(acc.atr) || 0;
+      return sum + atrValue;
+    }, 0);
     const totalRiskAccounts = parentAccounts.filter(acc => 
       acc.cre_risk || (acc.cre_count && acc.cre_count > 0)
     ).length;
@@ -305,9 +316,9 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         };
       }
       
-      const arr = account.calculated_arr || account.arr || 0;
-      const atr = account.calculated_atr || account.atr || 0;
-      
+      const arr = parseFloat(account.hierarchy_bookings_arr_converted) || parseFloat(account.calculated_arr) || parseFloat(account.arr) || 0;
+      const atr = parseFloat(account.calculated_atr) || parseFloat(account.atr) || 0;
+
       acc[slm][flm].totalAccounts++;
       acc[slm][flm].totalARR += arr;
       acc[slm][flm].totalATR += atr;
@@ -387,7 +398,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         const flm = childOwnerRep?.flm || childOwnerRep?.manager || 'Unassigned FLM';
         
         if (portfoliosBySLM[slm]?.[flm]) {
-          const childARR = childAccount.calculated_arr || childAccount.arr || 0;
+          const childARR = parseFloat(childAccount.hierarchy_bookings_arr_converted) || parseFloat(childAccount.calculated_arr) || parseFloat(childAccount.arr) || 0;
           portfoliosBySLM[slm][flm].totalARR += childARR;
           
           // Update rep ARR map
@@ -484,7 +495,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
     csvRows.push('Account Name,Account ID,ARR,Tier,Current Owner,New Owner,CRE Risk,CRE Count,Risk Flag');
     
     assignmentChanges?.forEach((change) => {
-      const arr = (change.calculated_arr || change.arr || 0) / 1000000;
+      const arr = (parseFloat(change.hierarchy_bookings_arr_converted) || parseFloat(change.calculated_arr) || parseFloat(change.arr) || 0) / 1000000;
       csvRows.push([
         `"${change.account_name || ''}"`, // Quote to handle commas in names
         change.sfdc_account_id || '',
@@ -634,11 +645,78 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         </div>
       )}
 
+      {/* Impact Analytics Row */}
+      {assignmentChanges && allAccounts && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Accounts Reassigned</CardTitle>
+              <ArrowRight className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{assignmentChanges.length}</div>
+              <p className="text-xs text-muted-foreground">
+                {allAccounts.length > 0 ? ((assignmentChanges.length / allAccounts.length) * 100).toFixed(1) : 0}% of total
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">ARR Impacted</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                ${(assignmentChanges.reduce((sum, acc) => {
+                  const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                  return sum + arrValue;
+                }, 0) / 1000000).toFixed(1)}M
+              </div>
+              <p className="text-xs text-muted-foreground">
+                From reassigned accounts
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Retention Rate</CardTitle>
+              <CheckCircle className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {allAccounts.length > 0 ? (((allAccounts.length - assignmentChanges.length) / allAccounts.length) * 100).toFixed(1) : 0}%
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Accounts staying with same owner
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">High-Risk Reassignments</CardTitle>
+              <AlertCircle className="h-4 w-4 text-destructive" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-destructive">
+                {assignmentChanges.filter(acc => (acc.cre_count || 0) > 0 || acc.cre_risk || acc.risk_flag).length}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                CRE accounts being reassigned
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Review Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="summary">Portfolio Summary</TabsTrigger>
           <TabsTrigger value="changes">All Account Moves</TabsTrigger>
+          <TabsTrigger value="impact">Impact Analysis</TabsTrigger>
           <TabsTrigger value="reviews">Review Logs</TabsTrigger>
         </TabsList>
 
@@ -899,7 +977,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                          >
                            <TableCell className="font-medium">{change.account_name}</TableCell>
                            <TableCell className="font-mono text-sm">{change.sfdc_account_id}</TableCell>
-                           <TableCell className="font-medium">${((change.calculated_arr || change.arr || 0) / 1000000).toFixed(1)}M</TableCell>
+                           <TableCell className="font-medium">${((parseFloat(change.hierarchy_bookings_arr_converted) || parseFloat(change.calculated_arr) || parseFloat(change.arr) || 0) / 1000000).toFixed(1)}M</TableCell>
                            <TableCell>
                              <Badge variant={change.expansion_tier === 'Tier 1' ? 'default' : 'secondary'}>
                                {change.expansion_tier || 'Unassigned'}
@@ -933,6 +1011,251 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="impact" className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Managers with Biggest Changes */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Managers with Biggest Changes</CardTitle>
+                <CardDescription>
+                  FLMs with the most account reassignments
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {assignmentChanges && allActiveSalesReps && (
+                  <div className="space-y-3">
+                    {(() => {
+                      // Calculate changes per FLM
+                      const flmChanges = new Map<string, { count: number; arr: number; reps: Set<string> }>();
+
+                      assignmentChanges.forEach(acc => {
+                        // Find the rep for this account's new owner
+                        const newOwnerRep = allActiveSalesReps.find(r => r.rep_id === acc.new_owner_id);
+                        if (newOwnerRep && newOwnerRep.flm) {
+                          const current = flmChanges.get(newOwnerRep.flm) || { count: 0, arr: 0, reps: new Set() };
+                          current.count++;
+                          current.arr += parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                          current.reps.add(newOwnerRep.rep_id);
+                          flmChanges.set(newOwnerRep.flm, current);
+                        }
+                      });
+
+                      // Sort by count and take top 5
+                      const sortedFLMs = Array.from(flmChanges.entries())
+                        .sort((a, b) => b[1].count - a[1].count)
+                        .slice(0, 5);
+
+                      if (sortedFLMs.length === 0) {
+                        return <p className="text-center text-muted-foreground py-4">No changes found</p>;
+                      }
+
+                      return sortedFLMs.map(([flm, data]) => (
+                        <div key={flm} className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors">
+                          <div>
+                            <div className="font-medium">{flm}</div>
+                            <div className="text-sm text-muted-foreground">
+                              {data.reps.size} reps affected
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-bold text-lg">{data.count}</div>
+                            <div className="text-xs text-muted-foreground">
+                              ${(data.arr / 1000000).toFixed(1)}M ARR
+                            </div>
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Largest ARR Movements */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Largest ARR Movements</CardTitle>
+                <CardDescription>
+                  Top accounts being reassigned by ARR value
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {assignmentChanges && (
+                  <div className="space-y-3">
+                    {assignmentChanges
+                      .filter(acc => {
+                        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                        return arrValue >= 500000; // $500K minimum
+                      })
+                      .sort((a, b) => {
+                        const aArr = parseFloat(a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr) || 0;
+                        const bArr = parseFloat(b.hierarchy_bookings_arr_converted || b.calculated_arr || b.arr) || 0;
+                        return bArr - aArr;
+                      })
+                      .slice(0, 5)
+                      .map(acc => {
+                        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                        return (
+                          <div
+                            key={acc.sfdc_account_id}
+                            className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
+                            onClick={() => {
+                              setSelectedAccount(acc);
+                              setIsAccountDialogOpen(true);
+                            }}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium truncate">{acc.account_name}</div>
+                              <div className="text-sm text-muted-foreground">
+                                {acc.owner_name} → {acc.new_owner_name}
+                              </div>
+                            </div>
+                            <div className="text-right ml-4">
+                              <div className="font-bold text-lg">
+                                ${(arrValue / 1000000).toFixed(1)}M
+                              </div>
+                              {(acc.cre_count || 0) > 0 && (
+                                <Badge variant="destructive" className="text-xs mt-1">
+                                  {acc.cre_count} CRE
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    {assignmentChanges.filter(acc => {
+                      const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                      return arrValue >= 500000;
+                    }).length === 0 && (
+                      <p className="text-center text-muted-foreground py-4">
+                        No accounts with ARR ≥ $500K being reassigned
+                      </p>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* High-Risk Reassignments */}
+            <Card>
+              <CardHeader>
+                <CardTitle>High-Risk Reassignments</CardTitle>
+                <CardDescription>
+                  CRE accounts being moved to new owners
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {assignmentChanges && (
+                  <div className="space-y-3">
+                    {assignmentChanges
+                      .filter(acc => (acc.cre_count || 0) > 0 || acc.cre_risk || acc.risk_flag)
+                      .sort((a, b) => (b.cre_count || 0) - (a.cre_count || 0))
+                      .slice(0, 5)
+                      .map(acc => {
+                        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                        return (
+                          <div
+                            key={acc.sfdc_account_id}
+                            className="flex items-center justify-between p-3 border border-destructive/20 rounded-lg hover:bg-destructive/5 transition-colors cursor-pointer"
+                            onClick={() => {
+                              setSelectedAccount(acc);
+                              setIsAccountDialogOpen(true);
+                            }}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium truncate flex items-center gap-2">
+                                <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />
+                                {acc.account_name}
+                              </div>
+                              <div className="text-sm text-muted-foreground">
+                                {acc.owner_name} → {acc.new_owner_name}
+                              </div>
+                            </div>
+                            <div className="text-right ml-4">
+                              <Badge variant="destructive" className="mb-1">
+                                {acc.cre_count} CRE
+                              </Badge>
+                              <div className="text-xs text-muted-foreground">
+                                ${(arrValue / 1000000).toFixed(1)}M ARR
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    {assignmentChanges.filter(acc => (acc.cre_count || 0) > 0 || acc.cre_risk || acc.risk_flag).length === 0 && (
+                      <p className="text-center text-muted-foreground py-4">
+                        No high-risk accounts being reassigned
+                      </p>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Coverage Gaps */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Coverage Gaps</CardTitle>
+                <CardDescription>
+                  High-value accounts without assigned owners
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {allAccounts && (
+                  <div className="space-y-3">
+                    {allAccounts
+                      .filter(acc => !acc.new_owner_id || acc.new_owner_id.trim() === '')
+                      .sort((a, b) => {
+                        const aArr = parseFloat(a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr) || 0;
+                        const bArr = parseFloat(b.hierarchy_bookings_arr_converted || b.calculated_arr || b.arr) || 0;
+                        return bArr - aArr;
+                      })
+                      .slice(0, 5)
+                      .map(acc => {
+                        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                        return (
+                          <div
+                            key={acc.sfdc_account_id}
+                            className="flex items-center justify-between p-3 border border-orange-200 dark:border-orange-900 rounded-lg hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors cursor-pointer"
+                            onClick={() => {
+                              setSelectedAccount(acc);
+                              setIsAccountDialogOpen(true);
+                            }}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium truncate flex items-center gap-2">
+                                <HelpCircle className="h-4 w-4 text-orange-600 flex-shrink-0" />
+                                {acc.account_name}
+                              </div>
+                              <div className="text-sm text-muted-foreground">
+                                Current: {acc.owner_name || 'Unassigned'}
+                              </div>
+                            </div>
+                            <div className="text-right ml-4">
+                              <div className="font-bold text-lg">
+                                ${(arrValue / 1000000).toFixed(1)}M
+                              </div>
+                              {acc.expansion_tier && (
+                                <Badge variant="outline" className="text-xs mt-1">
+                                  {acc.expansion_tier}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    {allAccounts.filter(acc => !acc.new_owner_id || acc.new_owner_id.trim() === '').length === 0 && (
+                      <p className="text-center text-muted-foreground py-4">
+                        All accounts have assigned owners
+                      </p>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="reviews" className="space-y-6">

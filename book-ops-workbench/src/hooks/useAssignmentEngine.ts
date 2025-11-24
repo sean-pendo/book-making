@@ -549,7 +549,7 @@ export const useAssignmentEngine = (buildId?: string) => {
       });
 
       // Fetch opportunities for prospects to calculate Net ARR
-      let opportunitiesData = [];
+      let opportunitiesData: Array<{sfdc_account_id: string, net_arr: number}> = [];
       if (accountType !== 'customers') {
         const { data: opps } = await supabase
           .from('opportunities')
@@ -560,17 +560,96 @@ export const useAssignmentEngine = (buildId?: string) => {
         console.log(`📊 Loaded ${opportunitiesData.length} opportunities with Net ARR > 0 for prospects`);
       }
 
-      const { proposals, warnings } = await generateSimplifiedAssignments(
-        buildId,
-        accountType === 'customers' ? 'customer' : 'prospect',
-        filteredAccounts as any,
-        repsForEngine,
-        {
-          ...configData,
-          territory_mappings: configData.territory_mappings as Record<string, string> | null
-        },
-        opportunitiesData
-      );
+      // When generating 'all', we need to run both customer and prospect assignments
+      let proposals: any[] = [];
+      let warnings: any[] = [];
+
+      if (accountType === 'all') {
+        // Separate accounts into customers and prospects
+        const customerAccounts = filteredAccounts.filter(a => a.is_customer);
+        const prospectAccounts = filteredAccounts.filter(a => !a.is_customer);
+
+        console.log(`[AssignmentEngine] 🔄 Generating ALL assignments:`, {
+          customers: customerAccounts.length,
+          prospects: prospectAccounts.length
+        });
+
+        // Generate customer assignments first
+        if (customerAccounts.length > 0) {
+          setAssignmentProgress({
+            stage: 'scoring',
+            status: 'Generating customer assignments...',
+            progress: 30,
+            rulesCompleted: 0,
+            totalRules: 4,
+            accountsProcessed: 0,
+            totalAccounts: filteredAccounts.length,
+            assignmentsMade: 0,
+            conflicts: 0
+          });
+
+          const customerResult = await generateSimplifiedAssignments(
+            buildId,
+            'customer',
+            customerAccounts as any,
+            repsForEngine,
+            {
+              ...configData,
+              territory_mappings: configData.territory_mappings as Record<string, string> | null
+            }
+          );
+          proposals.push(...customerResult.proposals);
+          warnings.push(...customerResult.warnings);
+          console.log(`✅ Customer assignments: ${customerResult.proposals.length} proposals`);
+        }
+
+        // Then generate prospect assignments
+        if (prospectAccounts.length > 0) {
+          setAssignmentProgress({
+            stage: 'scoring',
+            status: 'Generating prospect assignments...',
+            progress: 55,
+            rulesCompleted: 2,
+            totalRules: 4,
+            accountsProcessed: customerAccounts.length,
+            totalAccounts: filteredAccounts.length,
+            assignmentsMade: proposals.length,
+            conflicts: 0
+          });
+
+          const prospectResult = await generateSimplifiedAssignments(
+            buildId,
+            'prospect',
+            prospectAccounts as any,
+            repsForEngine,
+            {
+              ...configData,
+              territory_mappings: configData.territory_mappings as Record<string, string> | null
+            },
+            opportunitiesData
+          );
+          proposals.push(...prospectResult.proposals);
+          warnings.push(...prospectResult.warnings);
+          console.log(`✅ Prospect assignments: ${prospectResult.proposals.length} proposals`);
+        }
+
+        console.log(`✅ Total ALL assignments: ${proposals.length} proposals, ${warnings.length} warnings`);
+      } else {
+        // Single type generation (customers or prospects only)
+        const result = await generateSimplifiedAssignments(
+          buildId,
+          accountType === 'customers' ? 'customer' : 'prospect',
+          filteredAccounts as any,
+          repsForEngine,
+          {
+            ...configData,
+            territory_mappings: configData.territory_mappings as Record<string, string> | null
+          },
+          opportunitiesData
+        );
+        proposals = result.proposals;
+        warnings = result.warnings;
+      }
       
       console.log(`✅ Assignment complete: ${proposals.length} proposals, ${warnings.length} warnings`);
       

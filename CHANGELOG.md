@@ -2,6 +2,100 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-24] - Generate All Assignments Bug Fix
+- **Fix**: CRITICAL - Fixed "Generate All Assignments" button only generating prospect assignments
+  - Root cause: When `accountType === 'all'`, the ternary `accountType === 'customers' ? 'customer' : 'prospect'` evaluated to `'prospect'` because `'all' !== 'customers'`
+  - The `generateSimplifiedAssignments` function only accepts `'customer'` or `'prospect'`, not `'all'`
+  - Fixed by detecting when `accountType === 'all'` and running `generateSimplifiedAssignments` twice:
+    1. First for customer accounts (filtered by `is_customer === true`)
+    2. Then for prospect accounts (filtered by `is_customer === false`)
+  - Combined proposals and warnings from both runs into final result
+  - Added progress updates to show separate "Generating customer assignments..." and "Generating prospect assignments..." stages
+  - File: `useAssignmentEngine.ts` (handleGenerateAssignments function)
+
+## [2025-11-21] - Phase 1: Manager Workflow Enhancements (v1.1.0)
+- **Feature**: Enhanced Manager Notes with categories, status, and tags
+  - Added note categories: General, Concern, Question, Approval
+  - Added note status: Open, Resolved, Escalated
+  - Added tag support (comma-separated, e.g., "high-arr, cre-account, geographic-mismatch")
+  - Added filtering by category and status in notes display
+  - Added reassignment_id foreign key to link notes to specific reassignments
+  - Enhanced UI with category icons (MessageSquare, AlertCircle, HelpCircle, CheckCircle)
+  - Color-coded badges for categories and statuses
+  - File: `ManagerNotesDialog.tsx`
+- **Feature**: Added Impact Analytics to Comprehensive Review page
+  - New "Impact Analytics" row showing 4 key metrics:
+    - Accounts Reassigned (count + percentage of total)
+    - ARR Impacted (sum of reassigned account ARR)
+    - Retention Rate (percentage staying with same owner)
+    - High-Risk Reassignments (CRE accounts being moved)
+  - All metrics calculate using `hierarchy_bookings_arr_converted` as primary ARR source
+  - File: `ComprehensiveReview.tsx` (lines 647-711)
+- **Feature**: Added Impact Analysis tab to Comprehensive Review page
+  - New dedicated tab showing 4 analysis cards:
+    1. **Managers with Biggest Changes**: Top 5 FLMs by account reassignment count
+    2. **Largest ARR Movements**: Top 5 accounts >$500K ARR being reassigned
+    3. **High-Risk Reassignments**: CRE accounts being moved to new owners
+    4. **Coverage Gaps**: High-value accounts without assigned owners
+  - All cards are interactive - clicking opens account detail dialog
+  - File: `ComprehensiveReview.tsx` (lines 1016-1259)
+- **Database**: Created manager_review_analytics table for team review tracking
+  - Tracks reassignment metrics (total, pending, approved, rejected counts)
+  - Tracks note metrics (total, open, concern counts)
+  - Tracks performance metrics (avg turnaround time, first reviewed, last activity)
+  - Auto-updates via triggers on manager_reassignments and manager_notes tables
+  - Migration: `20251121000002_add_manager_workflow_enhancements.sql`
+- **Database**: Enhanced manager_notes table schema
+  - Added `category` column (concern, question, approval, general)
+  - Added `status` column (open, resolved, escalated)
+  - Added `tags` TEXT[] column for flexible tagging
+  - Added `reassignment_id` FK to link notes to reassignments
+  - Added performance indexes on (build_id, manager_user_id, status)
+  - Migration: `20251121000002_add_manager_workflow_enhancements.sql`
+
+## [2025-11-21] - Critical ARR Display & Prospect Assignment Fixes (TESTING - Not Yet Verified)
+- **Fix**: CRITICAL - Fixed Customer ARR showing $0 in balancing dashboard due to string vs number type issue
+  - Root cause: PostgreSQL `NUMERIC` columns returned as strings by Supabase (e.g., `"3304500"` instead of `3304500`)
+  - JavaScript `||` operator treated strings as truthy, but string concatenation broke math: `0 + "3304500"` = `"03304500"` (string)
+  - Fixed by wrapping all ARR field access with `parseFloat()` to convert strings to numbers before math operations
+  - Changes in `useEnhancedBalancing.ts`: totalCustomerARR calculation (line 207) and account details (line 320)
+  - Changes in `enhancedRepMetrics.ts`: parent accounts (line 117) and split ownership children (line 134)
+  - Balancing dashboard now correctly shows per-rep ARR values (e.g., Elizabeth Evans: $27.3M, Haley Mueller: $21.7M)
+- **Fix**: Fixed prospect accounts showing 0 instead of 5,970 in balancing dashboard
+  - Removed `.not('new_owner_id', 'is', null)` filter from accounts query in `useEnhancedBalancing.ts:148`
+  - Query now fetches ALL parent accounts (both assigned and unassigned)
+  - Summary cards now correctly show: 410 customers + 5,970 prospects
+- **Important**: Assignment generation handles customers and prospects separately
+  - Three generation options available in Assignment Engine: "Generate Customer Assignments", "Generate Prospect Assignments", "Generate All Assignments"
+  - Clicking "Generate Customer Assignments" only processes 410 customer accounts
+  - Prospects (5,970 accounts) must be assigned separately via "Generate Prospect Assignments" button on Prospects tab or "Generate All Assignments"
+  - RebalancingAssignmentButton component (unused) also has three buttons: "Rebalance Customers", "Rebalance Prospects", "Rebalance All"
+  - Assignment service correctly filters by `is_customer` field based on accountType parameter ('customers' | 'prospects' | 'all')
+  - See `AssignmentEngine.tsx:536` (onGenerateAssignments) and `rebalancingAssignmentService.ts:934` (getParentAccounts)
+- **Fix**: Fixed retention and regional alignment percentage calculations
+  - Updated formulas to only count ASSIGNED accounts (with `new_owner_id` set) in denominator
+  - Before: Divided by ALL accounts, causing false 0% for unassigned accounts
+  - After: Divides by assigned accounts only, showing correct percentages
+  - Customer Retention: Now calculates as (retained/assigned) instead of (retained/total)
+  - Prospect Retention: Now calculates as (retained/assigned) instead of (retained/total)
+  - Prospect Regional Alignment: Now calculates as (aligned/assigned) instead of (aligned/total)
+  - Changes in `useEnhancedBalancing.ts`: lines 229-239 (customer), 368-380 (prospect retention), 398-402 (prospect alignment)
+- **Fix**: Missing `hierarchy_bookings_arr_converted` field in balancing query
+  - Added field to accounts SELECT query in `useEnhancedBalancing.ts:132`
+  - Updated ARR calculation priority order: `hierarchy_bookings_arr_converted` → `calculated_arr` → `arr` → `0`
+  - Ensures primary ARR source is used consistently across all calculations
+- **Fix**: Automatic ATR calculation after opportunities import
+  - Added `calculateATRFromOpportunities()` method to `batchImportService.ts`
+  - Automatically sums `available_to_renew` from renewal opportunities by account
+  - Only updates `accounts.calculated_atr` if currently NULL or 0 (preserves existing values)
+  - Eliminates need for manual SQL updates or edge function calls
+  - ATR now populated immediately after opportunities import completes
+- **Fix**: Bypassed failing `recalculate-accounts` edge function CORS errors
+  - Modified `useAccountCalculations.ts` to skip edge function call since ATR calculated during import
+  - Changed to just refresh UI data instead of calling external function
+  - No longer blocks assignment generation with CORS errors
+  - Edge function still available but not required for normal operation
+
 ## [2025-11-21] - Assignment Engine Fixes (v1.0.4)
 - **Fix**: Filter out UI-only fields from `assignment_configuration` database updates
   - Root cause: `BalanceThresholdCalculator.calculateThresholds()` returns object with both database columns (`atr_target`, `cre_target`) and UI display fields (`totalATR`, `totalCRE`)

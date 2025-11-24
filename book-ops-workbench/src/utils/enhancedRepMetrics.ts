@@ -111,8 +111,10 @@ export function calculateEnhancedRepMetrics(
     });
 
     // Step 2: Calculate total ARR from parent accounts
+    // Prioritize hierarchy_bookings_arr_converted as primary ARR source
+    // Convert strings to numbers since PostgreSQL NUMERIC comes as string
     const totalARR = parentAccounts.reduce((sum, acc) => {
-      const arrValue = acc.calculated_arr || acc.arr || 0;
+      const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
       return sum + arrValue;
     }, 0);
 
@@ -121,15 +123,15 @@ export function calculateEnhancedRepMetrics(
       .filter(acc => {
         if (acc.is_parent) return false; // Already counted
         if (!acc.ultimate_parent_id || acc.ultimate_parent_id === '') return false; // Not a child
-        
+
         const childOwnerId = acc.new_owner_id || acc.owner_id;
         const parentOwnerId = parentOwnerMap.get(acc.ultimate_parent_id);
-        
+
         // Only count if child has different owner than parent (split ownership)
         return childOwnerId !== parentOwnerId;
       })
       .reduce((sum, acc) => {
-        const arrValue = acc.calculated_arr || acc.arr || 0;
+        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
         return sum + arrValue;
       }, 0);
 
