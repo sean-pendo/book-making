@@ -35,7 +35,7 @@ export default function SLMApprovalQueue({ buildId, slmName }: SLMApprovalQueueP
   const { data: pendingApprovals, isLoading } = useQuery({
     queryKey: ['slm-pending-approvals', buildId, slmName],
     queryFn: async () => {
-      // First, get all reps under this SLM
+      // First, get all reps under this SLM (to identify which current_owner_ids are valid)
       const { data: repsUnderSLM, error: repsError } = await supabase
         .from('sales_reps')
         .select('rep_id, name, flm')
@@ -44,14 +44,15 @@ export default function SLMApprovalQueue({ buildId, slmName }: SLMApprovalQueueP
 
       if (repsError) throw repsError;
 
-      // Get unique FLMs under this SLM
-      const flmNames = [...new Set(repsUnderSLM?.map(r => r.flm).filter(Boolean) || [])];
+      // Get rep IDs under this SLM
+      const repIdsUnderSLM = repsUnderSLM?.map(r => r.rep_id) || [];
 
-      if (flmNames.length === 0) {
+      if (repIdsUnderSLM.length === 0) {
         return [];
       }
 
-      // Fetch pending_slm reassignments
+      // Fetch pending_slm reassignments WHERE the current owner is a rep under this SLM
+      // This ensures SLMs only see proposals affecting their team
       const { data: reassignments, error: reassignmentsError } = await supabase
         .from('manager_reassignments')
         .select(`
@@ -60,6 +61,7 @@ export default function SLMApprovalQueue({ buildId, slmName }: SLMApprovalQueueP
         `)
         .eq('build_id', buildId)
         .eq('approval_status', 'pending_slm')
+        .in('current_owner_id', repIdsUnderSLM)
         .order('created_at', { ascending: false });
 
       if (reassignmentsError) throw reassignmentsError;

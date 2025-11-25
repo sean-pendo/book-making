@@ -273,16 +273,16 @@ export default function ReviewNotes() {
     const matchesTeam = teamFilter === 'all' || true; // TODO: Add team lookup
 
     const matchesTab =
-      (activeTab === 'pending' && r.status === 'pending') ||
-      (activeTab === 'approved' && r.status === 'approved') ||
-      (activeTab === 'rejected' && r.status === 'rejected');
+      (activeTab === 'pending' && r.approval_status === 'pending_revops') ||
+      (activeTab === 'approved' && r.approval_status === 'approved') ||
+      (activeTab === 'rejected' && r.approval_status === 'rejected');
 
     return matchesSearch && matchesTeam && matchesTab;
   });
 
-  const pendingCount = reassignments?.filter(r => r.status === 'pending').length || 0;
-  const approvedCount = reassignments?.filter(r => r.status === 'approved').length || 0;
-  const rejectedCount = reassignments?.filter(r => r.status === 'rejected').length || 0;
+  const pendingCount = reassignments?.filter(r => r.approval_status === 'pending_revops').length || 0;
+  const approvedCount = reassignments?.filter(r => r.approval_status === 'approved').length || 0;
+  const rejectedCount = reassignments?.filter(r => r.approval_status === 'rejected').length || 0;
 
   // Set default build
   if (builds && builds.length > 0 && !selectedBuildId) {

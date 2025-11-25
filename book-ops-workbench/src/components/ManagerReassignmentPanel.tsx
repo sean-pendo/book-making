@@ -81,7 +81,7 @@ export default function ManagerReassignmentPanel({
         .select('*')
         .eq('build_id', buildId)
         .eq('manager_user_id', managerUserId)
-        .eq('status', 'pending')
+        .in('approval_status', ['pending_slm', 'pending_revops'])
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -143,7 +143,8 @@ export default function ManagerReassignmentPanel({
         manager_user_id: managerUserId,
         rationale,
         capacity_warnings: warnings,
-        status: 'pending',
+        status: 'pending', // Legacy field
+        approval_status: 'pending_slm', // New approval chain field
       });
 
       if (error) throw error;

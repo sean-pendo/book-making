@@ -163,9 +163,9 @@ export default function ManagerHierarchyView({
     queryFn: async () => {
       const { data, error } = await supabase
         .from('manager_reassignments')
-        .select('sfdc_account_id, status')
+        .select('sfdc_account_id, approval_status')
         .eq('build_id', buildId)
-        .eq('status', 'pending');
+        .in('approval_status', ['pending_slm', 'pending_revops']);
 
       if (error) throw error;
       return data;
@@ -775,12 +775,14 @@ export default function ManagerHierarchyView({
                   <SelectContent>
                     {salesReps
                       ?.filter(rep => 
-                        rep.rep_id !== reassigningAccount.new_owner_id &&
-                        rep.team === reassigningAccount.currentOwner.team
+                        // Exclude current owner from options
+                        rep.rep_id !== reassigningAccount.new_owner_id
+                        // Allow reassignment to any rep in the manager's hierarchy
+                        // (salesReps is already filtered to only include reps under this manager)
                       )
                       .map((rep) => (
                         <SelectItem key={rep.rep_id} value={rep.rep_id}>
-                          {rep.name}
+                          {rep.name} {rep.team && `(${rep.team})`}
                         </SelectItem>
                       ))}
                   </SelectContent>

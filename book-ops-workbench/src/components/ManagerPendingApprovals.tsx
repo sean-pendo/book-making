@@ -38,16 +38,18 @@ export default function ManagerPendingApprovals({ buildId }: ManagerPendingAppro
     }).format(value);
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'pending':
-        return <Badge variant="outline" className="gap-1"><Clock className="w-3 h-3" />Pending</Badge>;
+  const getStatusBadge = (approvalStatus: string) => {
+    switch (approvalStatus) {
+      case 'pending_slm':
+        return <Badge variant="outline" className="gap-1 bg-amber-50 text-amber-700 border-amber-300"><Clock className="w-3 h-3" />Awaiting SLM</Badge>;
+      case 'pending_revops':
+        return <Badge variant="outline" className="gap-1 bg-blue-50 text-blue-700 border-blue-300"><Clock className="w-3 h-3" />Awaiting RevOps</Badge>;
       case 'approved':
         return <Badge className="bg-success/10 text-success hover:bg-success/20 gap-1"><CheckCircle className="w-3 h-3" />Approved</Badge>;
       case 'rejected':
         return <Badge variant="destructive" className="gap-1"><XCircle className="w-3 h-3" />Rejected</Badge>;
       default:
-        return <Badge>{status}</Badge>;
+        return <Badge variant="outline" className="gap-1"><AlertCircle className="w-3 h-3" />{approvalStatus || 'Unknown'}</Badge>;
     }
   };
 
@@ -61,18 +63,27 @@ export default function ManagerPendingApprovals({ buildId }: ManagerPendingAppro
     );
   }
 
-  const pendingCount = reassignments?.filter(r => r.status === 'pending').length || 0;
-  const approvedCount = reassignments?.filter(r => r.status === 'approved').length || 0;
-  const rejectedCount = reassignments?.filter(r => r.status === 'rejected').length || 0;
+  const pendingSlmCount = reassignments?.filter(r => r.approval_status === 'pending_slm').length || 0;
+  const pendingRevopsCount = reassignments?.filter(r => r.approval_status === 'pending_revops').length || 0;
+  const approvedCount = reassignments?.filter(r => r.approval_status === 'approved').length || 0;
+  const rejectedCount = reassignments?.filter(r => r.approval_status === 'rejected').length || 0;
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
-              <div className="text-2xl font-bold">{pendingCount}</div>
-              <div className="text-sm text-muted-foreground">Pending</div>
+              <div className="text-2xl font-bold text-amber-600">{pendingSlmCount}</div>
+              <div className="text-sm text-muted-foreground">Awaiting SLM</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <div className="text-2xl font-bold text-blue-600">{pendingRevopsCount}</div>
+              <div className="text-sm text-muted-foreground">Awaiting RevOps</div>
             </div>
           </CardContent>
         </Card>
@@ -122,7 +133,7 @@ export default function ManagerPendingApprovals({ buildId }: ManagerPendingAppro
                     <TableCell>
                       <div className="font-medium text-primary">{request.proposed_owner_name}</div>
                     </TableCell>
-                    <TableCell>{getStatusBadge(request.status)}</TableCell>
+                    <TableCell>{getStatusBadge(request.approval_status)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {new Date(request.created_at).toLocaleDateString()}
                     </TableCell>

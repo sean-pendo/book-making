@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { Layout } from "@/components/Layout";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import { Governance } from "./pages/Governance";
@@ -46,16 +47,77 @@ const App = () => (
           >
           <Routes>
             <Route path="/auth" element={<Auth />} />
-            <Route path="/" element={<Layout><Index /></Layout>} />
-            <Route path="/build/:id" element={<Layout><BuildDetail /></Layout>} />
-            <Route path="/import" element={<Layout><DataImport /></Layout>} />
-            <Route path="/review" element={<Layout><ReviewNotes /></Layout>} />
-            <Route path="/summary" element={<Layout><SummaryImpact /></Layout>} />
-            <Route path="/governance" element={<Layout><Governance /></Layout>} />
-            <Route path="/manager-dashboard" element={<Layout><ManagerDashboard /></Layout>} />
-            <Route path="/revops-final" element={<Layout><RevOpsFinalView /></Layout>} />
-            <Route path="/settings" element={<Layout><Settings /></Layout>} />
-            <Route path="/assignment-config/:id" element={<Layout><SimplifiedAssignmentConfig /></Layout>} />
+            {/* Protected routes with role-based access control */}
+            <Route path="/" element={
+              <Layout>
+                <ProtectedRoute page="dashboard">
+                  <Index />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/build/:id" element={
+              <Layout>
+                <ProtectedRoute page="dashboard">
+                  <BuildDetail />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/import" element={
+              <Layout>
+                <ProtectedRoute page="data_import">
+                  <DataImport />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/review" element={
+              <Layout>
+                <ProtectedRoute page="review_notes">
+                  <ReviewNotes />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/summary" element={
+              <Layout>
+                <ProtectedRoute page="dashboard">
+                  <SummaryImpact />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/governance" element={
+              <Layout>
+                <ProtectedRoute page="dashboard">
+                  <Governance />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/manager-dashboard" element={
+              <Layout>
+                <ProtectedRoute page="manager_dashboard">
+                  <ManagerDashboard />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/revops-final" element={
+              <Layout>
+                <ProtectedRoute page="revops_final">
+                  <RevOpsFinalView />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/settings" element={
+              <Layout>
+                <ProtectedRoute page="settings">
+                  <Settings />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/assignment-config/:id" element={
+              <Layout>
+                <ProtectedRoute page="dashboard">
+                  <SimplifiedAssignmentConfig />
+                </ProtectedRoute>
+              </Layout>
+            } />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
