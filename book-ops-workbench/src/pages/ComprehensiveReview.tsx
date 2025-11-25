@@ -1234,7 +1234,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                                <TableHead className="text-center">Parents</TableHead>
                                <TableHead className="text-center">ARR</TableHead>
                                <TableHead className="text-center">ATR</TableHead>
-                               <TableHead className="text-center whitespace-nowrap">At-Risk</TableHead>
+                               <TableHead className="text-center whitespace-nowrap">CRE Parents</TableHead>
                                <TableHead className="text-center">Retention %</TableHead>
                                <TableHead className="text-center">Tier Distribution</TableHead>
                                <TableHead>Actions</TableHead>
