@@ -27,16 +27,27 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { useAuth } from '@/contexts/AuthContext';
+import { useRolePermissions, RolePermissions } from '@/hooks/useRolePermissions';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { UserImpersonation } from '@/components/UserImpersonation';
 
+// Map URLs to permission keys
+const urlToPermissionKey: Record<string, keyof RolePermissions["pages"]> = {
+  '/': 'dashboard',
+  '/import': 'data_import',
+  '/manager-dashboard': 'manager_dashboard',
+  '/review': 'review_notes',
+  '/revops-final': 'revops_final',
+  '/settings': 'settings',
+};
+
 const navigationItems = [
   { title: 'Dashboard', url: '/', icon: Home },
   { title: 'Data Import', url: '/import', icon: Database },
-  { title: 'Manager Dashboard', url: '/manager-dashboard', icon: Users, rolesOnly: ['SLM', 'REVOPS', 'FLM'] },
+  { title: 'Manager Dashboard', url: '/manager-dashboard', icon: Users },
   { title: 'Review & Notes', url: '/review', icon: MessageSquare },
-  { title: 'RevOps Final View', url: '/revops-final', icon: ClipboardCheck, rolesOnly: ['REVOPS', 'FLM'] },
+  { title: 'RevOps Final View', url: '/revops-final', icon: ClipboardCheck },
   { title: 'Settings', url: '/settings', icon: Settings },
 ];
 
@@ -44,6 +55,7 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const location = useLocation();
   const { signOut, effectiveProfile, impersonatedUser, setImpersonatedUser } = useAuth();
+  const { hasPageAccess, isLoading: permissionsLoading } = useRolePermissions();
   const currentPath = location.pathname;
   const isCollapsed = state === 'collapsed';
 
@@ -67,12 +79,13 @@ export function AppSidebar() {
           <SidebarGroupContent className="px-2">
             <SidebarMenu className="space-y-2">
               {navigationItems.filter(item => {
-                // If user is SLM role, only show Manager Dashboard and Settings
-                if (effectiveProfile?.role === 'SLM') {
-                  return item.url === '/manager-dashboard' || item.url === '/settings';
+                // Use dynamic permissions from database
+                const permissionKey = urlToPermissionKey[item.url];
+                if (permissionKey) {
+                  return hasPageAccess(permissionKey);
                 }
-                // For other roles, filter by rolesOnly
-                return !item.rolesOnly || item.rolesOnly.includes(effectiveProfile?.role || '');
+                // Fallback: show the item if no permission mapping exists
+                return true;
               }).map((item, index) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>

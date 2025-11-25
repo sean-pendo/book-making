@@ -92,6 +92,34 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
           </DialogDescription>
         </DialogHeader>
 
+        {/* Top Action Bar - Apply button prominently at top */}
+        <div className="flex items-center justify-between p-3 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-lg border border-green-200 dark:border-green-800 mb-4">
+          <div className="flex items-center gap-3">
+            <CheckCircle className="w-5 h-5 text-green-600" />
+            <div>
+              <p className="font-semibold text-green-900 dark:text-green-100">
+                {result.proposals.length} assignments ready to apply
+              </p>
+              <p className="text-xs text-green-700 dark:text-green-300">
+                Click Apply to save these assignments to the database
+              </p>
+            </div>
+          </div>
+          <Button 
+            onClick={onExecute} 
+            disabled={result.proposals.length === 0 || isExecuting}
+            size="lg"
+            className="bg-green-600 hover:bg-green-700"
+          >
+            {isExecuting ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Play className="w-4 h-4 mr-2" />
+            )}
+            {isExecuting ? 'Applying...' : `Apply ${result.proposals.length} Assignments`}
+          </Button>
+        </div>
+
         {/* Summary Cards */}
         <div className="grid grid-cols-4 gap-4 mb-6">
           <Card>

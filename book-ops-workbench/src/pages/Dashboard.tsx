@@ -8,6 +8,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { EnhancedLoader } from '@/components/EnhancedLoader';
+import { clearDataImportState, loadDataImportState } from '@/utils/persistenceUtils';
 import {
   Dialog,
   DialogContent,
@@ -289,6 +290,20 @@ const Dashboard = () => {
         .eq('id', buildToDelete.id);
 
       if (error) throw error;
+
+      // Clear localStorage if this was the current import build
+      const currentImportBuildId = loadDataImportState.currentBuildId();
+      if (currentImportBuildId === buildToDelete.id) {
+        console.log('🧹 Clearing localStorage for deleted build:', buildToDelete.id);
+        clearDataImportState();
+      }
+      
+      // Also clear any assignment checkpoints for this build
+      try {
+        localStorage.removeItem(`assignment_checkpoint_${buildToDelete.id}`);
+      } catch (e) {
+        // Ignore localStorage errors
+      }
 
       toast({
         title: 'Success',

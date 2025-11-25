@@ -359,8 +359,8 @@ export const EnhancedImportValidation: React.FC<EnhancedImportValidationProps> =
 
             {/* Status Alert */}
             {validationStats.canProceed ? (
-              <Alert className="border-green-200 bg-green-50">
-                <CheckCircle className="h-4 w-4 text-green-600" />
+              <Alert className="border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30">
+                <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
                 <AlertDescription>
                   <strong>Ready to Import!</strong> {validationResult.validRows} records are ready for import.
                   {validationStats.warningIssues > 0 && (

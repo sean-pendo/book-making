@@ -69,6 +69,15 @@ export const useAssignmentEngine = (buildId?: string) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   const [assignmentProgress, setAssignmentProgress] = useState<AssignmentProgress | null>(null);
+  
+  // Imbalance warning state - replaces browser confirm()
+  const [imbalanceWarning, setImbalanceWarning] = useState<{
+    show: boolean;
+    repName: string;
+    repARR: number;
+    targetARR: number;
+    overloadPercent: number;
+  } | null>(null);
 
   // Debug authentication state when component mounts
   useEffect(() => {
@@ -79,12 +88,9 @@ export const useAssignmentEngine = (buildId?: string) => {
       buildId
     });
     
-    // Force clear cache if user is authenticated to ensure fresh data
-    if (user && buildId) {
-      console.log(`[AssignmentEngine] 🔄 Clearing React Query cache for fresh data`);
-      queryClient.removeQueries({ queryKey: ['build-parent-accounts-optimized', buildId] });
-    }
-  }, [user, session, profile, buildId, queryClient]);
+    // NOTE: Removed aggressive cache clearing - it was causing duplicate fetches
+    // Use refetchAccounts() explicitly when fresh data is needed
+  }, [user, session, profile, buildId]);
 
   // Fetch parent accounts with comprehensive debugging
   const { data: accounts = [], isLoading: accountsLoading, refetch: refetchAccounts, error: accountsError } = useQuery({
@@ -101,7 +107,7 @@ export const useAssignmentEngine = (buildId?: string) => {
         timestamp: new Date().toISOString()
       });
       
-      console.log(`[AssignmentEngine] 📊 Starting paginated query for build ${buildId}...`);
+      console.log(`[AssignmentEngine] 📊 Starting PARALLEL paginated query for build ${buildId}...`);
       
       // Get total count first
       const { count } = await supabase
@@ -112,13 +118,23 @@ export const useAssignmentEngine = (buildId?: string) => {
       
       console.log(`[AssignmentEngine] 📋 Total records available: ${count}`);
       
-      // Fetch ALL records using pagination (Supabase has 1000 record limit per request)
-      const allData: Account[] = [];
-      const pageSize = 1000;
-      let currentPage = 0;
+      // If no records, return early
+      if (!count || count === 0) {
+        console.warn('[AssignmentEngine] ⚠️ No accounts found in count query');
+        return [];
+      }
       
-      while (true) {
-        const { data: pageData, error } = await supabase
+      // PARALLEL FETCH: Calculate all page ranges upfront, then fetch concurrently
+      const pageSize = 1000;
+      const totalPages = Math.ceil(count / pageSize);
+      
+      console.log(`[AssignmentEngine] 🚀 Fetching ${totalPages} pages in parallel...`);
+      
+      const pagePromises = Array.from({ length: totalPages }, (_, pageIndex) => {
+        const from = pageIndex * pageSize;
+        const to = Math.min((pageIndex + 1) * pageSize - 1, count - 1);
+        
+        return supabase
           .from('accounts')
           .select(`
             sfdc_account_id,
@@ -152,32 +168,23 @@ export const useAssignmentEngine = (buildId?: string) => {
           .eq('build_id', buildId)
           .eq('is_parent', true)
           .order('account_name')
-          .range(currentPage * pageSize, (currentPage + 1) * pageSize - 1);
-        
-        if (error) {
-          console.error(`[AssignmentEngine] ❌ Error loading page ${currentPage}:`, error);
-          throw error;
-        }
-        
-        if (!pageData || pageData.length === 0) {
-          break; // No more data
-        }
-        
-        allData.push(...(pageData as Account[]));
-        console.log(`[AssignmentEngine] 📄 Loaded page ${currentPage + 1}: ${pageData.length} records (Total so far: ${allData.length})`);
-        
-        // If we got less than pageSize records, we're done
-        if (pageData.length < pageSize) {
-          break;
-        }
-        
-        currentPage++;
-      }
+          .range(from, to)
+          .then(({ data: pageData, error }) => {
+            if (error) {
+              console.error(`[AssignmentEngine] ❌ Error loading page ${pageIndex + 1}:`, error);
+              throw error;
+            }
+            console.log(`[AssignmentEngine] 📄 Loaded page ${pageIndex + 1}: ${pageData?.length || 0} records`);
+            return (pageData || []) as Account[];
+          });
+      });
       
-      const data = allData;
+      // Wait for all pages to load in parallel
+      const allPages = await Promise.all(pagePromises);
+      const data = allPages.flat();
       
-      console.log(`[AssignmentEngine] 📈 Pagination Results:`, {
-        totalPages: currentPage + 1,
+      console.log(`[AssignmentEngine] 📈 Parallel Fetch Results:`, {
+        totalPages,
         totalRecords: data.length,
         expectedCount: count,
         buildId,
@@ -256,8 +263,8 @@ export const useAssignmentEngine = (buildId?: string) => {
       return data as Account[];
     },
     enabled: !!buildId && !!user,
-    staleTime: 0, // Disable cache temporarily for debugging
-    gcTime: 0, // Clear immediately
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes (prevents duplicate fetches)
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
     refetchOnWindowFocus: false,
     retry: 1 // Only retry once
   });
@@ -313,15 +320,10 @@ export const useAssignmentEngine = (buildId?: string) => {
     queryClient.invalidateQueries({ queryKey: ['build-assignment-reasons', buildId] });
   }, [refetchAccounts, queryClient, buildId]);
 
-  // Helper function to check if account is customer based on hierarchy ARR
-  const isCustomerAccount = (account: Account) => {
-    // Customer classification: hierarchy_bookings_arr_converted > 0
-    return (account.hierarchy_bookings_arr_converted ?? 0) > 0;
-  };
-
   // Classify ALL parent accounts as either customers or prospects
-  const customerAccounts = (accounts as Account[]).filter(account => isCustomerAccount(account));
-  const prospectAccounts = (accounts as Account[]).filter(account => !isCustomerAccount(account));
+  // Uses is_customer field from database (synced based on hierarchy_bookings_arr_converted > 0)
+  const customerAccounts = (accounts as Account[]).filter(account => account.is_customer === true);
+  const prospectAccounts = (accounts as Account[]).filter(account => account.is_customer !== true);
 
   // Debug logging to verify all accounts are included and authentication
   console.log(`[AssignmentEngine] 📊 Final Account Summary:`, {
@@ -549,7 +551,7 @@ export const useAssignmentEngine = (buildId?: string) => {
       });
 
       // Fetch opportunities for prospects to calculate Net ARR
-      let opportunitiesData = [];
+      let opportunitiesData: Array<{sfdc_account_id: string, net_arr: number}> = [];
       if (accountType !== 'customers') {
         const { data: opps } = await supabase
           .from('opportunities')
@@ -560,17 +562,96 @@ export const useAssignmentEngine = (buildId?: string) => {
         console.log(`📊 Loaded ${opportunitiesData.length} opportunities with Net ARR > 0 for prospects`);
       }
 
-      const { proposals, warnings } = await generateSimplifiedAssignments(
-        buildId,
-        accountType === 'customers' ? 'customer' : 'prospect',
-        filteredAccounts as any,
-        repsForEngine,
-        {
-          ...configData,
-          territory_mappings: configData.territory_mappings as Record<string, string> | null
-        },
-        opportunitiesData
-      );
+      // When generating 'all', we need to run both customer and prospect assignments
+      let proposals: any[] = [];
+      let warnings: any[] = [];
+
+      if (accountType === 'all') {
+        // Separate accounts into customers and prospects
+        const customerAccounts = filteredAccounts.filter(a => a.is_customer);
+        const prospectAccounts = filteredAccounts.filter(a => !a.is_customer);
+
+        console.log(`[AssignmentEngine] 🔄 Generating ALL assignments:`, {
+          customers: customerAccounts.length,
+          prospects: prospectAccounts.length
+        });
+
+        // Generate customer assignments first
+        if (customerAccounts.length > 0) {
+          setAssignmentProgress({
+            stage: 'scoring',
+            status: 'Generating customer assignments...',
+            progress: 30,
+            rulesCompleted: 0,
+            totalRules: 4,
+            accountsProcessed: 0,
+            totalAccounts: filteredAccounts.length,
+            assignmentsMade: 0,
+            conflicts: 0
+          });
+
+          const customerResult = await generateSimplifiedAssignments(
+            buildId,
+            'customer',
+            customerAccounts as any,
+            repsForEngine,
+            {
+              ...configData,
+              territory_mappings: configData.territory_mappings as Record<string, string> | null
+            }
+          );
+          proposals.push(...customerResult.proposals);
+          warnings.push(...customerResult.warnings);
+          console.log(`✅ Customer assignments: ${customerResult.proposals.length} proposals`);
+        }
+
+        // Then generate prospect assignments
+        if (prospectAccounts.length > 0) {
+          setAssignmentProgress({
+            stage: 'scoring',
+            status: 'Generating prospect assignments...',
+            progress: 55,
+            rulesCompleted: 2,
+            totalRules: 4,
+            accountsProcessed: customerAccounts.length,
+            totalAccounts: filteredAccounts.length,
+            assignmentsMade: proposals.length,
+            conflicts: 0
+          });
+
+          const prospectResult = await generateSimplifiedAssignments(
+            buildId,
+            'prospect',
+            prospectAccounts as any,
+            repsForEngine,
+            {
+              ...configData,
+              territory_mappings: configData.territory_mappings as Record<string, string> | null
+            },
+            opportunitiesData
+          );
+          proposals.push(...prospectResult.proposals);
+          warnings.push(...prospectResult.warnings);
+          console.log(`✅ Prospect assignments: ${prospectResult.proposals.length} proposals`);
+        }
+
+        console.log(`✅ Total ALL assignments: ${proposals.length} proposals, ${warnings.length} warnings`);
+      } else {
+        // Single type generation (customers or prospects only)
+        const result = await generateSimplifiedAssignments(
+          buildId,
+          accountType === 'customers' ? 'customer' : 'prospect',
+          filteredAccounts as any,
+          repsForEngine,
+          {
+            ...configData,
+            territory_mappings: configData.territory_mappings as Record<string, string> | null
+          },
+          opportunitiesData
+        );
+        proposals = result.proposals;
+        warnings = result.warnings;
+      }
       
       console.log(`✅ Assignment complete: ${proposals.length} proposals, ${warnings.length} warnings`);
       
@@ -692,50 +773,48 @@ export const useAssignmentEngine = (buildId?: string) => {
     }
   };
 
+  // Main execute function - delegates to internal with imbalance check
   const handleExecuteAssignments = async () => {
+    await executeAssignmentsInternal(false);
+  };
+
+  // Internal execution function that can skip the imbalance check
+  const executeAssignmentsInternal = async (skipImbalanceCheck: boolean = false) => {
     if (!buildId || !assignmentResult) {
       console.warn('[Assignment Execute] ❌ Missing buildId or assignmentResult');
       return;
     }
 
-    // Phase 3: Balance Verification Pre-flight Check
-    const proposals = assignmentResult.proposals;
-    const repARRMap = new Map<string, number>();
-    
-    // Calculate ARR per rep
-    proposals.forEach(p => {
-      const current = repARRMap.get(p.proposedOwnerId) || 0;
-      const accountARR = accounts.find(a => a.sfdc_account_id === p.accountId);
-      const arr = accountARR?.calculated_arr || accountARR?.arr || 0;
-      repARRMap.set(p.proposedOwnerId, current + arr);
-    });
-    
-    const arrValues = Array.from(repARRMap.values());
-    const totalARR = arrValues.reduce((sum, arr) => sum + arr, 0);
-    const avgARR = totalARR / arrValues.length;
-    const maxARR = Math.max(...arrValues);
-    const maxRepEntry = Array.from(repARRMap.entries()).find(([_, arr]) => arr === maxARR);
-    const maxRepName = owners.find(o => o.rep_id === maxRepEntry?.[0])?.name || 'Unknown';
-    
-    // Check if any rep is >30% over target
-    if (maxARR / avgARR > 1.3) {
-      const shouldContinue = window.confirm(
-        `⚠️ IMBALANCED ASSIGNMENT DETECTED\n\n` +
-        `${maxRepName}: $${(maxARR / 1000000).toFixed(1)}M ARR\n` +
-        `Target: $${(avgARR / 1000000).toFixed(1)}M ARR\n` +
-        `Overload: ${((maxARR / avgARR - 1) * 100).toFixed(0)}%\n\n` +
-        `This rep is significantly overloaded. Consider:\n` +
-        `1. Re-ordering rules (Geo → Balance → Continuity)\n` +
-        `2. Re-generating assignments\n\n` +
-        `Apply anyway?`
-      );
+    // Phase 3: Balance Verification Pre-flight Check (unless skipping)
+    if (!skipImbalanceCheck) {
+      const proposals = assignmentResult.proposals;
+      const repARRMap = new Map<string, number>();
       
-      if (!shouldContinue) {
-        toast({
-          title: "Assignment Cancelled",
-          description: "Review your rule priorities and regenerate assignments",
+      // Calculate ARR per rep
+      proposals.forEach(p => {
+        const current = repARRMap.get(p.proposedOwnerId) || 0;
+        const accountARR = accounts.find(a => a.sfdc_account_id === p.accountId);
+        const arr = accountARR?.calculated_arr || accountARR?.arr || 0;
+        repARRMap.set(p.proposedOwnerId, current + arr);
+      });
+      
+      const arrValues = Array.from(repARRMap.values());
+      const totalARR = arrValues.reduce((sum, arr) => sum + arr, 0);
+      const avgARR = totalARR / arrValues.length;
+      const maxARR = Math.max(...arrValues);
+      const maxRepEntry = Array.from(repARRMap.entries()).find(([_, arr]) => arr === maxARR);
+      const maxRepName = owners.find(o => o.rep_id === maxRepEntry?.[0])?.name || 'Unknown';
+      
+      // Check if any rep is >30% over target - show proper UI dialog
+      if (maxARR / avgARR > 1.3) {
+        setImbalanceWarning({
+          show: true,
+          repName: maxRepName,
+          repARR: maxARR,
+          targetARR: avgARR,
+          overloadPercent: Math.round((maxARR / avgARR - 1) * 100)
         });
-        return;
+        return; // Wait for user confirmation via the dialog
       }
     }
 
@@ -927,6 +1006,22 @@ export const useAssignmentEngine = (buildId?: string) => {
     };
   };
 
+  // Handle imbalance warning confirmation - proceed with execution
+  const handleImbalanceConfirm = async () => {
+    setImbalanceWarning(null);
+    // Re-run execution without the imbalance check (force flag)
+    await executeAssignmentsInternal(true);
+  };
+
+  // Handle imbalance warning cancellation
+  const handleImbalanceDismiss = () => {
+    setImbalanceWarning(null);
+    toast({
+      title: "Assignment Paused",
+      description: "Adjust your assignment configuration and regenerate to achieve better balance.",
+    });
+  };
+
   return {
     accounts,
     customerAccounts,
@@ -944,6 +1039,10 @@ export const useAssignmentEngine = (buildId?: string) => {
     refreshData,
     getAssignmentReasons,
     isExecuting,
-    assignmentProgress: getProgressDialogData()
+    assignmentProgress: getProgressDialogData(),
+    // Imbalance warning state and handlers
+    imbalanceWarning,
+    handleImbalanceConfirm,
+    handleImbalanceDismiss
   };
 };

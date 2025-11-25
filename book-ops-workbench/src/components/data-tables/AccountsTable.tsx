@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Search, Download, ChevronUp, ChevronDown, Sparkles, Lock, Unlock } from 'lucide-react';
+import { Search, Download, ChevronUp, ChevronDown, Sparkles, Lock, Unlock, Info } from 'lucide-react';
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
 import { useToast } from '@/hooks/use-toast';
 
@@ -418,15 +418,20 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                     </div>
                   </TableHead>
                   <TableHead>
-                    <Tooltip>
-                      <TooltipTrigger>
-                        <div className="flex items-center gap-1">
+                    <Tooltip delayDuration={0}>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1 cursor-help">
                           <Lock className="h-3 w-3" />
                           Keep Owner
+                          <Info className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
                         </div>
                       </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Lock account to prevent reassignment</p>
+                      <TooltipContent className="max-w-[280px]" side="bottom">
+                        <p className="font-semibold mb-1">Lock Account</p>
+                        <p className="text-xs text-muted-foreground">
+                          Locking an account prevents the assignment engine from changing its owner. 
+                          Use this <strong>before</strong> generating assignments to keep accounts with their current owner.
+                        </p>
                       </TooltipContent>
                     </Tooltip>
                   </TableHead>

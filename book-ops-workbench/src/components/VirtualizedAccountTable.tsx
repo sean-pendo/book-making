@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Edit, CheckCircle, UserX, Lock, Unlock } from 'lucide-react';
+import { Edit, CheckCircle, UserX, Lock, Unlock, Info } from 'lucide-react';
 import { getAccountARR, getAccountATR, formatCurrency } from '@/utils/accountCalculations';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -334,16 +334,21 @@ export const VirtualizedAccountTable = ({
             <TableRow>
               <TableHead className="min-w-[200px]">Account Details</TableHead>
               <TableHead className="min-w-[80px]">
-                <TooltipProvider>
+                <TooltipProvider delayDuration={0}>
                   <Tooltip>
-                    <TooltipTrigger>
-                      <div className="flex items-center gap-1">
+                    <TooltipTrigger asChild>
+                      <div className="flex items-center gap-1 cursor-help">
                         <Lock className="h-3 w-3" />
                         Keep
+                        <Info className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
                       </div>
                     </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Lock account to prevent reassignment</p>
+                    <TooltipContent className="max-w-[280px]" side="bottom">
+                      <p className="font-semibold mb-1">Lock Account</p>
+                      <p className="text-xs text-muted-foreground">
+                        Locking an account prevents the assignment engine from changing its owner. 
+                        Use this <strong>before</strong> generating assignments to keep accounts with their current owner.
+                      </p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>

@@ -52,7 +52,7 @@ export const DebugAccountInfo = ({ accounts, customerAccounts, prospectAccounts 
           </div>
         </div>
 
-        <div className="border rounded p-3 bg-gray-50">
+        <div className="border rounded p-3 bg-muted/50">
           <h4 className="font-medium text-sm mb-3">ARR Data Explanation</h4>
           <div className="text-xs space-y-2">
             <div className="flex items-center gap-2">
@@ -66,7 +66,7 @@ export const DebugAccountInfo = ({ accounts, customerAccounts, prospectAccounts 
           </div>
         </div>
 
-        <div className="border rounded p-3">
+        <div className="border rounded p-3 bg-muted/30">
           <h4 className="font-medium text-sm mb-3">Classification Logic Validation</h4>
           <div className="space-y-2 text-xs">
             <div className="flex items-center justify-between">
@@ -76,7 +76,7 @@ export const DebugAccountInfo = ({ accounts, customerAccounts, prospectAccounts 
                   <CheckCircle className="w-3 h-3 text-green-500" /> : 
                   <XCircle className="w-3 h-3 text-red-500" />
                 }
-                <span className={classificationAccurate ? 'text-green-600' : 'text-red-600'}>
+                <span className={classificationAccurate ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
                   {totalClassified}/{accounts.length}
                 </span>
               </div>
@@ -88,7 +88,7 @@ export const DebugAccountInfo = ({ accounts, customerAccounts, prospectAccounts 
                   <CheckCircle className="w-3 h-3 text-green-500" /> : 
                   <XCircle className="w-3 h-3 text-red-500" />
                 }
-                <span className={customerLogicCorrect ? 'text-green-600' : 'text-red-600'}>
+                <span className={customerLogicCorrect ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
                   {customerLogicCorrect ? 'Valid' : 'Invalid'}
                 </span>
               </div>
@@ -100,7 +100,7 @@ export const DebugAccountInfo = ({ accounts, customerAccounts, prospectAccounts 
                   <CheckCircle className="w-3 h-3 text-green-500" /> : 
                   <XCircle className="w-3 h-3 text-red-500" />
                 }
-                <span className={prospectLogicCorrect ? 'text-green-600' : 'text-red-600'}>
+                <span className={prospectLogicCorrect ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
                   {prospectLogicCorrect ? 'Valid' : 'Invalid'}
                 </span>
               </div>

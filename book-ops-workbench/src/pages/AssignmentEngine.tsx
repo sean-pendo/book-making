@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Users, AlertTriangle, Search, Edit, CheckCircle, FileText, Target, Settings, UserCheck, UserX, RefreshCw, Download, RotateCcw, Play, Loader2, Wrench } from 'lucide-react';
+import { Users, AlertTriangle, Search, Edit, CheckCircle, FileText, Target, Settings, UserCheck, UserX, RefreshCw, Download, RotateCcw, Play, Loader2, Wrench, Eye, Info } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useAssignmentEngine } from '@/hooks/useAssignmentEngine';
 import { useNavigate } from 'react-router-dom';
@@ -33,6 +33,7 @@ import { buildDataService } from '@/services/buildDataService';
 import { supabase } from '@/integrations/supabase/client';
 import { AIBalancingOptimizer } from '@/services/aiBalancingOptimizer';
 import { AIBalancingOptimizerDialog } from '@/components/AIBalancingOptimizerDialog';
+import { ImbalanceWarningDialog } from '@/components/ImbalanceWarningDialog';
 import { fixOwnerAssignments } from '@/utils/fixOwnerAssignments';
 import { QuickResetButton } from '@/components/QuickResetButton';
 
@@ -97,6 +98,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
   const [newOwnerFilter, setNewOwnerFilter] = useState('');
   const [lockStatusFilter, setLockStatusFilter] = useState('all');
   const [showPreviewDialog, setShowPreviewDialog] = useState(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [showAssignmentProgress, setShowAssignmentProgress] = useState(false);
   const [assignmentProgress, setAssignmentProgress] = useState({
     isRunning: false,
@@ -166,7 +168,11 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
     refetchAccounts,
     refreshData: hookRefreshData,
     isExecuting,
-    assignmentProgress: hookAssignmentProgress
+    assignmentProgress: hookAssignmentProgress,
+    // Imbalance warning
+    imbalanceWarning,
+    handleImbalanceConfirm,
+    handleImbalanceDismiss
   } = useAssignmentEngine(buildId);
 
   // Fetch opportunities for Net ARR calculation
@@ -337,14 +343,18 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
         console.warn('[Refresh] ⚠️ Could not trigger account value recalculation:', error);
       }
       
-      console.log('[Refresh] 🗑️ Step 2: Invalidating React Query caches...');
+      console.log('[Refresh] 🗑️ Step 2: Invalidating React Query caches (force refetch)...');
       
-      // Invalidate all React Query caches for this build
-      queryClient.invalidateQueries({ queryKey: ['accounts'] });
-      queryClient.invalidateQueries({ queryKey: ['build-assignment-reasons', buildId] });
-      queryClient.invalidateQueries({ queryKey: ['enhanced-balancing', buildId] });
-      queryClient.invalidateQueries({ queryKey: ['workload-balance', buildId] });
-      queryClient.invalidateQueries({ queryKey: ['build-sales-reps', buildId] });
+      // Small delay to ensure database transaction is committed
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Invalidate queries - this marks data as stale and triggers immediate refetch for active queries
+      await queryClient.invalidateQueries({ queryKey: ['build-parent-accounts-optimized', buildId] }); // Main accounts query
+      await queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      await queryClient.invalidateQueries({ queryKey: ['build-assignment-reasons', buildId] });
+      await queryClient.invalidateQueries({ queryKey: ['enhanced-balancing', buildId] });
+      await queryClient.invalidateQueries({ queryKey: ['workload-balance', buildId] });
+      await queryClient.invalidateQueries({ queryKey: ['build-sales-reps', buildId] });
       
       setDataFlowSteps(prev => prev.map(step => 
         step.id === 'cache' ? { ...step, status: 'completed', timestamp: new Date() } :
@@ -1053,9 +1063,13 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
             opportunitiesProcessed: result.opportunities_reset
           }));
           
-          // Clear cache and refresh
+          // Clear cache and refresh ALL data (not just accounts)
           buildDataService.clearBuildCache(buildId);
-          await refetchAccounts();
+          
+          // Clear local assignment state
+          setSophisticatedAssignmentResult(null);
+          
+          await refreshAllData();
           
           // Complete
           setResetProgress(prev => ({
@@ -1256,9 +1270,13 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
         totalProgress: 92.5
       }));
 
-      // Clear service cache and refetch
+      // Clear service cache and refresh ALL data (not just accounts)
       buildDataService.clearBuildCache(buildId);
-      await refetchAccounts();
+      
+      // Clear local assignment state
+      setSophisticatedAssignmentResult(null);
+      
+      await refreshAllData();
 
       // Complete - ensure 100% progress
       setResetProgress(prev => ({
@@ -1583,7 +1601,18 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Assignment Engine</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-bold tracking-tight">Assignment Engine</h1>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowHowItWorks(true)}
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              title="How It Works"
+            >
+              <Info className="h-5 w-5" />
+            </Button>
+          </div>
           <p className="text-muted-foreground">
             Generate and manage territory assignments using simple waterfall logic
           </p>
@@ -1617,9 +1646,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
             Generate, preview, and execute territory assignments
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-4">
-            {/* Configuration button - always visible */}
+        <CardContent className="space-y-4">
+          {/* Row 1: Configuration */}
+          <div className="flex items-center gap-3">
             <Button
               onClick={() => navigate(`/assignment-config/${buildId}`)}
               variant="outline"
@@ -1628,56 +1657,14 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
               <Settings className="h-4 w-4" />
               Configure Assignment Targets
             </Button>
+          </div>
 
-            {/* Tab-specific generation buttons - only show when on respective tabs */}
-            {activeTab === 'customers' && (
-              <Button
-                onClick={() => onGenerateAssignments('customers')}
-                disabled={isGenerating || isLoading}
-                className="flex items-center gap-2"
-              >
-                {isGenerating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Target className="h-4 w-4" />
-                )}
-                {isGenerating ? 'Generating...' : 'Generate Customer Assignments'}
-              </Button>
-            )}
-
-            {activeTab === 'prospects' && (
-              <Button
-                onClick={() => onGenerateAssignments('prospects')}
-                disabled={isGenerating || isLoading}
-                className="flex items-center gap-2"
-              >
-                {isGenerating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Target className="h-4 w-4" />
-                )}
-                {isGenerating ? 'Generating...' : 'Generate Prospect Assignments'}
-              </Button>
-            )}
-
-            {/* Context-aware preview button - only show on customer/prospect tabs */}
-            {(activeTab === 'customers' || activeTab === 'prospects') && (
-              <Button
-                onClick={onPreviewAssignments}
-                variant="outline"
-                disabled={isLoading}
-                className="flex items-center gap-2"
-              >
-                <Settings className="h-4 w-4" />
-                Preview {activeTab === 'customers' ? 'Customer' : 'Prospect'} Assignments
-              </Button>
-            )}
-
-            {/* Global action buttons - always visible */}
+          {/* Row 2: Generation Actions */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm text-muted-foreground font-medium min-w-[60px]">Generate:</span>
             <Button
               onClick={() => onGenerateAssignments('all')}
               disabled={isGenerating || isLoading}
-              variant="secondary"
               className="flex items-center gap-2"
             >
               {isGenerating ? (
@@ -1685,9 +1672,50 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
               ) : (
                 <Target className="h-4 w-4" />
               )}
-              {isGenerating ? 'Generating...' : 'Generate All Assignments'}
+              All Assignments
             </Button>
-            
+            <Button
+              onClick={() => onGenerateAssignments('customers')}
+              disabled={isGenerating || isLoading}
+              variant="outline"
+              className="flex items-center gap-2"
+            >
+              {isGenerating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Target className="h-4 w-4" />
+              )}
+              Customers Only
+            </Button>
+            <Button
+              onClick={() => onGenerateAssignments('prospects')}
+              disabled={isGenerating || isLoading}
+              variant="outline"
+              className="flex items-center gap-2"
+            >
+              {isGenerating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Target className="h-4 w-4" />
+              )}
+              Prospects Only
+            </Button>
+          </div>
+
+          {/* Row 3: Preview & Reset */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm text-muted-foreground font-medium min-w-[60px]">Actions:</span>
+            {(activeTab === 'customers' || activeTab === 'prospects') && (
+              <Button
+                onClick={onPreviewAssignments}
+                variant="outline"
+                disabled={isLoading}
+                className="flex items-center gap-2"
+              >
+                <Eye className="h-4 w-4" />
+                Preview {activeTab === 'customers' ? 'Customer' : 'Prospect'} Assignments
+              </Button>
+            )}
             <Button
               onClick={handleResetAssignments}
               disabled={isResetting || isLoading}
@@ -1695,26 +1723,13 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
               className="flex items-center gap-2"
             >
               <RotateCcw className="h-4 w-4" />
-              {isResetting ? 'Resetting...' : 'Reset All Assignments'}
-            </Button>
-            
-            <Button
-              onClick={handleFixOwnerData}
-              disabled={isFixingData || isLoading}
-              variant="outline"
-              className="flex items-center gap-2"
-            >
-              {isFixingData ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Wrench className="h-4 w-4" />
-              )}
-              {isFixingData ? 'Fixing...' : 'Fix Assignment Data'}
+              {isResetting ? 'Resetting...' : 'Reset All'}
             </Button>
           </div>
 
-          {/* Export Controls */}
-          <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t">
+          {/* Row 4: Export Controls */}
+          <div className="flex flex-wrap items-center gap-3 pt-3 border-t">
+            <span className="text-sm text-muted-foreground font-medium min-w-[60px]">Export:</span>
             <Button
               onClick={() => handleExportAssignments('customers')}
               disabled={isExporting}
@@ -1723,7 +1738,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
               className="flex items-center gap-2"
             >
               <Download className="h-4 w-4" />
-              Export Customers
+              Customers
             </Button>
             <Button
               onClick={() => handleExportAssignments('prospects')}
@@ -1733,7 +1748,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
               className="flex items-center gap-2"
             >
               <Download className="h-4 w-4" />
-              Export Prospects
+              Prospects
             </Button>
             <Button
               onClick={() => handleExportAssignments('all')}
@@ -1743,15 +1758,53 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
               className="flex items-center gap-2"
             >
               <Download className="h-4 w-4" />
-              Export All
+              All
             </Button>
           </div>
         </CardContent>
       </Card>
 
+      {/* Pending Assignments Alert - show when proposals exist but haven't been applied */}
+      {(assignmentResult?.proposals?.length > 0 || sophisticatedAssignmentResult?.proposals?.length > 0) && (
+        <Card className="border-amber-500 bg-amber-50 dark:bg-amber-900/20">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
+                <div>
+                  <p className="font-semibold text-amber-900 dark:text-amber-100">
+                    {(sophisticatedAssignmentResult?.proposals?.length || assignmentResult?.proposals?.length || 0)} pending assignments not yet applied
+                  </p>
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
+                    These assignments are in memory only. Click Apply to save them to the database.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={onPreviewAssignments}
+                  variant="outline"
+                  className="border-amber-500 text-amber-700 hover:bg-amber-100"
+                >
+                  <Eye className="h-4 w-4 mr-2" />
+                  Review
+                </Button>
+                <Button
+                  onClick={onExecuteAssignments}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                >
+                  <Play className="h-4 w-4 mr-2" />
+                  Apply {(sophisticatedAssignmentResult?.proposals?.length || assignmentResult?.proposals?.length || 0)} Assignments
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Main Content */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="customers" className="flex items-center gap-2">
             <UserCheck className="h-4 w-4" />
             Customers ({allCustomerAccounts.length})
@@ -1769,10 +1822,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
               lastRefreshed={tabRefreshStates.assignments.lastRefreshed}
               tabName="Prospects"
             />
-          </TabsTrigger>
-          <TabsTrigger value="rules" className="flex items-center gap-2">
-            <Settings className="h-4 w-4" />
-            How It Works
           </TabsTrigger>
           <TabsTrigger value="reps" className="flex items-center gap-2">
             <Users className="h-4 w-4" />
@@ -1969,10 +2018,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
         </TabsContent>
 
         {/* Assignment Logic Tab */}
-        <TabsContent value="rules">
-          <WaterfallLogicExplainer buildId={buildId} />
-        </TabsContent>
-
         {/* Sales Reps Tab */}
         <TabsContent value="reps">
           <RepManagement buildId={buildId} />
@@ -2011,6 +2056,22 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
           assignmentType={activeTab === 'prospects' ? 'prospect' : 'customer'}
           buildId={buildId}
         />
+
+      {/* How It Works Dialog */}
+      <Dialog open={showHowItWorks} onOpenChange={setShowHowItWorks}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Info className="h-5 w-5" />
+              How the Assignment Engine Works
+            </DialogTitle>
+            <DialogDescription>
+              Understanding the waterfall logic and assignment rules
+            </DialogDescription>
+          </DialogHeader>
+          <WaterfallLogicExplainer buildId={buildId} />
+        </DialogContent>
+      </Dialog>
 
       {/* AI Balancing Optimizer Dialog */}
       {showAIOptimizer && (
@@ -2213,6 +2274,19 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
         customerAccounts={allCustomerAccounts}
         prospectAccounts={allProspectAccounts}
       />
+
+      {/* Imbalance Warning Dialog - replaces browser confirm() */}
+      {imbalanceWarning && (
+        <ImbalanceWarningDialog
+          open={imbalanceWarning.show}
+          repName={imbalanceWarning.repName}
+          repARR={imbalanceWarning.repARR}
+          targetARR={imbalanceWarning.targetARR}
+          overloadPercent={imbalanceWarning.overloadPercent}
+          onConfirm={handleImbalanceConfirm}
+          onDismiss={handleImbalanceDismiss}
+        />
+      )}
     </div>
   );
 };

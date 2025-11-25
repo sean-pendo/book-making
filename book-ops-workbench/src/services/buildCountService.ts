@@ -13,7 +13,7 @@ export interface BuildCounts {
 class BuildCountService {
   private static instance: BuildCountService;
   private cache: Map<string, { data: BuildCounts; timestamp: number }> = new Map();
-  private readonly CACHE_TTL = 2 * 60 * 1000; // 2 minutes
+  private readonly CACHE_TTL = 30 * 1000; // 30 seconds - shorter for more responsive UI
 
   static getInstance(): BuildCountService {
     if (!BuildCountService.instance) {
@@ -28,10 +28,14 @@ class BuildCountService {
     return (Date.now() - cached.timestamp) < this.CACHE_TTL;
   }
 
-  async getBuildCounts(buildId: string): Promise<BuildCounts> {
-    if (this.isCacheValid(buildId)) {
+  async getBuildCounts(buildId: string, forceRefresh: boolean = false): Promise<BuildCounts> {
+    // Skip cache if force refresh requested
+    if (!forceRefresh && this.isCacheValid(buildId)) {
+      console.log('📊 Using cached build counts for', buildId);
       return this.cache.get(buildId)!.data;
     }
+    
+    console.log('🔄 Fetching fresh build counts for', buildId, forceRefresh ? '(forced)' : '');
 
     try {
       // Get basic counts using efficient count queries

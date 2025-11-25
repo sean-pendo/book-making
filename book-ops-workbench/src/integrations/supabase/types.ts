@@ -794,6 +794,74 @@ export type Database = {
           },
         ]
       }
+      import_metadata: {
+        Row: {
+          id: string
+          build_id: string | null
+          data_type: 'accounts' | 'opportunities' | 'sales_reps'
+          import_status: 'pending' | 'mapped' | 'validated' | 'completed' | 'error'
+          imported_at: string | null
+          imported_by: string | null
+          total_rows: number | null
+          valid_rows: number | null
+          error_count: number | null
+          warning_count: number | null
+          field_mappings: Json | null
+          auto_mapping_summary: Json | null
+          validation_summary: Json | null
+          original_filename: string | null
+          original_file_size: number | null
+          created_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          build_id?: string | null
+          data_type: 'accounts' | 'opportunities' | 'sales_reps'
+          import_status?: 'pending' | 'mapped' | 'validated' | 'completed' | 'error'
+          imported_at?: string | null
+          imported_by?: string | null
+          total_rows?: number | null
+          valid_rows?: number | null
+          error_count?: number | null
+          warning_count?: number | null
+          field_mappings?: Json | null
+          auto_mapping_summary?: Json | null
+          validation_summary?: Json | null
+          original_filename?: string | null
+          original_file_size?: number | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          build_id?: string | null
+          data_type?: 'accounts' | 'opportunities' | 'sales_reps'
+          import_status?: 'pending' | 'mapped' | 'validated' | 'completed' | 'error'
+          imported_at?: string | null
+          imported_by?: string | null
+          total_rows?: number | null
+          valid_rows?: number | null
+          error_count?: number | null
+          warning_count?: number | null
+          field_mappings?: Json | null
+          auto_mapping_summary?: Json | null
+          validation_summary?: Json | null
+          original_filename?: string | null
+          original_file_size?: number | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "import_metadata_build_id_fkey"
+            columns: ["build_id"]
+            isOneToOne: false
+            referencedRelation: "builds"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       manager_notes: {
         Row: {
           build_id: string
@@ -1065,6 +1133,7 @@ export type Database = {
       profiles: {
         Row: {
           created_at: string | null
+          developer: boolean | null
           email: string | null
           full_name: string | null
           id: string
@@ -1075,6 +1144,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string | null
+          developer?: boolean | null
           email?: string | null
           full_name?: string | null
           id: string
@@ -1085,6 +1155,7 @@ export type Database = {
         }
         Update: {
           created_at?: string | null
+          developer?: boolean | null
           email?: string | null
           full_name?: string | null
           id?: string

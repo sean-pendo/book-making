@@ -128,8 +128,8 @@ const Settings = () => {
         </CardContent>
       </Card>
 
-      {/* Role Permissions Management (RevOps Only) */}
-      {profile?.role === "REVOPS" && <RolePermissionsManager />}
+      {/* Role Permissions Management (Developer Only - set via Supabase) */}
+      {profile?.developer === true && <RolePermissionsManager />}
 
       {/* User Management (Admin Only) */}
       {isAdmin && (

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,7 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Upload, Check, AlertTriangle, X, FileText, Database, Settings, Download, Plus, Shield, Trash2 } from 'lucide-react';
+import { Upload, Check, AlertTriangle, X, FileText, Database, Settings, Download, Plus, Shield, Trash2, ExternalLink } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
@@ -38,7 +39,126 @@ import {
   SALES_REP_FIELD_ALIASES
 } from '@/utils/autoMappingUtils';
 import { supabase } from '@/integrations/supabase/client';
+import type { Json } from '@/integrations/supabase/types';
 import { DataVerification } from '@/components/DataVerification';
+
+// Helper function to save import metadata to Supabase for persistence across refreshes
+const saveImportMetadata = async (
+  buildId: string,
+  dataType: 'accounts' | 'opportunities' | 'sales_reps',
+  metadata: {
+    importStatus: 'pending' | 'mapped' | 'validated' | 'completed' | 'error';
+    totalRows?: number;
+    validRows?: number;
+    errorCount?: number;
+    warningCount?: number;
+    fieldMappings?: Record<string, string>;
+    autoMappingSummary?: {
+      totalMapped: number;
+      highConfidence: number;
+      mediumConfidence: number;
+      lowConfidence: number;
+      requiredFieldsMapped: number;
+      requiredFieldsTotal: number;
+    };
+    validationSummary?: {
+      totalRows: number;
+      validRows: number;
+      errorCount: number;
+      warningCount: number;
+      criticalErrorCount: number;
+    };
+    originalFilename?: string;
+    originalFileSize?: number;
+  }
+) => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    const { error } = await supabase
+      .from('import_metadata')
+      .upsert({
+        build_id: buildId,
+        data_type: dataType,
+        import_status: metadata.importStatus,
+        imported_at: metadata.importStatus === 'completed' ? new Date().toISOString() : null,
+        imported_by: user?.id || null,
+        total_rows: metadata.totalRows ?? null,
+        valid_rows: metadata.validRows ?? null,
+        error_count: metadata.errorCount ?? 0,
+        warning_count: metadata.warningCount ?? 0,
+        field_mappings: (metadata.fieldMappings || {}) as Json,
+        auto_mapping_summary: (metadata.autoMappingSummary || null) as Json,
+        validation_summary: (metadata.validationSummary || null) as Json,
+        original_filename: metadata.originalFilename ?? null,
+        original_file_size: metadata.originalFileSize ?? null,
+      }, {
+        onConflict: 'build_id,data_type'
+      });
+
+    if (error) {
+      console.error('❌ Failed to save import metadata:', error);
+    } else {
+      console.log('✅ Import metadata saved for', dataType);
+    }
+  } catch (error) {
+    console.error('❌ Error saving import metadata:', error);
+  }
+};
+
+// Helper function to load import metadata from Supabase
+const loadImportMetadata = async (buildId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('import_metadata')
+      .select('*')
+      .eq('build_id', buildId);
+
+    if (error) {
+      console.error('❌ Failed to load import metadata:', error);
+      return [];
+    }
+
+    console.log('✅ Loaded import metadata:', data?.length || 0, 'records');
+    return data || [];
+  } catch (error) {
+    console.error('❌ Error loading import metadata:', error);
+    return [];
+  }
+};
+
+// Helper function to count populated fields from a sample record
+const countPopulatedFields = async (
+  tableName: 'accounts' | 'opportunities' | 'sales_reps',
+  buildId: string
+): Promise<number> => {
+  try {
+    const { data, error } = await supabase
+      .from(tableName)
+      .select('*')
+      .eq('build_id', buildId)
+      .limit(1)
+      .single();
+
+    if (error || !data) {
+      console.warn(`Could not get sample row from ${tableName}`);
+      return 0;
+    }
+
+    // Count non-null fields (excluding system fields like id, build_id, created_at)
+    const systemFields = ['id', 'build_id', 'created_at', 'updated_at'];
+    const populatedCount = Object.entries(data).filter(([key, value]) => {
+      if (systemFields.includes(key)) return false;
+      return value !== null && value !== undefined && value !== '';
+    }).length;
+
+    console.log(`📊 ${tableName} has ${populatedCount} populated fields`);
+    return populatedCount;
+  } catch (error) {
+    console.error(`Error counting fields for ${tableName}:`, error);
+    return 0;
+  }
+};
 import { DataPreview } from '@/components/DataPreview';
 import { EnhancedValidationResults } from '@/components/EnhancedValidationResults';
 import { ImportProgressMonitor } from '@/components/ImportProgressMonitor';
@@ -78,6 +198,7 @@ interface ImportFile {
     validRows: number;
   };
   importResult?: ImportResult;
+  _populatedFieldCount?: number; // Count of populated fields from Supabase (fallback when no metadata)
 }
 
 interface FieldMapping {
@@ -90,6 +211,7 @@ interface FieldMapping {
 export const DataImport = () => {
   const { toast } = useToast();
   const { effectiveProfile, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
   
   // State with persistence
   const [files, setFiles] = useState<ImportFile[]>(() => {
@@ -168,6 +290,31 @@ export const DataImport = () => {
     }
   }, [currentBuildId]);
 
+  // Track previous build to detect build changes - use 'INITIAL' as sentinel for first render
+  const previousBuildIdRef = useRef<string | null | 'INITIAL'>('INITIAL');
+  
+  // Clear files when switching to a different build
+  useEffect(() => {
+    const isInitialRender = previousBuildIdRef.current === 'INITIAL';
+    const buildChanged = !isInitialRender && previousBuildIdRef.current !== currentBuildId;
+    
+    if (buildChanged && currentBuildId !== null) {
+      console.log('🔄 Build changed from', previousBuildIdRef.current, 'to', currentBuildId, '- clearing files');
+      setFiles([]);
+      clearDataImportState();
+      saveDataImportState.currentBuildId(currentBuildId);
+    }
+    
+    // On initial render, if we have files but no matching build, clear them
+    if (isInitialRender && files.length > 0 && currentBuildId === null) {
+      console.log('🧹 Initial load: clearing orphaned files (no build selected)');
+      setFiles([]);
+      clearDataImportState();
+    }
+    
+    previousBuildIdRef.current = currentBuildId;
+  }, [currentBuildId, files.length]);
+
   // Debug file state changes
   useEffect(() => {
     console.log('📊 FILES STATE CHANGED:', {
@@ -176,6 +323,21 @@ export const DataImport = () => {
       timestamp: new Date().toISOString()
     });
   }, [files]);
+
+  // Prevent accidental refresh/close during active import
+  const isImporting = files.some(f => f.status === 'validating');
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isImporting) {
+        e.preventDefault();
+        e.returnValue = 'Import in progress! Are you sure you want to leave? Your import will be interrupted.';
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isImporting]);
   
   // File input refs
   const accountsInputRef = useRef<HTMLInputElement>(null);
@@ -198,6 +360,25 @@ export const DataImport = () => {
     if (!error && data) {
       console.log('✅ Builds loaded:', data.length);
       setAvailableBuilds(data);
+      
+      // Check if stored currentBuildId is still valid
+      if (currentBuildId) {
+        const buildExists = data.some(b => b.id === currentBuildId);
+        if (!buildExists) {
+          console.log('🧹 Stored build ID no longer exists, clearing files and resetting');
+          setFiles([]);
+          clearDataImportState();
+          // Set to first available build or null
+          if (data.length > 0) {
+            setCurrentBuildId(data[0].id);
+          } else {
+            setCurrentBuildId(null);
+          }
+          return;
+        }
+      }
+      
+      // Set default build if none selected
       if (data.length > 0 && !currentBuildId) {
         console.log('🎯 Setting default build:', data[0].name);
         setCurrentBuildId(data[0].id);
@@ -215,64 +396,163 @@ export const DataImport = () => {
       console.log('🔍 Checking for existing imported data in build:', currentBuildId);
 
       try {
-        // Check what data exists in Supabase for this build
-        const [accountsRes, oppsRes, repsRes] = await Promise.all([
+        // Check what data exists in Supabase for this build AND load import metadata
+        const [accountsRes, oppsRes, repsRes, metadataRes] = await Promise.all([
           supabase.from('accounts').select('id', { count: 'exact', head: true }).eq('build_id', currentBuildId),
           supabase.from('opportunities').select('id', { count: 'exact', head: true }).eq('build_id', currentBuildId),
-          supabase.from('sales_reps').select('id', { count: 'exact', head: true }).eq('build_id', currentBuildId)
+          supabase.from('sales_reps').select('id', { count: 'exact', head: true }).eq('build_id', currentBuildId),
+          loadImportMetadata(currentBuildId)
         ]);
+
+        // Create a map of metadata by data type for easy lookup
+        const metadataByType: Record<string, any> = {};
+        if (Array.isArray(metadataRes)) {
+          metadataRes.forEach((meta: any) => {
+            metadataByType[meta.data_type] = meta;
+          });
+        }
+        console.log('📋 Import metadata by type:', Object.keys(metadataByType));
+
+        // Count populated fields for each data type that exists (fallback when no metadata)
+        const fieldCounts: Record<string, number> = {};
+        const fieldCountPromises: Promise<void>[] = [];
+        
+        if (accountsRes.count && accountsRes.count > 0 && !metadataByType['accounts']?.field_mappings) {
+          fieldCountPromises.push(
+            countPopulatedFields('accounts', currentBuildId).then(count => { fieldCounts['accounts'] = count; })
+          );
+        }
+        if (oppsRes.count && oppsRes.count > 0 && !metadataByType['opportunities']?.field_mappings) {
+          fieldCountPromises.push(
+            countPopulatedFields('opportunities', currentBuildId).then(count => { fieldCounts['opportunities'] = count; })
+          );
+        }
+        if (repsRes.count && repsRes.count > 0 && !metadataByType['sales_reps']?.field_mappings) {
+          fieldCountPromises.push(
+            countPopulatedFields('sales_reps', currentBuildId).then(count => { fieldCounts['sales_reps'] = count; })
+          );
+        }
+        
+        await Promise.all(fieldCountPromises);
+        console.log('📊 Field counts from data:', fieldCounts);
 
         const existingFiles: ImportFile[] = [];
 
         // Add accounts if they exist
         if (accountsRes.count && accountsRes.count > 0) {
+          const meta = metadataByType['accounts'];
+          const mappedFieldCount = meta?.field_mappings ? Object.keys(meta.field_mappings).length : fieldCounts['accounts'] || 0;
           existingFiles.push({
             id: 'existing-accounts',
-            name: 'Accounts',
+            name: meta?.original_filename || 'Accounts',
             type: 'accounts',
-            size: 0,
+            size: meta?.original_file_size || 0,
             data: [],
             headers: [],
             rowCount: accountsRes.count,
+            validRows: meta?.valid_rows || accountsRes.count,
+            errorCount: meta?.error_count || 0,
+            warningCount: meta?.warning_count || 0,
             status: 'completed',
-            fieldMappings: {},
-            validationResult: null
+            fieldMappings: meta?.field_mappings || {},
+            // Store the field count for display
+            _populatedFieldCount: mappedFieldCount,
+            autoMappingSummary: meta?.auto_mapping_summary || undefined,
+            validationResult: meta?.validation_summary ? {
+              totalRows: meta.validation_summary.totalRows || accountsRes.count,
+              validRows: meta.validation_summary.validRows || accountsRes.count,
+              validData: [],
+              errors: [],
+              warnings: [],
+              criticalErrors: []
+            } : {
+              totalRows: accountsRes.count,
+              validRows: accountsRes.count,
+              validData: [],
+              errors: [],
+              warnings: [],
+              criticalErrors: []
+            }
           });
-          console.log(`✅ Found ${accountsRes.count} accounts in Supabase`);
+          console.log(`✅ Found ${accountsRes.count} accounts in Supabase with ${mappedFieldCount} fields`);
         }
 
         // Add opportunities if they exist
         if (oppsRes.count && oppsRes.count > 0) {
+          const meta = metadataByType['opportunities'];
+          const mappedFieldCount = meta?.field_mappings ? Object.keys(meta.field_mappings).length : fieldCounts['opportunities'] || 0;
           existingFiles.push({
             id: 'existing-opportunities',
-            name: 'Opportunities',
+            name: meta?.original_filename || 'Opportunities',
             type: 'opportunities',
-            size: 0,
+            size: meta?.original_file_size || 0,
             data: [],
             headers: [],
             rowCount: oppsRes.count,
+            validRows: meta?.valid_rows || oppsRes.count,
+            errorCount: meta?.error_count || 0,
+            warningCount: meta?.warning_count || 0,
             status: 'completed',
-            fieldMappings: {},
-            validationResult: null
+            fieldMappings: meta?.field_mappings || {},
+            // Store the field count for display
+            _populatedFieldCount: mappedFieldCount,
+            autoMappingSummary: meta?.auto_mapping_summary || undefined,
+            validationResult: meta?.validation_summary ? {
+              totalRows: meta.validation_summary.totalRows || oppsRes.count,
+              validRows: meta.validation_summary.validRows || oppsRes.count,
+              validData: [],
+              errors: [],
+              warnings: [],
+              criticalErrors: []
+            } : {
+              totalRows: oppsRes.count,
+              validRows: oppsRes.count,
+              validData: [],
+              errors: [],
+              warnings: [],
+              criticalErrors: []
+            }
           });
-          console.log(`✅ Found ${oppsRes.count} opportunities in Supabase`);
+          console.log(`✅ Found ${oppsRes.count} opportunities in Supabase with ${mappedFieldCount} fields`);
         }
 
         // Add sales reps if they exist
         if (repsRes.count && repsRes.count > 0) {
+          const meta = metadataByType['sales_reps'];
+          const mappedFieldCount = meta?.field_mappings ? Object.keys(meta.field_mappings).length : fieldCounts['sales_reps'] || 0;
           existingFiles.push({
             id: 'existing-sales-reps',
-            name: 'Sales Reps',
+            name: meta?.original_filename || 'Sales Reps',
             type: 'sales_reps',
-            size: 0,
+            size: meta?.original_file_size || 0,
             data: [],
             headers: [],
             rowCount: repsRes.count,
+            validRows: meta?.valid_rows || repsRes.count,
+            errorCount: meta?.error_count || 0,
+            warningCount: meta?.warning_count || 0,
             status: 'completed',
-            fieldMappings: {},
-            validationResult: null
+            fieldMappings: meta?.field_mappings || {},
+            // Store the field count for display
+            _populatedFieldCount: mappedFieldCount,
+            autoMappingSummary: meta?.auto_mapping_summary || undefined,
+            validationResult: meta?.validation_summary ? {
+              totalRows: meta.validation_summary.totalRows || repsRes.count,
+              validRows: meta.validation_summary.validRows || repsRes.count,
+              validData: [],
+              errors: [],
+              warnings: [],
+              criticalErrors: []
+            } : {
+              totalRows: repsRes.count,
+              validRows: repsRes.count,
+              validData: [],
+              errors: [],
+              warnings: [],
+              criticalErrors: []
+            }
           });
-          console.log(`✅ Found ${repsRes.count} sales reps in Supabase`);
+          console.log(`✅ Found ${repsRes.count} sales reps in Supabase with ${mappedFieldCount} fields`);
         }
 
         // Merge Supabase data with localStorage files, replacing CSV files with Supabase entries
@@ -1141,6 +1421,31 @@ export const DataImport = () => {
       ));
 
       if (result.success) {
+        // Clear the build count cache so Data Verification shows fresh data
+        const { buildCountService } = await import('@/services/buildCountService');
+        buildCountService.clearBuildCache(currentBuildId);
+        console.log('🧹 Cleared build count cache after successful import');
+
+        // Save import metadata to Supabase for persistence across refreshes
+        await saveImportMetadata(currentBuildId, file.type, {
+          importStatus: 'completed',
+          totalRows: file.validationResult?.totalRows || result.recordsProcessed,
+          validRows: result.recordsImported,
+          errorCount: result.errors.length,
+          warningCount: file.validationResult?.warnings?.length || 0,
+          fieldMappings: file.fieldMappings || {},
+          autoMappingSummary: file.autoMappingSummary,
+          validationSummary: file.validationResult ? {
+            totalRows: file.validationResult.totalRows,
+            validRows: file.validationResult.validRows,
+            errorCount: file.validationResult.errors?.length || 0,
+            warningCount: file.validationResult.warnings?.length || 0,
+            criticalErrorCount: file.validationResult.criticalErrors?.length || 0,
+          } : undefined,
+          originalFilename: file.name,
+          originalFileSize: file.size,
+        });
+
         toast({
           title: "Import Completed",
           description: `Successfully imported ${result.recordsImported} of ${result.recordsProcessed} records to build "${buildExists.name}". Database shows ${actualDatabaseCount} total records.`,
@@ -1247,6 +1552,30 @@ export const DataImport = () => {
   // Show auth warning if not properly authenticated
   const showAuthWarning = !effectiveProfile || !['REVOPS', 'LEADERSHIP'].includes(effectiveProfile.role);
 
+  // Check if all three CSV types have been imported (completed status)
+  const allCSVsImported = useMemo(() => {
+    if (!currentBuildId) return false;
+    const completedFiles = files.filter(f => f.status === 'completed');
+    const hasAccounts = completedFiles.some(f => f.type === 'accounts');
+    const hasOpportunities = completedFiles.some(f => f.type === 'opportunities');
+    const hasSalesReps = completedFiles.some(f => f.type === 'sales_reps');
+    return hasAccounts && hasOpportunities && hasSalesReps;
+  }, [files, currentBuildId]);
+
+  // Calculate total records from completed files
+  const totalRecords = useMemo(() => {
+    const completedFiles = files.filter(f => f.status === 'completed');
+    return completedFiles.reduce((sum, file) => {
+      return sum + (file.validRows || file.rowCount || 0);
+    }, 0);
+  }, [files]);
+
+  const handleNavigateToBuild = () => {
+    if (currentBuildId) {
+      navigate(`/build/${currentBuildId}`);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -1332,9 +1661,9 @@ export const DataImport = () => {
               )}
               
               {!currentBuildId && availableBuilds.length > 0 && (
-                <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
-                  <p className="text-sm font-medium text-yellow-800">Build Selection Required</p>
-                  <p className="text-sm text-yellow-700">
+                <div className="p-3 bg-yellow-50 dark:bg-yellow-950/30 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                  <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">Build Selection Required</p>
+                  <p className="text-sm text-yellow-700 dark:text-yellow-300">
                     Please select a build to associate your imported data with.
                   </p>
                 </div>
@@ -1372,6 +1701,30 @@ export const DataImport = () => {
         </Card>
       )}
 
+      {/* Status Bar - Show when all three CSV files are imported */}
+      {allCSVsImported && currentBuildId && (
+        <Card className="border-primary/50 bg-primary/5">
+          <CardContent className="pt-6">
+            <div className="text-center space-y-4">
+              <div>
+                <div className="text-3xl font-bold text-primary mb-2">
+                  {totalRecords.toLocaleString()}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Total Records Ready for Book Building
+                </div>
+              </div>
+              <div className="flex justify-center">
+                <Button onClick={handleNavigateToBuild} className="flex items-center gap-2">
+                  <ExternalLink className="w-4 h-4" />
+                  Open Build Details
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="upload">File Upload</TabsTrigger>
@@ -1398,7 +1751,7 @@ export const DataImport = () => {
                   <Database className="w-5 h-5" />
                   Accounts CSV
                 </CardTitle>
-                <CardDescription>
+                <CardDescription className="min-h-[3rem]">
                   Upload your accounts data with parent/child relationships
                 </CardDescription>
               </CardHeader>
@@ -1446,7 +1799,7 @@ export const DataImport = () => {
                   <FileText className="w-5 h-5" />
                   Opportunities CSV
                 </CardTitle>
-                <CardDescription>
+                <CardDescription className="min-h-[3rem]">
                   Upload open opportunities data
                 </CardDescription>
               </CardHeader>
@@ -1490,11 +1843,11 @@ export const DataImport = () => {
             {/* Sales Reps Upload */}
             <Card>
               <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Settings className="w-5 h-5" />
-                Sales Reps CSV
-              </CardTitle>
-                <CardDescription>
+                <CardTitle className="flex items-center gap-2">
+                  <Settings className="w-5 h-5" />
+                  Sales Reps CSV
+                </CardTitle>
+                <CardDescription className="min-h-[3rem]">
                   Upload sales representative data with Name, Manager, Team, Region, and Rep ID
                 </CardDescription>
               </CardHeader>
@@ -1504,33 +1857,33 @@ export const DataImport = () => {
                   <p className="text-sm text-muted-foreground mb-4">
                     Drag & drop or click to upload
                   </p>
-                  <Input
-                    ref={salesRepsInputRef}
-                    type="file"
-                    accept=".csv"
-                    onChange={(e) => handleFileUpload(e, 'sales_reps')}
-                    className="hidden"
-                    id="sales-reps-upload"
-                    multiple
-                  />
-                  <Button 
-                    variant="outline" 
-                    className="w-full cursor-pointer hover:bg-accent"
-                    onClick={() => salesRepsInputRef.current?.click()}
-                  >
-                    Choose File
-                  </Button>
-                </div>
-                <div className="mt-4 flex justify-center">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => downloadSampleFile('sales_reps')}
-                    className="text-xs"
-                  >
-                    <Download className="w-3 h-3 mr-1" />
-                    Download Sample
-                  </Button>
+                  <div className="space-y-2">
+                    <Input
+                      ref={salesRepsInputRef}
+                      type="file"
+                      accept=".csv"
+                      onChange={(e) => handleFileUpload(e, 'sales_reps')}
+                      className="hidden"
+                      id="sales-reps-upload"
+                      multiple
+                    />
+                    <Button 
+                      variant="outline" 
+                      className="w-full cursor-pointer hover:bg-accent"
+                      onClick={() => salesRepsInputRef.current?.click()}
+                    >
+                      Choose File
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="w-full"
+                      onClick={() => downloadSampleFile('sales_reps')}
+                    >
+                      <Download className="w-3 h-3 mr-1" />
+                      Download Sample
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1552,7 +1905,6 @@ export const DataImport = () => {
                     <TableRow>
                       <TableHead>File</TableHead>
                       <TableHead>Type</TableHead>
-                      <TableHead>Size</TableHead>
                       <TableHead>Rows</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Actions</TableHead>
@@ -1568,7 +1920,6 @@ export const DataImport = () => {
                          </div>
                        </TableCell>
                        <TableCell className="capitalize">{file.type.replace('_', ' ')}</TableCell>
-                       <TableCell>{Math.round(file.size / 1024)} KB</TableCell>
                        <TableCell>{file.rowCount?.toLocaleString()}</TableCell>
                        <TableCell>{getStatusBadge(file.status)}</TableCell>
                        <TableCell>
@@ -1630,7 +1981,7 @@ export const DataImport = () => {
               ) : (
                 <div className="space-y-4">
                   {files.filter(f => f.status === 'uploaded' || f.status === 'mapped' || f.status === 'validated' || f.status === 'completed').map(file => (
-                    <div key={file.id} className="border rounded-lg p-4">
+                    <div key={file.id} className={`border rounded-lg p-4 ${file.status === 'completed' ? 'bg-green-50/50 dark:bg-green-950/20 border-green-200 dark:border-green-800' : ''}`}>
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
                           {getFileTypeIcon(file.type)}
@@ -1638,45 +1989,65 @@ export const DataImport = () => {
                           {getStatusBadge(file.status)}
                         </div>
                         <div className="flex gap-2">
-                          {file.autoMappings && Object.keys(file.autoMappings).length > 0 && (
-                            <Button size="sm" variant="outline" onClick={() => autoMapAllFields(file)}>
-                              Auto Map All
-                            </Button>
-                          )}
-                          {file.fieldMappings && Object.keys(file.fieldMappings).length > 0 && (
-                            <Button size="sm" variant="ghost" onClick={() => clearAllMappings(file)}>
-                              Clear All
-                            </Button>
-                          )}
-                          <Button size="sm" onClick={() => handleStartMapping(file)}>
-                            Configure Mapping
-                          </Button>
-                          {file.status === 'mapped' && (
-                            <Button size="sm" onClick={() => validateMappedFile(file)}>
-                              Validate Data
-                            </Button>
+                          {/* Only show edit controls for non-completed files */}
+                          {file.status !== 'completed' && (
+                            <>
+                              {file.autoMappings && Object.keys(file.autoMappings).length > 0 && (
+                                <Button size="sm" variant="outline" onClick={() => autoMapAllFields(file)}>
+                                  Auto Map All
+                                </Button>
+                              )}
+                              {file.fieldMappings && Object.keys(file.fieldMappings).length > 0 && (
+                                <Button size="sm" variant="ghost" onClick={() => clearAllMappings(file)}>
+                                  Clear All
+                                </Button>
+                              )}
+                              <Button size="sm" onClick={() => handleStartMapping(file)}>
+                                Configure Mapping
+                              </Button>
+                              {file.status === 'mapped' && (
+                                <Button size="sm" onClick={() => validateMappedFile(file)}>
+                                  Validate Data
+                                </Button>
+                              )}
+                            </>
                           )}
                         </div>
                       </div>
                       
-              {/* Auto-mapping summary */}
-              {file.autoMappingSummary && (
-                <div className="mb-3 p-3 bg-muted/20 rounded-lg">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="font-medium text-sm">Auto-Mapping Results</h4>
-                    <Badge variant="outline">
-                      {file.autoMappingSummary.requiredFieldsMapped}/{file.autoMappingSummary.requiredFieldsTotal} required fields
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {Object.keys(file.autoMappings || {}).length} fields automatically mapped
-                  </p>
-                </div>
-              )}
+                      {/* Show completed import summary - simplified */}
+                      {file.status === 'completed' && (
+                        <div className="mb-2 p-2 bg-muted/30 rounded border border-muted">
+                          <div className="flex items-center justify-between text-sm">
+                            <div className="flex items-center gap-2">
+                              <Check className="w-3 h-3 text-green-600" />
+                              <span className="text-muted-foreground">Import completed</span>
+                            </div>
+                            <span className="font-medium">{file.rowCount?.toLocaleString() || 0} records</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Auto-mapping summary for non-completed files */}
+                      {file.status !== 'completed' && file.autoMappingSummary && (
+                        <div className="mb-3 p-3 bg-muted/20 rounded-lg">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="font-medium text-sm">Auto-Mapping Results</h4>
+                            <Badge variant="outline">
+                              {file.autoMappingSummary.requiredFieldsMapped}/{file.autoMappingSummary.requiredFieldsTotal} required fields
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            {Object.keys(file.autoMappings || {}).length} fields automatically mapped
+                          </p>
+                        </div>
+                      )}
                       
-                       <p className="text-sm text-muted-foreground">
-                         {Object.keys(file.fieldMappings || {}).length} of {getCurrentMappings(file.type).length} fields mapped
-                       </p>
+                      {file.status !== 'completed' && (
+                        <p className="text-sm text-muted-foreground">
+                          {Object.keys(file.fieldMappings || {}).length} of {getCurrentMappings(file.type).length} fields mapped
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1694,7 +2065,7 @@ export const DataImport = () => {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {files.filter(f => f.validationResult).length === 0 ? (
+              {files.filter(f => f.validationResult || f.status === 'completed').length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <AlertTriangle className="w-12 h-12 mx-auto mb-4 opacity-50" />
                   <h3 className="text-lg font-medium mb-2">No Validation Results</h3>
@@ -1702,90 +2073,112 @@ export const DataImport = () => {
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {files.filter(f => f.validationResult).map(file => (
+                  {files.filter(f => f.validationResult || f.status === 'completed').map(file => (
                     <div key={file.id} className="space-y-4">
-                      {/* Data Preview Component */}
-                      {file.parsedData && file.headers && (
-                        <DataPreview
-                          data={file.parsedData.slice(0, 20)} // Show first 20 rows for preview
-                          headers={file.headers}
-                          fileName={file.name}
-                          fileType={file.type}
-                          fieldMappings={file.fieldMappings}
-                        />
-                      )}
-
-                      {/* Enhanced Validation Results Component */}
-                      <EnhancedValidationResults
-                        file={file}
-                        onImport={handleValidateAndImport}
-                        onDownloadErrorReport={handleDownloadErrorReport}
-                      />
-
-                      {/* Original validation display for backward compatibility */}
-                      <div className="border rounded-lg p-4 bg-muted/10">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-2">
-                            {getFileTypeIcon(file.type)}
-                            <span className="font-medium">{file.name}</span>
-                            {getStatusBadge(file.status)}
+                      {/* Show completed import summary for existing data - simplified */}
+                      {file.status === 'completed' && file.id.startsWith('existing-') && (
+                        <div className="border rounded-lg p-3 bg-muted/30 border-muted">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              {getFileTypeIcon(file.type)}
+                              <span className="font-medium">{file.name}</span>
+                              <Badge variant="outline" className="bg-green-50 dark:bg-green-950/30 border-green-300 dark:border-green-800 text-green-700 dark:text-green-300">
+                                <Check className="w-3 h-3 mr-1" />
+                                Imported
+                              </Badge>
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              {file.validRows?.toLocaleString() || file.rowCount?.toLocaleString() || 0} records
+                            </div>
                           </div>
                         </div>
-                        
-                        {file.validationResult && (
-                          <div className="space-y-4">
-                            {/* Summary Stats */}
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                              <div className="text-center p-3 bg-muted/20 rounded-lg">
-                                <div className="text-2xl font-bold text-foreground">
-                                  {file.validationResult.totalRows}
-                                </div>
-                                <div className="text-sm text-muted-foreground">Total Records</div>
-                              </div>
-                              <div className="text-center p-3 bg-green-50 rounded-lg">
-                                <div className="text-2xl font-bold text-green-600">
-                                  {file.validationResult.validRows}
-                                </div>
-                                <div className="text-sm text-muted-foreground">Valid Records</div>
-                              </div>
-                              <div className="text-center p-3 bg-yellow-50 rounded-lg">
-                                <div className="text-2xl font-bold text-yellow-600">
-                                  {file.validationResult.warnings.length}
-                                </div>
-                                <div className="text-sm text-muted-foreground">Warnings</div>
-                              </div>
-                              <div className="text-center p-3 bg-red-50 rounded-lg">
-                                <div className="text-2xl font-bold text-red-600">
-                                  {file.validationResult.criticalErrors.length}
-                                </div>
-                                <div className="text-sm text-muted-foreground">Critical Errors</div>
+                      )}
+
+                      {/* Show full validation UI for files with fresh validation results (not existing data) */}
+                      {file.validationResult && !file.id.startsWith('existing-') && (
+                        <>
+                          {/* Data Preview Component */}
+                          {file.parsedData && file.headers && (
+                            <DataPreview
+                              data={file.parsedData.slice(0, 20)} // Show first 20 rows for preview
+                              headers={file.headers}
+                              fileName={file.name}
+                              fileType={file.type}
+                              fieldMappings={file.fieldMappings}
+                            />
+                          )}
+
+                          {/* Enhanced Validation Results Component */}
+                          <EnhancedValidationResults
+                            file={file}
+                            onImport={handleValidateAndImport}
+                            onDownloadErrorReport={handleDownloadErrorReport}
+                          />
+
+                          {/* Original validation display for backward compatibility */}
+                          <div className="border rounded-lg p-4 bg-muted/10">
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                {getFileTypeIcon(file.type)}
+                                <span className="font-medium">{file.name}</span>
+                                {getStatusBadge(file.status)}
                               </div>
                             </div>
-
-                            {/* Import Action */}
-                            {file.validationResult.validRows > 0 && (
-                              <div className="flex justify-between items-center p-4 bg-green-50 border border-green-200 rounded-lg">
-                                <div>
-                                  <div className="font-medium text-green-800">Ready for Import</div>
-                                  <div className="text-sm text-green-600">
-                                    {file.validationResult.validRows} records can be imported
-                                    {file.validationResult.criticalErrors.length > 0 && 
-                                      ` (${file.validationResult.criticalErrors.length} records will be skipped due to critical errors)`
-                                    }
+                            
+                            <div className="space-y-4">
+                              {/* Summary Stats */}
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="text-center p-3 bg-muted/20 rounded-lg">
+                                  <div className="text-2xl font-bold text-foreground">
+                                    {file.validationResult.totalRows}
                                   </div>
+                                  <div className="text-sm text-muted-foreground">Total Records</div>
                                 </div>
-                                <Button 
-                                  onClick={() => handleValidateAndImport(file)}
-                                  disabled={file.status === 'validating' || !currentBuildId}
-                                  className="bg-green-600 hover:bg-green-700"
-                                >
-                                  {file.status === 'validating' ? 'Importing...' : 'Import Data'}
-                                </Button>
+                                <div className="text-center p-3 bg-green-50 dark:bg-green-950/30 rounded-lg">
+                                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                                    {file.validationResult.validRows}
+                                  </div>
+                                  <div className="text-sm text-muted-foreground">Valid Records</div>
+                                </div>
+                                <div className="text-center p-3 bg-yellow-50 dark:bg-yellow-950/30 rounded-lg">
+                                  <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
+                                    {file.validationResult.warnings.length}
+                                  </div>
+                                  <div className="text-sm text-muted-foreground">Warnings</div>
+                                </div>
+                                <div className="text-center p-3 bg-red-50 dark:bg-red-950/30 rounded-lg">
+                                  <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                                    {file.validationResult.criticalErrors.length}
+                                  </div>
+                                  <div className="text-sm text-muted-foreground">Critical Errors</div>
+                                </div>
                               </div>
-                            )}
+
+                              {/* Import Action */}
+                              {file.validationResult.validRows > 0 && file.status !== 'completed' && (
+                                <div className="flex justify-between items-center p-4 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg">
+                                  <div>
+                                    <div className="font-medium text-green-800 dark:text-green-200">Ready for Import</div>
+                                    <div className="text-sm text-green-600 dark:text-green-400">
+                                      {file.validationResult.validRows} records can be imported
+                                      {file.validationResult.criticalErrors.length > 0 && 
+                                        ` (${file.validationResult.criticalErrors.length} records will be skipped due to critical errors)`
+                                      }
+                                    </div>
+                                  </div>
+                                  <Button 
+                                    onClick={() => handleValidateAndImport(file)}
+                                    disabled={file.status === 'validating' || !currentBuildId}
+                                    className="bg-green-600 hover:bg-green-700"
+                                  >
+                                    {file.status === 'validating' ? 'Importing...' : 'Import Data'}
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        )}
-                      </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1900,18 +2293,18 @@ export const DataImport = () => {
                      const autoMapping = selectedFile?.autoMappings ? Object.entries(selectedFile.autoMappings).find(([key, value]) => value.schemaField === mapping.schemaField) : null;
                      
                      return (
-                       <TableRow key={`${mapping.priority}-${index}`} className={mapping.priority === 'essential' ? 'bg-red-50/50' : mapping.priority === 'high' ? 'bg-yellow-50/50' : ''}>
+                       <TableRow key={`${mapping.priority}-${index}`} className={mapping.priority === 'essential' ? 'bg-red-50/50 dark:bg-red-950/20' : mapping.priority === 'high' ? 'bg-yellow-50/50 dark:bg-yellow-950/20' : ''}>
                          <TableCell className="font-medium">
                            <div className="space-y-1">
                              <div className="flex items-center gap-2">
-                               <span className={mapping.priority === 'essential' ? 'text-red-700 font-semibold' : mapping.priority === 'high' ? 'text-yellow-700' : ''}>
+                               <span className={mapping.priority === 'essential' ? 'text-red-700 dark:text-red-400 font-semibold' : mapping.priority === 'high' ? 'text-yellow-700 dark:text-yellow-400' : ''}>
                                  {mapping.schemaField}
                                </span>
                                {mapping.priority === 'essential' && (
                                  <Badge variant="destructive" className="text-xs">Essential</Badge>
                                )}
                                {mapping.priority === 'high' && (
-                                 <Badge variant="secondary" className="text-xs bg-yellow-100 text-yellow-800">High</Badge>
+                                 <Badge variant="secondary" className="text-xs bg-yellow-100 dark:bg-yellow-950/50 text-yellow-800 dark:text-yellow-300">High</Badge>
                                )}
                              </div>
                              {mapping.description && (
@@ -2024,11 +2417,11 @@ export const DataImport = () => {
                        {/* Essential Fields */}
                        {groupedMappings.essential.length > 0 && (
                          <>
-                           <TableRow className="bg-red-100 border-b">
-                             <TableCell colSpan={3} className="font-bold text-red-800 py-2">
-                               ⚡ Essential Fields (Required)
-                             </TableCell>
-                           </TableRow>
+                          <TableRow className="bg-red-100 dark:bg-red-950/30 border-b">
+                            <TableCell colSpan={3} className="font-bold text-red-800 dark:text-red-300 py-2">
+                              ⚡ Essential Fields (Required)
+                            </TableCell>
+                          </TableRow>
                            {groupedMappings.essential.map((mapping, index) => renderMappingRow(mapping, index))}
                          </>
                        )}
@@ -2036,11 +2429,11 @@ export const DataImport = () => {
                        {/* High Priority Fields */}
                        {groupedMappings.high.length > 0 && (
                          <>
-                           <TableRow className="bg-yellow-100 border-b">
-                             <TableCell colSpan={3} className="font-bold text-yellow-800 py-2">
-                               ⭐ High Priority Fields (Recommended)
-                             </TableCell>
-                           </TableRow>
+                          <TableRow className="bg-yellow-100 dark:bg-yellow-950/30 border-b">
+                            <TableCell colSpan={3} className="font-bold text-yellow-800 dark:text-yellow-300 py-2">
+                              ⭐ High Priority Fields (Recommended)
+                            </TableCell>
+                          </TableRow>
                            {groupedMappings.high.map((mapping, index) => renderMappingRow(mapping, index))}
                          </>
                        )}
@@ -2048,9 +2441,9 @@ export const DataImport = () => {
                        {/* Secondary Fields */}
                        {groupedMappings.secondary.length > 0 && (
                          <>
-                           <TableRow className="bg-gray-100 border-b">
-                             <TableCell colSpan={3} className="font-bold text-gray-700 py-2">
-                               📊 Secondary Fields (Optional)
+                          <TableRow className="bg-muted/50 border-b">
+                            <TableCell colSpan={3} className="font-bold py-2">
+                              📊 Secondary Fields (Optional)
                              </TableCell>
                            </TableRow>
                            {groupedMappings.secondary.map((mapping, index) => renderMappingRow(mapping, index))}

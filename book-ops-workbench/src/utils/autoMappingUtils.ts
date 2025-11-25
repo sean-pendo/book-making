@@ -145,8 +145,7 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
       'Bookings Account ARR', 'Bookings Account ARR (converted)', 
       'ARR', 'Annual_Recurring_Revenue', 'Current_ARR', 'Revenue', 'ARR (current)',
       'arr', 'annual_recurring_revenue', 'current_arr', 'revenue',
-      'annual_revenue', 'yearly_revenue', 'recurring_revenue',
-      'Bookings Account ARR (converted) Currency'
+      'annual_revenue', 'yearly_revenue', 'recurring_revenue'
     ],
     patterns: [/^bookings.*arr.*/i, /^arr$/i, /.*annual.*revenue.*/i, /.*recurring.*revenue.*/i],
     required: false
@@ -462,10 +461,12 @@ export const OPPORTUNITY_FIELD_ALIASES: FieldAlias[] = [
   {
     schemaField: 'available_to_renew',
     aliases: [
+      'Available to Renew (converted)', 'Available To Renew (converted)',
       'Available_To_Renew', 'Available To Renew', 'ATR', 'Renewable_Amount', 'Renewal_Value',
-      'available_to_renew', 'atr', 'renewable_amount', 'renewal_value', 'available_for_renewal'
+      'available_to_renew', 'atr', 'renewable_amount', 'renewal_value', 'available_for_renewal',
+      'Bookings Account ARR (converted)'
     ],
-    patterns: [/.*available.*to.*renew.*/i, /.*atr.*/i, /.*renewable.*amount.*/i],
+    patterns: [/^available.*to.*renew(?!.*currency)/i, /.*atr.*/i, /.*renewable.*amount.*/i, /^bookings.*arr.*converted\)$/i],
     required: false
   }
 ];

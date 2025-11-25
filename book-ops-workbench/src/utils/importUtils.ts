@@ -781,7 +781,8 @@ export const getOptimalImportStrategy = (dataSize: number, fileSize?: number) =>
     useBatchImport: dataSize > BATCH_THRESHOLD,
     useServerSideImport: (fileSize || 0) > 50 * 1024 * 1024, // 50MB
     useStreamingParser: (fileSize || 0) > STREAMING_THRESHOLD,
-    recommendedBatchSize: dataSize < 1000 ? 100 : dataSize < 10000 ? 500 : 1000
+    // Aggressive batch sizes for speed - Supabase handles large batches well with pure INSERTs
+    recommendedBatchSize: dataSize < 1000 ? 500 : dataSize < 10000 ? 2000 : 5000
   };
 };
 
@@ -855,7 +856,7 @@ export const importAccountsToDatabase = async (
       },
       { 
         batchSize: strategy.recommendedBatchSize,
-        maxConcurrentBatches: 3
+        maxConcurrentBatches: 5 // More parallel batches for speed
       }
     );
 
@@ -1033,7 +1034,7 @@ export const importOpportunitiesToDatabase = async (
           onProgress(progress.processed, progress.total);
         }
       },
-      { batchSize: 100, maxConcurrentBatches: 2 } // Larger batches now that trigger is gone
+      { batchSize: 500, maxConcurrentBatches: 4 } // Aggressive batching for speed
     );
 
     // STEP 4: Calculate account metrics once for the entire build (much faster than per-opportunity)
@@ -1237,7 +1238,7 @@ export const importSalesRepsToDatabase = async (
       },
       { 
         batchSize: strategy.recommendedBatchSize,
-        maxConcurrentBatches: 3
+        maxConcurrentBatches: 5 // More parallel batches for speed
       }
     );
 

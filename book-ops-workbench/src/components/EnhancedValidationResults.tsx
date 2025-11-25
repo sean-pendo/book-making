@@ -226,14 +226,14 @@ export const EnhancedValidationResults: React.FC<EnhancedValidationResultsProps>
               </div>
             ) : (
               <div className="space-y-4">
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 max-h-64 overflow-y-auto">
+                <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg p-3 max-h-64 overflow-y-auto">
                   {validationResult.criticalErrors.slice(0, 50).map((error, index) => (
-                    <div key={index} className="text-sm text-red-700 mb-2 p-2 bg-white rounded">
+                    <div key={index} className="text-sm text-red-700 dark:text-red-400 mb-2 p-2 bg-white dark:bg-muted rounded">
                       <span className="font-medium">Error {index + 1}:</span> {error}
                     </div>
                   ))}
                   {validationResult.criticalErrors.length > 50 && (
-                    <div className="text-sm text-red-600 italic text-center mt-2">
+                    <div className="text-sm text-red-600 dark:text-red-400 italic text-center mt-2">
                       ... and {validationResult.criticalErrors.length - 50} more errors (download full report)
                     </div>
                   )}
@@ -250,9 +250,9 @@ export const EnhancedValidationResults: React.FC<EnhancedValidationResultsProps>
                 <p>Data quality looks excellent!</p>
               </div>
             ) : (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 max-h-64 overflow-y-auto">
+              <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 max-h-64 overflow-y-auto">
                 {validationResult.warnings.slice(0, 30).map((warning, index) => (
-                  <div key={index} className="text-sm text-yellow-700 mb-2 p-2 bg-white rounded">
+                  <div key={index} className="text-sm text-yellow-700 dark:text-yellow-400 mb-2 p-2 bg-white dark:bg-muted rounded">
                     <span className="font-medium">Warning {index + 1}:</span> {warning}
                   </div>
                 ))}

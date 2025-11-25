@@ -7,26 +7,21 @@ export const useAccountCalculations = () => {
 
   const recalculateAccountValues = useMutation({
     mutationFn: async (buildId: string) => {
-      console.log('[Account Calculations] Starting background recalculation for build:', buildId);
-      
-      // Use edge function for background processing to avoid timeouts
-      const { data, error } = await supabase.functions.invoke('recalculate-accounts', {
-        body: { buildId }
-      });
-      
-      if (error) {
-        console.error('[Account Calculations] Edge function error:', error);
-        throw error;
-      }
-      
-      console.log('[Account Calculations] Background recalculation started:', data);
+      console.log('[Account Calculations] Skipping edge function call (ATR calculated during import)');
+
+      // ATR is now automatically calculated during opportunities import
+      // Edge function call is no longer required for normal operation
+      // Just invalidate caches to refresh UI with latest data
+
+      console.log('[Account Calculations] Account calculations up-to-date from import');
+      return { message: 'ATR already calculated during import' };
     },
     onSuccess: (_, buildId) => {
-      console.log('[Account Calculations] Background recalculation started for build:', buildId);
-      
+      console.log('[Account Calculations] Refreshing data for build:', buildId);
+
       toast({
-        title: "Processing Started",
-        description: "Account calculations are being updated in the background. Data will refresh automatically when complete.",
+        title: "Refreshing Data",
+        description: "Account calculations are up-to-date. Refreshing display...",
       });
       
       // Set up polling to check when processing is complete

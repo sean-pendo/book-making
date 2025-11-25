@@ -52,11 +52,7 @@ export class BatchImportService {
     const finalConfig = { ...this.DEFAULT_CONFIG, ...config };
     const startTime = Date.now();
     
-    // Calculate optimal batch size
-    const estimatedRecordSize = 1024; // Rough estimate for account records
-    const optimalBatchSize = this.calculateOptimalBatchSize(data.length, estimatedRecordSize);
-    finalConfig.batchSize = Math.min(finalConfig.batchSize, optimalBatchSize);
-
+    // Use the batch size from config directly - no cap (caller decides optimal size)
     console.log(`🚀 Starting batch import: ${data.length} records, batch size: ${finalConfig.batchSize} (pure INSERT)`);
 
     // Split data into batches
@@ -79,21 +75,30 @@ export class BatchImportService {
 
     const processBatch = async (batch: any[], currentBatchIndex: number, retryCount = 0): Promise<void> => {
       const batchStartTime = Date.now();
-      const maxRetries = 2;
+      const maxRetries = 4; // More retries for reliability
       
       try {
         console.log(`📦 Processing batch ${currentBatchIndex + 1}/${totalBatches} (${batch.length} records)${retryCount > 0 ? ` - Retry ${retryCount}` : ''}`);
         
-        const { data: result, error } = await supabase
+        // Don't use .select() - it adds overhead and can cause timeouts on large batches
+        const { error } = await supabase
           .from('accounts')
-          .insert(batch)
-          .select('id');
+          .insert(batch);
 
         if (error) {
-          // Retry logic for certain types of errors
-          if (retryCount < maxRetries && (error.message.includes('timeout') || error.message.includes('connection') || error.code === 'PGRST301')) {
-            console.warn(`⚠️ Batch ${currentBatchIndex + 1} failed, retrying... (${retryCount + 1}/${maxRetries})`);
-            await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
+          // Retry logic for certain types of errors (expanded list)
+          const isRetryable = error.message.includes('timeout') || 
+                              error.message.includes('connection') || 
+                              error.message.includes('statement canceled') ||
+                              error.message.includes('Too Many Requests') ||
+                              error.code === 'PGRST301' ||
+                              error.code === '57014' || // query_canceled
+                              error.code === '40001'; // serialization_failure
+          
+          if (retryCount < maxRetries && isRetryable) {
+            const delay = Math.min(2000 * Math.pow(2, retryCount), 10000); // Exponential backoff up to 10s
+            console.warn(`⚠️ Batch ${currentBatchIndex + 1} failed (${error.code}), retrying in ${delay}ms... (${retryCount + 1}/${maxRetries})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
             return processBatch(batch, currentBatchIndex, retryCount + 1);
           }
           
@@ -101,8 +106,8 @@ export class BatchImportService {
           errors.push(`Batch ${currentBatchIndex + 1}: ${error.message}`);
           failed += batch.length;
         } else {
-          console.log(`✅ Batch ${currentBatchIndex + 1} completed: ${result?.length || batch.length} records`);
-          imported += result?.length || batch.length;
+          console.log(`✅ Batch ${currentBatchIndex + 1} completed: ${batch.length} records`);
+          imported += batch.length;
         }
         
         processed += batch.length;
@@ -136,11 +141,18 @@ export class BatchImportService {
         console.log(`⏱️ Batch ${currentBatchIndex + 1} took ${batchDuration}ms (${(batch.length / (batchDuration / 1000)).toFixed(1)} rps)`);
 
       } catch (error) {
-        // Retry logic for network/connection errors
-        if (retryCount < maxRetries && error instanceof Error && 
-            (error.message.includes('timeout') || error.message.includes('fetch') || error.message.includes('network'))) {
-          console.warn(`⚠️ Batch ${currentBatchIndex + 1} error, retrying... (${retryCount + 1}/${maxRetries})`, error.message);
-          await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+        // Retry logic for network/connection errors (expanded)
+        const isRetryable = error instanceof Error && 
+            (error.message.includes('timeout') || 
+             error.message.includes('fetch') || 
+             error.message.includes('network') ||
+             error.message.includes('Failed to fetch') ||
+             error.message.includes('aborted'));
+        
+        if (retryCount < maxRetries && isRetryable) {
+          const delay = Math.min(2000 * Math.pow(2, retryCount), 10000);
+          console.warn(`⚠️ Batch ${currentBatchIndex + 1} error, retrying in ${delay}ms... (${retryCount + 1}/${maxRetries})`, error instanceof Error ? error.message : '');
+          await new Promise(resolve => setTimeout(resolve, delay));
           return processBatch(batch, currentBatchIndex, retryCount + 1);
         }
         
@@ -164,6 +176,11 @@ export class BatchImportService {
         const batchPromise = processBatch(batches[currentIndex], currentIndex);
         activeBatches.set(currentIndex, batchPromise);
         batchIndex++;
+        
+        // Small delay between starting batches to avoid overwhelming Supabase
+        if (batchIndex < batches.length) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
       }
 
       // Wait for at least one batch to complete
@@ -193,6 +210,17 @@ export class BatchImportService {
     const averageRps = processed / (duration / 1000);
 
     console.log(`🏁 Batch import completed in ${duration}ms. Processed: ${processed}, Imported: ${imported}, Failed: ${failed}, Average RPS: ${averageRps.toFixed(1)}`);
+
+    // After accounts import, sync is_customer based on hierarchy_bookings_arr_converted
+    if (imported > 0) {
+      try {
+        console.log('🔄 Syncing is_customer field based on hierarchy_bookings_arr_converted...');
+        await this.syncIsCustomerField(buildId);
+      } catch (syncError) {
+        console.warn('⚠️ is_customer sync failed (non-fatal):', syncError);
+        // Don't fail the import if sync fails - can be fixed by re-running migration
+      }
+    }
 
     return {
       success: imported > 0,
@@ -461,7 +489,18 @@ export class BatchImportService {
     const averageRps = processed / (duration / 1000);
 
     console.log(`🏁 Opportunities batch import completed in ${duration}ms. Processed: ${processed}, Imported: ${imported}, Failed: ${failed}, Average RPS: ${averageRps.toFixed(1)}`);
-    
+
+    // Auto-calculate ATR for accounts after opportunities import
+    if (imported > 0) {
+      try {
+        console.log('📊 Auto-calculating ATR from renewal opportunities...');
+        await this.calculateATRFromOpportunities(buildId);
+      } catch (atrError) {
+        console.warn('⚠️ ATR calculation failed (non-fatal):', atrError);
+        // Don't fail the import if ATR calculation fails
+      }
+    }
+
     return {
       success: imported > 0,
       recordsProcessed: processed,
@@ -500,24 +539,38 @@ export class BatchImportService {
     let batchIndex = 0;
     let completedBatches = 0;
 
-    const processBatch = async (batch: any[], currentBatchIndex: number): Promise<void> => {
+    const processBatch = async (batch: any[], currentBatchIndex: number, retryCount = 0): Promise<void> => {
       const batchStartTime = Date.now();
+      const maxRetries = 4;
       
       try {
-        console.log(`📦 Processing sales reps batch ${currentBatchIndex + 1}/${totalBatches} (${batch.length} records)`);
+        console.log(`📦 Processing sales reps batch ${currentBatchIndex + 1}/${totalBatches} (${batch.length} records)${retryCount > 0 ? ` - Retry ${retryCount}` : ''}`);
         
-        const { data: result, error } = await supabase
+        // Don't use .select() - reduces overhead
+        const { error } = await supabase
           .from('sales_reps')
-          .insert(batch)
-          .select('id');
+          .insert(batch);
 
         if (error) {
+          const isRetryable = error.message.includes('timeout') || 
+                              error.message.includes('connection') || 
+                              error.message.includes('statement canceled') ||
+                              error.code === 'PGRST301' ||
+                              error.code === '57014';
+          
+          if (retryCount < maxRetries && isRetryable) {
+            const delay = Math.min(2000 * Math.pow(2, retryCount), 10000);
+            console.warn(`⚠️ Sales reps batch ${currentBatchIndex + 1} failed, retrying in ${delay}ms... (${retryCount + 1}/${maxRetries})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return processBatch(batch, currentBatchIndex, retryCount + 1);
+          }
+          
           console.error(`❌ Sales reps batch ${currentBatchIndex + 1} failed:`, error);
           errors.push(`Batch ${currentBatchIndex + 1}: ${error.message}`);
           failed += batch.length;
         } else {
-          console.log(`✅ Sales reps batch ${currentBatchIndex + 1} completed: ${result?.length || batch.length} records`);
-          imported += result?.length || batch.length;
+          console.log(`✅ Sales reps batch ${currentBatchIndex + 1} completed: ${batch.length} records`);
+          imported += batch.length;
         }
         
         processed += batch.length;
@@ -545,6 +598,19 @@ export class BatchImportService {
         console.log(`⏱️ Sales reps batch ${currentBatchIndex + 1} took ${batchDuration}ms`);
 
       } catch (error) {
+        const isRetryable = error instanceof Error && 
+            (error.message.includes('timeout') || 
+             error.message.includes('fetch') || 
+             error.message.includes('network') ||
+             error.message.includes('Failed to fetch'));
+        
+        if (retryCount < maxRetries && isRetryable) {
+          const delay = Math.min(2000 * Math.pow(2, retryCount), 10000);
+          console.warn(`⚠️ Sales reps batch ${currentBatchIndex + 1} error, retrying in ${delay}ms...`, error instanceof Error ? error.message : '');
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return processBatch(batch, currentBatchIndex, retryCount + 1);
+        }
+        
         console.error(`💥 Sales reps batch ${currentBatchIndex + 1} error:`, error);
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         errors.push(`Batch ${currentBatchIndex + 1}: ${errorMsg}`);
@@ -564,6 +630,11 @@ export class BatchImportService {
         const batchPromise = processBatch(batches[currentIndex], currentIndex);
         activeBatches.set(currentIndex, batchPromise);
         batchIndex++;
+        
+        // Small delay between starting batches
+        if (batchIndex < batches.length) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
       }
 
       // Wait for at least one batch to complete
@@ -585,5 +656,135 @@ export class BatchImportService {
       duration,
       averageRps
     };
+  }
+
+  /**
+   * Calculate ATR (Available To Renew) from renewal opportunities and update accounts
+   * Only updates accounts where calculated_atr is NULL or 0
+   */
+  static async calculateATRFromOpportunities(buildId: string): Promise<void> {
+    console.log(`📊 Calculating ATR for build ${buildId}...`);
+
+    try {
+      // First check if there are any accounts for this build
+      const { count: accountCount, error: countError } = await supabase
+        .from('accounts')
+        .select('id', { count: 'exact', head: true })
+        .eq('build_id', buildId);
+
+      if (countError) throw countError;
+
+      if (!accountCount || accountCount === 0) {
+        console.log('ℹ️ No accounts found for this build, skipping ATR calculation');
+        return;
+      }
+
+      // Get all renewal opportunities with ATR values
+      const { data: renewalOpps, error: oppsError } = await supabase
+        .from('opportunities')
+        .select('sfdc_account_id, available_to_renew')
+        .eq('build_id', buildId)
+        .eq('opportunity_type', 'Renewals')
+        .not('available_to_renew', 'is', null);
+
+      if (oppsError) throw oppsError;
+
+      if (!renewalOpps || renewalOpps.length === 0) {
+        console.log('ℹ️ No renewal opportunities with ATR found, skipping calculation');
+        return;
+      }
+
+      // Aggregate ATR by account
+      const atrByAccount = new Map<string, number>();
+      renewalOpps.forEach(opp => {
+        const currentATR = atrByAccount.get(opp.sfdc_account_id) || 0;
+        atrByAccount.set(opp.sfdc_account_id, currentATR + (opp.available_to_renew || 0));
+      });
+
+      console.log(`📊 Calculated ATR for ${atrByAccount.size} accounts from ${renewalOpps.length} renewal opportunities`);
+
+      // Update accounts in batches (only where calculated_atr is NULL or 0)
+      const updates: Array<{sfdc_account_id: string, calculated_atr: number}> = [];
+      for (const [accountId, atr] of atrByAccount.entries()) {
+        // First check if account needs updating
+        const { data: account } = await supabase
+          .from('accounts')
+          .select('calculated_atr')
+          .eq('build_id', buildId)
+          .eq('sfdc_account_id', accountId)
+          .single();
+
+        // Only update if calculated_atr is NULL or 0
+        if (!account || account.calculated_atr === null || account.calculated_atr === 0) {
+          const { error: updateError } = await supabase
+            .from('accounts')
+            .update({ calculated_atr: atr })
+            .eq('build_id', buildId)
+            .eq('sfdc_account_id', accountId);
+
+          if (updateError) {
+            console.warn(`⚠️ Failed to update ATR for account ${accountId}:`, updateError);
+          } else {
+            updates.push({ sfdc_account_id: accountId, calculated_atr: atr });
+          }
+        }
+      }
+
+      console.log(`✅ ATR calculation completed: Updated ${updates.length} accounts`);
+    } catch (error) {
+      console.error('❌ ATR calculation failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync is_customer field based on hierarchy_bookings_arr_converted
+   * Customer = parent account with hierarchy_bookings_arr_converted > 0
+   * Prospect = parent account with hierarchy_bookings_arr_converted <= 0 or NULL
+   */
+  static async syncIsCustomerField(buildId: string): Promise<void> {
+    console.log(`🔄 Syncing is_customer field for build ${buildId}...`);
+
+    try {
+      // Set is_customer = true for accounts with hierarchy ARR > 0
+      const { error: updateError } = await supabase
+        .from('accounts')
+        .update({ is_customer: true })
+        .eq('build_id', buildId)
+        .eq('is_parent', true)
+        .gt('hierarchy_bookings_arr_converted', 0);
+
+      if (updateError) throw updateError;
+
+      // Set is_customer = false for accounts without hierarchy ARR (NULL or <= 0)
+      const { error: updateError2 } = await supabase
+        .from('accounts')
+        .update({ is_customer: false })
+        .eq('build_id', buildId)
+        .eq('is_parent', true)
+        .or('hierarchy_bookings_arr_converted.is.null,hierarchy_bookings_arr_converted.lte.0');
+
+      if (updateError2) throw updateError2;
+
+      // Log results
+      const { count: customerCount } = await supabase
+        .from('accounts')
+        .select('*', { count: 'exact', head: true })
+        .eq('build_id', buildId)
+        .eq('is_parent', true)
+        .eq('is_customer', true);
+
+      const { count: prospectCount } = await supabase
+        .from('accounts')
+        .select('*', { count: 'exact', head: true })
+        .eq('build_id', buildId)
+        .eq('is_parent', true)
+        .eq('is_customer', false);
+
+      console.log(`✅ is_customer sync completed: ${customerCount} customers, ${prospectCount} prospects`);
+    } catch (error) {
+      console.error('❌ is_customer sync failed:', error);
+      throw error;
+    }
   }
 }

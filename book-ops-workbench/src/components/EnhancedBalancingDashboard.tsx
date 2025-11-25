@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, Users, Building, TrendingUp, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Loader2, Users, Building, TrendingUp, AlertTriangle, RotateCcw, Lock, ArrowLeft } from 'lucide-react';
 import { useEnhancedBalancing, RepMetrics } from '@/hooks/useEnhancedBalancing';
 import { useEnhancedAccountCalculations } from '@/hooks/useEnhancedAccountCalculations';
 import { SalesRepDetailModal } from '@/components/SalesRepDetailModal';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+import { useNavigate } from 'react-router-dom';
 
 interface EnhancedBalancingDashboardProps {
   buildId?: string;
@@ -32,6 +33,7 @@ interface BalanceMetrics {
 }
 
 export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboardProps) => {
+  const navigate = useNavigate();
   const [selectedRep, setSelectedRep] = useState<RepMetrics | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const { data, isLoading, error, refetch, generateRebalancingPlan } = useEnhancedBalancing(buildId);
@@ -116,6 +118,60 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
             Refresh Data
           </Button>
         </div>
+      </div>
+    );
+  }
+
+  // Check if assignments have been applied (new_owner_id set on accounts)
+  if (data.assignedAccountsCount === 0) {
+    return (
+      <div className="p-6 space-y-6">
+        <Card className="border-2 border-dashed border-amber-300 bg-amber-50/50 dark:bg-amber-900/10">
+          <CardContent className="p-8">
+            <div className="flex flex-col items-center text-center space-y-4">
+              <div className="p-4 rounded-full bg-amber-100 dark:bg-amber-900/30">
+                <Lock className="h-12 w-12 text-amber-600" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-2xl font-bold text-amber-900 dark:text-amber-100">
+                  Balancing Dashboard Locked
+                </h2>
+                <p className="text-amber-700 dark:text-amber-300 max-w-md">
+                  No assignments have been applied yet. The Balancing Dashboard shows metrics 
+                  based on assigned accounts — you need to generate and apply assignments first.
+                </p>
+              </div>
+              
+              <Alert className="max-w-lg text-left border-amber-200 bg-amber-100/50 dark:bg-amber-900/20">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <AlertTitle className="text-amber-900 dark:text-amber-100">How to unlock</AlertTitle>
+                <AlertDescription className="text-amber-700 dark:text-amber-300">
+                  <ol className="list-decimal list-inside space-y-1 mt-2 text-sm">
+                    <li>Go to the <strong>Assignments</strong> tab</li>
+                    <li>Click <strong>Generate</strong> (Customers, Prospects, or All)</li>
+                    <li>Review the proposals in the Preview dialog</li>
+                    <li>Click <strong>Apply Assignments</strong> to save to database</li>
+                  </ol>
+                </AlertDescription>
+              </Alert>
+
+              <div className="flex items-center gap-3 pt-4">
+                <Button 
+                  onClick={() => navigate(`/build/${buildId}?tab=assignments`)}
+                  variant="outline"
+                  className="border-amber-500 text-amber-700 hover:bg-amber-100"
+                >
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  Go to Assignments
+                </Button>
+                <Button onClick={handleRefresh} variant="ghost" size="sm">
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Refresh
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }

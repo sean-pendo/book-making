@@ -126,6 +126,39 @@ Salesforce uses a self-referencing pattern for parent accounts:
 
 This logic is implemented in `src/utils/importUtils.ts` during CSV import validation.
 
+### CRITICAL: PostgreSQL NUMERIC Type Handling
+
+**Supabase returns PostgreSQL `NUMERIC` columns as strings to preserve precision.**
+
+This affects ALL financial fields: `hierarchy_bookings_arr_converted`, `calculated_arr`, `arr`, `available_to_renew`, `calculated_atr`, etc.
+
+**Example:**
+```javascript
+// Database value: 3304500
+// Supabase returns: "3304500" (string, not number)
+
+// WRONG - String concatenation breaks math:
+const total = customers.reduce((sum, acc) => sum + acc.hierarchy_bookings_arr_converted, 0);
+// Result: "03304500" (string concatenation!)
+
+// CORRECT - Always use parseFloat():
+const total = customers.reduce((sum, acc) => sum + parseFloat(acc.hierarchy_bookings_arr_converted || 0), 0);
+// Result: 3304500 (number)
+```
+
+**Required pattern for ALL numeric database fields:**
+```javascript
+parseFloat(value) || parseFloat(fallback) || 0
+```
+
+**Affected files that handle financial calculations:**
+- `src/hooks/useEnhancedBalancing.ts` - Rep-level ARR/ATR aggregation
+- `src/utils/enhancedRepMetrics.ts` - Parent/child ARR calculations
+- `src/services/buildDataService.ts` - Dashboard totals
+- Any file doing math with database numeric fields
+
+**Testing tip:** If you see `$0` displayed but query shows values, check if `parseFloat()` is missing.
+
 ## Tech Stack
 
 - **Frontend**: React 18 + TypeScript + Vite
@@ -295,6 +328,7 @@ All Edge Functions have `verify_jwt = false` in `config.toml`.
 ### MANDATORY: Changelog Maintenance
 
 **Every code change must be logged in `CHANGELOG.md`** (root directory).
+Highlight bigger changed in the changelog
 
 Format:
 ```markdown
@@ -344,6 +378,7 @@ Located in `book-ops-workbench/.env`:
 - Main branch: `master`
 - Project uses conventional commits (see `CHANGELOG.md`)
 - **The user will notify you when to push to GitHub** - don't push proactively
+- WHen its a big change we should make ti stand out like v1.1 etc. smaller will be 1.0.1
 
 ## Testing Strategy
 

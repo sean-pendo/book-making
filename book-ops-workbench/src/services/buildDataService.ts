@@ -129,45 +129,62 @@ class BuildDataService {
       console.warn('[BuildDataService] User not authenticated - data access may be limited by RLS policies');
     }
     
-    // TEMPORARILY DISABLE CACHE - Always fetch fresh data to fix dashboard issue
-    console.log(`[BuildDataService] Force fetching fresh data for build ${buildId}`);
-    // Skip cache check: if (this.isCacheValid(cacheKey)) { return this.cache.get(cacheKey)!.data; }
+    // Re-enable cache for production performance
+    if (this.isCacheValid(cacheKey)) {
+      console.log(`[BuildDataService] ✅ Returning cached data for build ${buildId}`);
+      return this.cache.get(cacheKey)!.data;
+    }
 
     try {
-      // Fetch accounts using pagination like Assignment Engine
-      console.log(`[BuildDataService] 📊 Starting paginated query for accounts...`);
+      // OPTIMIZED: Parallel batch fetching for accounts
+      console.log(`[BuildDataService] 📊 Starting PARALLEL batch fetch for accounts...`);
+      const startTime = performance.now();
       
-      const allAccounts: any[] = [];
+      // First, get the total count to know how many parallel requests we need
+      const { count: totalCount, error: countError } = await supabase
+        .from('accounts')
+        .select('*', { count: 'exact', head: true })
+        .eq('build_id', buildId);
+      
+      if (countError) {
+        console.error(`[BuildDataService] ❌ Error getting account count:`, countError);
+        throw countError;
+      }
+      
+      // Supabase has a hard server-side limit of 1000 rows per request
+      // Use 1000-row batches but run all in parallel for speed
       const pageSize = 1000;
-      let currentPage = 0;
+      const totalPages = Math.ceil((totalCount || 0) / pageSize);
+      console.log(`[BuildDataService] 📊 Total accounts: ${totalCount}, fetching in ${totalPages} parallel batches of ${pageSize}`);
       
-      while (true) {
-        const { data: pageData, error } = await supabase
+      // Create all page fetch promises - all run in parallel
+      const pagePromises = Array.from({ length: totalPages }, (_, pageIndex) => 
+        supabase
           .from('accounts')
           .select('*')
           .eq('build_id', buildId)
           .order('account_name')
-          .range(currentPage * pageSize, (currentPage + 1) * pageSize - 1);
-        
+          .range(pageIndex * pageSize, (pageIndex + 1) * pageSize - 1)
+      );
+      
+      // Execute all fetches in parallel
+      const pageResults = await Promise.all(pagePromises);
+      
+      // Combine results
+      const allAccounts: any[] = [];
+      for (let i = 0; i < pageResults.length; i++) {
+        const { data: pageData, error } = pageResults[i];
         if (error) {
-          console.error(`[BuildDataService] ❌ Error loading accounts page ${currentPage}:`, error);
+          console.error(`[BuildDataService] ❌ Error loading accounts batch ${i + 1}:`, error);
           throw error;
         }
-        
-        if (!pageData || pageData.length === 0) {
-          break; // No more data
+        if (pageData) {
+          allAccounts.push(...pageData);
         }
-        
-        allAccounts.push(...pageData);
-        console.log(`[BuildDataService] 📄 Loaded accounts page ${currentPage + 1}: ${pageData.length} records (Total so far: ${allAccounts.length})`);
-        
-        // If we got less than pageSize records, we're done
-        if (pageData.length < pageSize) {
-          break;
-        }
-        
-        currentPage++;
       }
+      
+      const fetchTime = performance.now() - startTime;
+      console.log(`[BuildDataService] ⚡ Loaded ${allAccounts.length} accounts in ${fetchTime.toFixed(0)}ms (${totalPages} parallel batches)`)
 
       // Fetch opportunities and sales reps (can use single queries as they're likely under 1000)
       const [opportunitiesRes, salesRepsRes] = await Promise.all([
@@ -298,29 +315,70 @@ class BuildDataService {
 
   async getBuildDataRelationships(buildId: string): Promise<BuildDataRelationships> {
     const cacheKey = `relationships_${buildId}`;
-  console.log(`[Build Data Service] Starting getBuildDataRelationships for build ${buildId}`);
-  console.log(`[Build Data Service] Cache key: ${cacheKey}, valid: ${this.isCacheValid(cacheKey)}`);
-  
-  if (this.isCacheValid(cacheKey)) {
-    console.log(`[Build Data Service] Returning cached data`);
-    return this.cache.get(cacheKey)!.data;
-  }
+    console.log(`[Build Data Service] Starting getBuildDataRelationships for build ${buildId}`);
+    console.log(`[Build Data Service] Cache key: ${cacheKey}, valid: ${this.isCacheValid(cacheKey)}`);
+    
+    if (this.isCacheValid(cacheKey)) {
+      console.log(`[Build Data Service] Returning cached data`);
+      return this.cache.get(cacheKey)!.data;
+    }
 
     try {
-      // Fetch all data in parallel
-      const [accountsRes, opportunitiesRes, salesRepsRes] = await Promise.all([
-        supabase.from('accounts').select('*').eq('build_id', buildId).limit(50000),
-        supabase.from('opportunities').select('*').eq('build_id', buildId).limit(50000),
-        supabase.from('sales_reps').select('*').eq('build_id', buildId).limit(50000)
+      const startTime = performance.now();
+      
+      // First, get counts in parallel to determine batch requirements
+      const [accountCount, oppCount] = await Promise.all([
+        supabase.from('accounts').select('*', { count: 'exact', head: true }).eq('build_id', buildId),
+        supabase.from('opportunities').select('*', { count: 'exact', head: true }).eq('build_id', buildId)
       ]);
-
-      if (accountsRes.error) throw accountsRes.error;
-      if (opportunitiesRes.error) throw opportunitiesRes.error;
+      
+      const totalAccounts = accountCount.count || 0;
+      const totalOpps = oppCount.count || 0;
+      const pageSize = 5000;
+      
+      console.log(`[Build Data Service] 📊 Total records: ${totalAccounts} accounts, ${totalOpps} opportunities`);
+      
+      // Create batch fetch promises for accounts
+      const accountPages = Math.ceil(totalAccounts / pageSize);
+      const accountPromises = Array.from({ length: accountPages }, (_, i) =>
+        supabase.from('accounts').select('*').eq('build_id', buildId).order('account_name').range(i * pageSize, (i + 1) * pageSize - 1)
+      );
+      
+      // Create batch fetch promises for opportunities
+      const oppPages = Math.ceil(totalOpps / pageSize);
+      const oppPromises = Array.from({ length: oppPages }, (_, i) =>
+        supabase.from('opportunities').select('*').eq('build_id', buildId).range(i * pageSize, (i + 1) * pageSize - 1)
+      );
+      
+      // Fetch sales reps (usually under 1000, single query is fine)
+      const salesRepsPromise = supabase.from('sales_reps').select('*').eq('build_id', buildId).limit(5000);
+      
+      // Execute ALL fetches in parallel
+      const [accountResults, oppResults, salesRepsRes] = await Promise.all([
+        Promise.all(accountPromises),
+        Promise.all(oppPromises),
+        salesRepsPromise
+      ]);
+      
+      // Combine account results
+      const accounts: any[] = [];
+      for (const result of accountResults) {
+        if (result.error) throw result.error;
+        if (result.data) accounts.push(...result.data);
+      }
+      
+      // Combine opportunity results
+      const opportunities: any[] = [];
+      for (const result of oppResults) {
+        if (result.error) throw result.error;
+        if (result.data) opportunities.push(...result.data);
+      }
+      
       if (salesRepsRes.error) throw salesRepsRes.error;
-
-      const accounts = accountsRes.data || [];
-      const opportunities = opportunitiesRes.data || [];
       const salesReps = salesRepsRes.data || [];
+      
+      const fetchTime = performance.now() - startTime;
+      console.log(`[Build Data Service] ⚡ Loaded all data in ${fetchTime.toFixed(0)}ms (${accountPages + oppPages + 1} parallel requests)`)
 
       console.log(`[Build Data Service] Found ${accounts.length} accounts, ${opportunities.length} opportunities, ${salesReps.length} sales reps`);
       console.log(`[Build Data Service] Sample accounts:`, accounts.slice(0, 3).map(a => `${a.account_name} -> ${a.owner_name} (${a.owner_id})`));

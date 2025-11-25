@@ -289,7 +289,7 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
   };
 
   if (loading || !config) {
-    return <div className="p-4">Loading configuration...</div>;
+    return null;
   }
 
   const ThresholdRow = ({ 

@@ -13,6 +13,7 @@ interface Profile {
   role: UserRole;
   team: string | null;
   region: UserRegion | null;
+  developer: boolean | null;
 }
 
 interface ImpersonatedUser {
@@ -22,6 +23,7 @@ interface ImpersonatedUser {
   role: UserRole;
   team: string | null;
   region: UserRegion | null;
+  developer: boolean | null;
 }
 
 interface AuthContextType {

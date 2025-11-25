@@ -6,10 +6,16 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Map, Plus, Trash2, Edit, Save, X } from 'lucide-react';
+import { Map, Plus, Trash2, Pencil, X, Sparkles, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import { 
+  mapTerritoriesWithGemini, 
+  NOT_APPLICABLE, 
+  NOT_APPLICABLE_LABEL,
+  isNotApplicable 
+} from '@/services/geminiRegionMappingService';
 
 interface TerritoryMapping {
   territory: string;
@@ -89,6 +95,8 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
   const [newTerritoryRegion, setNewTerritoryRegion] = useState('North East');
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('us');
+  const [isAiMapping, setIsAiMapping] = useState(false);
+  const [uniqueRepRegions, setUniqueRepRegions] = useState<string[]>([]);
 
   useEffect(() => {
     loadTerritoryMappings();
@@ -130,6 +138,19 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
 
       setMappings(territoryMappings);
       onMappingsChanged(allMappings);
+
+      // Load unique rep regions for this build
+      const { data: reps, error: repsError } = await supabase
+        .from('sales_reps')
+        .select('region')
+        .eq('build_id', buildId);
+
+      if (!repsError && reps) {
+        const regions = Array.from(new Set(
+          reps.map(r => r.region).filter(r => r && r.trim() !== '')
+        )).sort();
+        setUniqueRepRegions(regions);
+      }
     } catch (error) {
       console.error('Error loading territory mappings:', error);
       toast({
@@ -139,6 +160,55 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAiMapping = async () => {
+    const territories = mappings.map(m => m.territory);
+    const availableRegions = uniqueRepRegions.length > 0 ? uniqueRepRegions : REGIONS.filter(r => r !== 'Custom');
+
+    if (territories.length === 0) {
+      toast({
+        title: "No Territories",
+        description: "No territories found to map",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsAiMapping(true);
+    
+    try {
+      // Call via secure edge function (API key stored server-side)
+      const result = await mapTerritoriesWithGemini(territories, availableRegions);
+      
+      // Update mappings with AI results
+      const updatedMappings = mappings.map(m => {
+        const aiRegion = result.mappings[m.territory];
+        if (aiRegion) {
+          return { ...m, region: aiRegion };
+        }
+        return m;
+      });
+      
+      setMappings(updatedMappings);
+      saveTerritoryMappings(updatedMappings);
+      
+      const mappedCount = Object.keys(result.mappings).length - result.notApplicableCount;
+      
+      toast({
+        title: "AI Mapping Complete",
+        description: `Mapped ${mappedCount} territories. ${result.notApplicableCount} marked as Not Applicable.`
+      });
+    } catch (error) {
+      console.error('AI mapping error:', error);
+      toast({
+        title: "AI Mapping Failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive"
+      });
+    } finally {
+      setIsAiMapping(false);
     }
   };
 
@@ -242,7 +312,10 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
   };
 
   const getRegionColor = (region: string) => {
-    const colors = {
+    if (isNotApplicable(region)) {
+      return 'bg-gray-200 text-gray-600 border-gray-300';
+    }
+    const colors: Record<string, string> = {
       'North East': 'bg-blue-100 text-blue-800 border-blue-200',
       'South East': 'bg-green-100 text-green-800 border-green-200',
       'Central': 'bg-yellow-100 text-yellow-800 border-yellow-200',
@@ -256,11 +329,13 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
   const filterMappingsByTab = (tab: string) => {
     switch (tab) {
       case 'us':
-        return mappings.filter(m => ['North East', 'South East', 'Central', 'West'].includes(m.region));
+        return mappings.filter(m => ['North East', 'South East', 'Central', 'West'].includes(m.region) && !isNotApplicable(m.region));
       case 'international':
-        return mappings.filter(m => m.region === 'Other');
+        return mappings.filter(m => m.region === 'Other' && !isNotApplicable(m.region));
+      case 'na':
+        return mappings.filter(m => isNotApplicable(m.region));
       case 'custom':
-        return mappings.filter(m => m.isCustom);
+        return mappings.filter(m => m.isCustom && !isNotApplicable(m.region));
       default:
         return mappings;
     }
@@ -273,19 +348,48 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Map className="h-5 w-5" />
-          Territory Mapping Configuration
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">
-          Configure how sales territories map to regions for geographic assignment rules
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Map className="h-5 w-5" />
+              Territory Mapping Configuration
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Configure how sales territories map to regions for geographic assignment rules
+            </p>
+          </div>
+          <Button
+            onClick={handleAiMapping}
+            disabled={isAiMapping || mappings.length === 0}
+            className="gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+          >
+            {isAiMapping ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                AI Mapping...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4" />
+                AI Auto-Map All
+              </>
+            )}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="us">US Territories</TabsTrigger>
-            <TabsTrigger value="international">Other</TabsTrigger>
+            <TabsTrigger value="international">International</TabsTrigger>
+            <TabsTrigger value="na" className="text-gray-600">
+              Not Applicable
+              {filterMappingsByTab('na').length > 0 && (
+                <span className="ml-1 text-xs bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">
+                  {filterMappingsByTab('na').length}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="custom">Custom</TabsTrigger>
           </TabsList>
 
@@ -308,9 +412,15 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
                                 onValueChange={(value) => updateTerritoryMapping(mapping.territory, value)}
                               >
                                 <SelectTrigger className="h-6 text-xs">
-                                  <SelectValue />
+                                  <SelectValue>
+                                    {isNotApplicable(mapping.region) ? NOT_APPLICABLE_LABEL : mapping.region}
+                                  </SelectValue>
                                 </SelectTrigger>
                                 <SelectContent>
+                                  <SelectItem value={NOT_APPLICABLE} className="text-gray-500 italic">
+                                    ⊘ Not Applicable
+                                  </SelectItem>
+                                  <div className="border-b my-1" />
                                   {REGIONS.map(r => (
                                     <SelectItem key={r} value={r}>{r}</SelectItem>
                                   ))}
@@ -332,7 +442,7 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
                                 variant="ghost"
                                 onClick={() => setEditingTerritory(mapping.territory)}
                               >
-                                <Edit className="h-3 w-3" />
+                                <Pencil className="h-3 w-3" />
                               </Button>
                             </div>
                           )}
@@ -346,9 +456,14 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
           </TabsContent>
 
           <TabsContent value="international" className="space-y-4">
+            <Alert className="mb-4">
+              <AlertDescription className="text-sm">
+                International territories can be mapped to "Other" region, or marked as "Not Applicable" if you have no reps covering those areas.
+              </AlertDescription>
+            </Alert>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filterMappingsByTab('international').map(mapping => (
-                <div key={mapping.territory} className="flex items-center justify-between p-3 border rounded">
+                <div key={mapping.territory} className={`flex items-center justify-between p-3 border rounded ${isNotApplicable(mapping.region) ? 'bg-gray-100 dark:bg-gray-800' : ''}`}>
                   {editingTerritory === mapping.territory ? (
                     <div className="flex items-center gap-2 w-full">
                       <Select 
@@ -356,9 +471,15 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
                         onValueChange={(value) => updateTerritoryMapping(mapping.territory, value)}
                       >
                         <SelectTrigger>
-                          <SelectValue />
+                          <SelectValue>
+                            {isNotApplicable(mapping.region) ? NOT_APPLICABLE_LABEL : mapping.region}
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value={NOT_APPLICABLE} className="text-gray-500 italic">
+                            ⊘ Not Applicable
+                          </SelectItem>
+                          <div className="border-b my-1" />
                           {REGIONS.map(r => (
                             <SelectItem key={r} value={r}>{r}</SelectItem>
                           ))}
@@ -375,21 +496,68 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
                   ) : (
                     <>
                       <div>
-                        <div className="font-medium">{mapping.territory}</div>
-                        <Badge className={getRegionColor(mapping.region)}>{mapping.region}</Badge>
+                        <div className={`font-medium ${isNotApplicable(mapping.region) ? 'text-gray-500' : ''}`}>{mapping.territory}</div>
+                        <Badge className={getRegionColor(mapping.region)}>
+                          {isNotApplicable(mapping.region) ? 'Not Applicable' : mapping.region}
+                        </Badge>
                       </div>
                       <Button
                         size="sm"
                         variant="ghost"
                         onClick={() => setEditingTerritory(mapping.territory)}
                       >
-                        <Edit className="h-4 w-4" />
+                        <Pencil className="h-4 w-4" />
                       </Button>
                     </>
                   )}
                 </div>
               ))}
             </div>
+          </TabsContent>
+
+          <TabsContent value="na" className="space-y-4">
+            <Alert className="mb-4">
+              <AlertDescription className="text-sm">
+                Territories marked as "Not Applicable" will be excluded from geographic assignment matching. 
+                Use this for international territories when your sales team only covers specific regions.
+              </AlertDescription>
+            </Alert>
+            {filterMappingsByTab('na').length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <p className="font-medium">No territories marked as Not Applicable</p>
+                <p className="text-sm">
+                  Use the "AI Auto-Map" button or manually mark territories in other tabs to exclude them from assignments.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filterMappingsByTab('na').map(mapping => (
+                  <div key={mapping.territory} className="flex items-center justify-between p-3 border rounded bg-gray-100 dark:bg-gray-800">
+                    <div>
+                      <div className="font-medium text-gray-600">{mapping.territory}</div>
+                      <Badge className="bg-gray-200 text-gray-600 border-gray-300">
+                        Not Applicable
+                      </Badge>
+                    </div>
+                    <div className="flex gap-1">
+                      <Select
+                        value={mapping.region}
+                        onValueChange={(value) => updateTerritoryMapping(mapping.territory, value)}
+                      >
+                        <SelectTrigger className="w-32 h-8 text-xs">
+                          <SelectValue>Change...</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {REGIONS.map(r => (
+                            <SelectItem key={r} value={r}>{r}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="custom" className="space-y-4">
@@ -469,7 +637,7 @@ export const TerritoryMappingInterface: React.FC<TerritoryMappingInterfaceProps>
                           variant="ghost"
                           onClick={() => setEditingTerritory(mapping.territory)}
                         >
-                          <Edit className="h-4 w-4" />
+                          <Pencil className="h-4 w-4" />
                         </Button>
                         <Button
                           size="sm"

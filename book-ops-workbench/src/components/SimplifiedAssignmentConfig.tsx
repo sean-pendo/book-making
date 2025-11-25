@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
-import { Settings, Save, AlertCircle, Info, CheckCircle, MapPin, Wand2 } from 'lucide-react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Settings, Save, AlertCircle, Info, CheckCircle, MapPin, X, Loader2, Sparkles } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,9 +8,17 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { BalanceThresholdConfig } from '@/components/BalanceThresholdConfig';
+import { 
+  mapTerritoriesWithGemini, 
+  NOT_APPLICABLE, 
+  NOT_APPLICABLE_LABEL,
+  isNotApplicable,
+  getRegionDisplayLabel 
+} from '@/services/geminiRegionMappingService';
 
 interface ConfigState {
   customer_target_arr: number;
@@ -26,6 +34,7 @@ interface ConfigState {
 
 export const SimplifiedAssignmentConfig: React.FC = () => {
   const { id: buildId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { toast } = useToast();
   
   const [config, setConfig] = useState<ConfigState>({
@@ -50,6 +59,13 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [isAiMapping, setIsAiMapping] = useState(false);
+  const [aiMappingDetails, setAiMappingDetails] = useState<Array<{
+    territory: string;
+    region: string;
+    confidence: 'high' | 'medium' | 'low';
+    reasoning?: string;
+  }>>([]);
 
   useEffect(() => {
     if (!buildId) return;
@@ -195,7 +211,69 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
     setIsDirty(true);
     setShowSuccess(false);
   };
-  
+
+  const clearTerritoryMapping = (accountTerritory: string) => {
+    setConfig(prev => {
+      const newMappings = { ...prev.territory_mappings };
+      delete newMappings[accountTerritory];
+      return {
+        ...prev,
+        territory_mappings: newMappings
+      };
+    });
+    setIsDirty(true);
+    setShowSuccess(false);
+  };
+
+  const aiMapTerritories = async () => {
+    if (accountTerritories.length === 0 || repRegions.length === 0) {
+      toast({
+        title: "Cannot map territories",
+        description: "No territories or regions available to map",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsAiMapping(true);
+    setAiMappingDetails([]);
+    
+    try {
+      // Call via secure edge function (API key stored server-side)
+      const result = await mapTerritoriesWithGemini(
+        accountTerritories,
+        repRegions
+      );
+      
+      // Apply the AI mappings to our config
+      setConfig(prev => ({
+        ...prev,
+        territory_mappings: { ...prev.territory_mappings, ...result.mappings }
+      }));
+      
+      setAiMappingDetails(result.details);
+      setIsDirty(true);
+      
+      const mappedCount = Object.keys(result.mappings).length;
+      const applicableCount = mappedCount - result.notApplicableCount;
+      
+      toast({
+        title: "AI Mapping Complete",
+        description: `Mapped ${applicableCount} territories to regions. ${result.notApplicableCount} marked as Not Applicable.`
+      });
+    } catch (error) {
+      console.error('AI mapping error:', error);
+      toast({
+        title: "AI Mapping Failed",
+        description: error instanceof Error ? error.message : "Unknown error occurred",
+        variant: "destructive"
+      });
+    } finally {
+      setIsAiMapping(false);
+    }
+  };
+
+  // Legacy rules-based auto-mapping (fallback option)
   const autoMapTerritories = () => {
     const autoMappings: Record<string, string> = {};
     
@@ -249,18 +327,22 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
         }
       }
       
-      // Other (International) territories
+      // Other (International) territories - mark as NOT_APPLICABLE
       const internationalTerritories = [
         'AUSTRALIA', 'BENELUX', 'CHINA', 'DACH', 'FRANCE', 'ISRAEL', 'JAPAN', 
         'LATAM', 'MIDDLE EAST', 'NEW ZEALAND', 'NZ', 'NORDICS', 'RO-APAC', 
         'RO-EMEA', 'SINGAPORE', 'UKI'
       ];
       if (internationalTerritories.some(t => territoryUpper.includes(t))) {
+        // First check if there's an "Other" or "International" region
         const match = repRegions.find(r => r.toLowerCase() === 'other' || r.toLowerCase() === 'international');
         if (match) {
           autoMappings[territory] = match;
-          return;
+        } else {
+          // No matching region - mark as Not Applicable
+          autoMappings[territory] = NOT_APPLICABLE;
         }
+        return;
       }
       
       // Find exact match
@@ -277,9 +359,12 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
     }));
     setIsDirty(true);
     
+    const notApplicableCount = Object.values(autoMappings).filter(v => v === NOT_APPLICABLE).length;
+    const mappedCount = Object.keys(autoMappings).length - notApplicableCount;
+    
     toast({
-      title: "Auto-mapping complete",
-      description: `Mapped ${Object.keys(autoMappings).length} territories to regions based on your defined mappings`
+      title: "Rules-based mapping complete",
+      description: `Mapped ${mappedCount} territories. ${notApplicableCount} marked as Not Applicable.`
     });
   };
 
@@ -336,11 +421,14 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
         console.log('Configuration saved successfully');
         toast({
           title: "Configuration saved",
-          description: "Changes will apply to the next assignment generation"
+          description: "Redirecting back to Assignment Engine..."
         });
-        setShowSuccess(true);
         setIsDirty(false);
-        setTimeout(() => setShowSuccess(false), 3000);
+        
+        // Redirect back to the build page (Assignments tab) after a brief delay
+        setTimeout(() => {
+          navigate(`/build/${buildId}`);
+        }, 500);
       }
     } catch (err) {
       console.error('Unexpected error:', err);
@@ -670,15 +758,27 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
               <CardDescription>Map account sales territories to sales rep regions for geography matching</CardDescription>
             </div>
             {accountTerritories.length > 0 && repRegions.length > 0 && (
-              <Button
-                onClick={autoMapTerritories}
-                variant="outline"
-                size="sm"
-                className="gap-2"
-              >
-                <Wand2 className="w-4 h-4" />
-                Auto Map
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  onClick={aiMapTerritories}
+                  variant="default"
+                  size="sm"
+                  className="gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+                  disabled={isAiMapping}
+                >
+                  {isAiMapping ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      AI Mapping...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      AI Auto-Map
+                    </>
+                  )}
+                </Button>
+              </div>
             )}
           </div>
         </CardHeader>
@@ -687,8 +787,12 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
           <Alert className="mb-4">
             <Info className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              Geography matching is Priority 1 & 2 in the waterfall. Map account sales territories (Location field) 
-              to rep regions so the engine knows when an account and rep are in the same geography.
+              <strong>AI Auto-Map</strong> uses Gemini AI to intelligently match territories to regions.
+              Each mapping includes a confidence score (<span className="text-green-600">high</span>, <span className="text-yellow-600">medium</span>, or <span className="text-red-600">low</span>) — review low-confidence mappings manually.
+              <br />
+              <span className="text-muted-foreground">
+                Select "Not Applicable" for territories outside your sales rep regions (e.g., international territories when all reps are US-based).
+              </span>
             </AlertDescription>
           </Alert>
           
@@ -713,43 +817,106 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
                   <span><strong>{accountTerritories.length}</strong> unique account locations</span>
                   <span><strong>{repRegions.length}</strong> unique rep regions</span>
                 </div>
-                <span className="text-muted-foreground">
-                  {Object.keys(config.territory_mappings).length} mapped
-                </span>
+                <div className="flex gap-2 items-center">
+                  <span className="text-muted-foreground">
+                    {Object.keys(config.territory_mappings).filter(k => !isNotApplicable(config.territory_mappings[k])).length} mapped
+                  </span>
+                  {Object.values(config.territory_mappings).filter(isNotApplicable).length > 0 && (
+                    <Badge variant="secondary" className="bg-gray-200 text-gray-700">
+                      {Object.values(config.territory_mappings).filter(isNotApplicable).length} N/A
+                    </Badge>
+                  )}
+                </div>
               </div>
               
-              <div className="grid grid-cols-2 gap-4 pb-2 border-b font-semibold text-sm">
+              <div className="grid grid-cols-[1fr,1.5fr] gap-4 pb-2 border-b font-semibold text-sm">
                 <div>Account Location/Territory ({accountTerritories.length})</div>
-                <div>Maps to Rep Region ({repRegions.length})</div>
+                <div>Maps to Rep Region</div>
               </div>
               
               <div className="space-y-2 max-h-96 overflow-y-auto">
-                {accountTerritories.map((territory) => (
-                  <div key={territory} className="grid grid-cols-2 gap-4 items-center p-2 hover:bg-muted/50 rounded">
-                    <div className="font-medium">{territory}</div>
-                    <Select
-                      value={config.territory_mappings[territory] || ''}
-                      onValueChange={(value) => handleTerritoryMapping(territory, value)}
+                {accountTerritories.map((territory) => {
+                  const currentMapping = config.territory_mappings[territory];
+                  const isNA = currentMapping && isNotApplicable(currentMapping);
+                  const aiDetail = aiMappingDetails.find(d => d.territory === territory);
+                  
+                  return (
+                    <div 
+                      key={territory} 
+                      className={`grid grid-cols-[1fr,1.5fr] gap-4 items-center p-2 rounded transition-colors ${
+                        isNA 
+                          ? 'bg-gray-100 dark:bg-gray-800' 
+                          : currentMapping 
+                            ? 'bg-green-50 dark:bg-green-950/30' 
+                            : 'hover:bg-muted/50'
+                      }`}
                     >
-                      <SelectTrigger className="bg-background">
-                        <SelectValue placeholder="Select rep region..." />
-                      </SelectTrigger>
-                      <SelectContent className="bg-popover z-50">
-                        {repRegions.map((region) => (
-                          <SelectItem key={region} value={region}>
-                            {region}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ))}
+                      <div className="flex items-center gap-2">
+                        <span className={`font-medium ${isNA ? 'text-gray-500' : ''}`}>{territory}</span>
+                        {aiDetail && (
+                          <Badge 
+                            variant="outline" 
+                            className={`text-xs ${
+                              aiDetail.confidence === 'high' 
+                                ? 'border-green-500 text-green-700' 
+                                : aiDetail.confidence === 'medium'
+                                  ? 'border-yellow-500 text-yellow-700'
+                                  : 'border-red-500 text-red-700'
+                            }`}
+                            title={aiDetail.reasoning}
+                          >
+                            {aiDetail.confidence}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Select
+                          value={currentMapping || ''}
+                          onValueChange={(value) => handleTerritoryMapping(territory, value)}
+                        >
+                          <SelectTrigger className={`bg-background flex-1 ${isNA ? 'text-gray-500' : ''}`}>
+                            <SelectValue placeholder="Select rep region...">
+                              {currentMapping ? getRegionDisplayLabel(currentMapping) : 'Select rep region...'}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent className="bg-popover z-50">
+                            <SelectItem value={NOT_APPLICABLE} className="text-gray-500 italic">
+                              ⊘ Not Applicable (Exclude)
+                            </SelectItem>
+                            <div className="border-b my-1" />
+                            {repRegions.map((region) => (
+                              <SelectItem key={region} value={region}>
+                                {region}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {currentMapping && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => clearTerritoryMapping(territory)}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                            title="Clear mapping"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               
               <Alert className="mt-4">
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription className="text-xs">
-                  <strong>Progress:</strong> {Object.keys(config.territory_mappings).length} / {accountTerritories.length} territories mapped
+                  <strong>Progress:</strong> {Object.keys(config.territory_mappings).filter(k => !isNotApplicable(config.territory_mappings[k])).length} / {accountTerritories.length} territories mapped to regions
+                  {Object.values(config.territory_mappings).filter(isNotApplicable).length > 0 && (
+                    <span className="text-gray-600 ml-2">
+                      ({Object.values(config.territory_mappings).filter(isNotApplicable).length} marked Not Applicable)
+                    </span>
+                  )}
                   {Object.keys(config.territory_mappings).length < accountTerritories.length && (
                     <span className="text-amber-600 block mt-1">
                       ⚠️ Unmapped territories will skip Priority 1 & 2 (continuity/geography matching)
@@ -757,7 +924,7 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
                   )}
                   {Object.keys(config.territory_mappings).length === accountTerritories.length && (
                     <span className="text-green-600 block mt-1">
-                      ✓ All territories mapped! Geography matching is fully configured.
+                      ✓ All territories configured! Geography matching is fully set up.
                     </span>
                   )}
                 </AlertDescription>

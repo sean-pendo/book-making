@@ -27,13 +27,19 @@ export const DataVerification = ({ buildId, buildName, onRefresh }: DataVerifica
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const loadDataCounts = useCallback(async () => {
+  const loadDataCounts = useCallback(async (forceRefresh: boolean = false) => {
     try {
       setLoading(true);
       
       // Use shared counting service for consistency
       const { buildCountService } = await import('@/services/buildCountService');
-      const counts = await buildCountService.getBuildCounts(buildId);
+      
+      // Clear cache if force refresh requested
+      if (forceRefresh) {
+        buildCountService.clearBuildCache(buildId);
+      }
+      
+      const counts = await buildCountService.getBuildCounts(buildId, forceRefresh);
 
       setCounts({
         accounts: counts.accounts,
@@ -41,6 +47,13 @@ export const DataVerification = ({ buildId, buildName, onRefresh }: DataVerifica
         salesReps: counts.salesReps,
         assignments: counts.assignments
       });
+      
+      if (forceRefresh) {
+        toast({
+          title: "Data Refreshed",
+          description: `Loaded ${counts.accounts.toLocaleString()} accounts, ${counts.opportunities.toLocaleString()} opportunities, ${counts.salesReps.toLocaleString()} reps.`,
+        });
+      }
     } catch (error) {
       console.error('Error loading data counts:', error);
       toast({
@@ -58,10 +71,6 @@ export const DataVerification = ({ buildId, buildName, onRefresh }: DataVerifica
       loadDataCounts();
     }
   }, [buildId, loadDataCounts]);
-
-  const handleNavigateToDashboard = () => {
-    navigate('/dashboard');
-  };
 
   const handleNavigateToBuild = () => {
     navigate(`/build/${buildId}`);
@@ -83,7 +92,7 @@ export const DataVerification = ({ buildId, buildName, onRefresh }: DataVerifica
               Current data counts for {buildName ? `"${buildName}"` : 'selected build'}
             </CardDescription>
           </div>
-          <Button variant="outline" onClick={loadDataCounts} disabled={loading}>
+          <Button variant="outline" onClick={() => loadDataCounts(true)} disabled={loading}>
             {loading ? 'Loading...' : 'Refresh'}
           </Button>
         </div>
@@ -162,10 +171,6 @@ export const DataVerification = ({ buildId, buildName, onRefresh }: DataVerifica
               <Button onClick={handleNavigateToBuild} className="flex items-center gap-2">
                 <ExternalLink className="w-4 h-4" />
                 Open Build Details
-              </Button>
-              <Button variant="outline" onClick={handleNavigateToDashboard} className="flex items-center gap-2">
-                <Database className="w-4 h-4" />
-                View Dashboard
               </Button>
             </div>
           </div>
