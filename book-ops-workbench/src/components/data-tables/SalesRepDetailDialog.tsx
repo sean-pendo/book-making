@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { calculateSalesRepMetrics, getAccountCustomerStatus } from '@/utils/salesRepCalculations';
+import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -673,7 +674,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                     // Use hierarchy-based customer/prospect logic - SAME AS SalesRepsTable
                                     const parentId = account.ultimate_parent_id || account.sfdc_account_id;
                                     const hierarchyAccounts = repDetail?.accountsByParent?.get(parentId) || [];
-                                    const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + (acc.arr || acc.calculated_arr || 0), 0);
+                                    const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
                                     const isCustomer = hierarchyARR > 0;
                                     return isCustomer ? (
                                       <Badge variant="default" className="text-xs">Customer</Badge>
@@ -689,7 +690,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                 {getTierBadge(account.expansion_tier || account.initial_sale_tier)}
                               </TableCell>
                               <TableCell className="text-sm font-medium text-green-600">
-                                {formatCurrency(account.arr || account.calculated_arr)}
+                                {formatCurrency(getAccountARR(account))}
                               </TableCell>
                               <TableCell className="text-sm font-medium text-red-600">
                                 {(() => {
@@ -740,7 +741,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                     // Use hierarchy-based customer/prospect logic for children too - SAME AS SalesRepsTable
                                     const parentId = child.ultimate_parent_id || child.sfdc_account_id;
                                     const hierarchyAccounts = repDetail?.accountsByParent?.get(parentId) || [];
-                                    const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + (acc.arr || acc.calculated_arr || 0), 0);
+                                    const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
                                     const isCustomer = hierarchyARR > 0;
                                     return isCustomer ? (
                                       <Badge variant="default" className="text-xs">Customer</Badge>
@@ -755,7 +756,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                   {getTierBadge(child.expansion_tier || child.initial_sale_tier)}
                                 </TableCell>
                                 <TableCell className="text-sm font-medium text-green-600">
-                                  {formatCurrency(child.arr || child.calculated_arr)}
+                                  {formatCurrency(getAccountARR(child))}
                                 </TableCell>
                                   <TableCell className="text-sm font-medium text-red-600">
                                     {(() => {
