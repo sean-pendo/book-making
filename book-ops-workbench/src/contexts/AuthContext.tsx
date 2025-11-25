@@ -11,7 +11,6 @@ interface Profile {
   email: string | null;
   full_name: string | null;
   role: UserRole;
-  team: string | null;
   region: UserRegion | null;
   developer: boolean | null;
 }
@@ -21,7 +20,6 @@ interface ImpersonatedUser {
   email: string;
   full_name: string;
   role: UserRole;
-  team: string | null;
   region: UserRegion | null;
   developer: boolean | null;
 }

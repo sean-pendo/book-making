@@ -25,11 +25,11 @@ export function ProtectedRoute({
   page, 
   fallbackPath = '/manager-dashboard' 
 }: ProtectedRouteProps) {
-  const { hasPageAccess, isLoading: permissionsLoading } = useRolePermissions();
-  const { loading: authLoading, user } = useAuth();
+  const { hasPageAccess, isLoading: permissionsLoading, permissions } = useRolePermissions();
+  const { loading: authLoading, user, effectiveProfile } = useAuth();
 
-  // Show loading while checking auth and permissions
-  if (authLoading || permissionsLoading) {
+  // Show loading while checking auth
+  if (authLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -42,9 +42,18 @@ export function ProtectedRoute({
     return <Navigate to="/auth" replace />;
   }
 
+  // Show loading while profile is being loaded (profile might still be null after auth completes)
+  if (!effectiveProfile || permissionsLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   // Check page access permission
   if (!hasPageAccess(page)) {
-    console.warn(`[ProtectedRoute] Access denied to "${page}" page, redirecting to ${fallbackPath}`);
+    console.warn(`[ProtectedRoute] Access denied to "${page}" page for role "${effectiveProfile.role}", redirecting to ${fallbackPath}`);
     return <Navigate to={fallbackPath} replace />;
   }
 

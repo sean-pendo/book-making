@@ -81,10 +81,10 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
     },
     {
       key: 'geo',
-      label: 'Geography',
+      label: 'Region',
       type: 'select',
       options: [], // Will be populated from data
-      placeholder: 'All geographies'
+      placeholder: 'All regions'
     },
     {
       key: 'tier',
@@ -615,9 +615,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
               </div>
 
               <div className="border rounded-lg" style={{ width: '100% !important', minWidth: '1400px !important' }}>
-                <div className="text-xs text-muted-foreground mb-2 p-2 bg-yellow-50 dark:bg-yellow-950/30 border dark:border-yellow-800">
-                  DEBUG: Table should have 10 columns. Check if all are visible.
-                </div>
                 <div className="max-h-96 overflow-auto" style={{ width: '100% !important' }}>
                   <Table className="w-full min-w-[1600px]" style={{ tableLayout: 'fixed', width: '1600px !important' }}>
                     <TableHeader className="sticky top-0 bg-background z-10">
@@ -627,7 +624,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                           <TableHead style={{ width: '120px' }} className="bg-green-50 dark:bg-green-950/30">HQ Location</TableHead>
                           <TableHead style={{ width: '100px' }}>Type</TableHead>
                           <TableHead style={{ width: '140px' }}>Industry</TableHead>
-                          <TableHead style={{ width: '120px' }}>Geography</TableHead>
+                          <TableHead style={{ width: '120px' }}>Region</TableHead>
                           <TableHead style={{ width: '80px' }}>Tier</TableHead>
                           <TableHead style={{ width: '120px' }}>ARR</TableHead>
                           <TableHead style={{ width: '120px' }}>ATR</TableHead>

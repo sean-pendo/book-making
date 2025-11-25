@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - Fix: ProtectedRoute Redirect Loop & Auth Context Cleanup
+- **Fix**: Fixed ProtectedRoute causing infinite redirect loop when profile not yet loaded
+  - Root cause: `authLoading` set to false before profile finished loading, causing `hasPageAccess` to return false
+  - Added explicit check for `effectiveProfile` before checking permissions
+  - Improved error logging to show user's role when access is denied
+- **Fix**: Removed stale `team` field from `Profile` and `ImpersonatedUser` interfaces in AuthContext
+  - This field was replaced by `region` in the earlier refactor but interface wasn't updated
+- **Files**: `ProtectedRoute.tsx`, `AuthContext.tsx`
+
 ## [2025-11-25] - Fix: Parent Account Owner Shows "Unknown" in Rep Detail View
 - **Fix**: Parent accounts labeled "(Parent - Not Owned)" now display the owner from their children
   - Previously, virtual parent accounts showed "Unknown" in the Previous Owner column
