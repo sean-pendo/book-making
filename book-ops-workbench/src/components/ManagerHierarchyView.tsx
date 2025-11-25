@@ -72,13 +72,12 @@ export default function ManagerHierarchyView({
       const repIds = salesReps.map(rep => rep.rep_id);
       
       // Fetch accounts for all reps individually to handle both new and old owners
+      // Include all accounts (customers and prospects) where rep is the current owner
       const accountsPromises = repIds.map(repId => 
         supabase
           .from('accounts')
           .select('sfdc_account_id, account_name, build_id, is_parent, is_customer, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, calculated_atr, arr, atr, hierarchy_bookings_arr_converted, expansion_tier, geo, sales_territory, hq_country, cre_count, ultimate_parent_id, has_split_ownership')
           .eq('build_id', buildId)
-          .eq('is_customer', true)
-          .or('is_parent.eq.true,has_split_ownership.eq.true')
           .or(`new_owner_id.eq.${repId},and(owner_id.eq.${repId},new_owner_id.is.null)`)
       );
 

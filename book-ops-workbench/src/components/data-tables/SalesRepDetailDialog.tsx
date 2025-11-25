@@ -225,6 +225,9 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
         childAccountsByParent.forEach((children, parentId) => {
           // Create a virtual parent entry for display purposes
           const firstChild = children[0];
+          // Use the children's owner for the parent since they share ownership in this view
+          const childOwnerName = firstChild.new_owner_name || firstChild.owner_name;
+          const childOwnerId = firstChild.new_owner_id || firstChild.owner_id;
           const virtualParent: AccountWithHierarchy = {
             sfdc_account_id: `virtual-parent-${parentId}`, // Use unique key to avoid duplicates
             account_name: `${firstChild.ultimate_parent_name || 'Unknown Parent'} (Parent - Not Owned)`,
@@ -246,10 +249,10 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
             initial_sale_tier: null,
             cre_risk: false,
             risk_flag: false,
-            owner_id: '',
-            owner_name: null,
-            new_owner_id: null,
-            new_owner_name: null,
+            owner_id: childOwnerId,
+            owner_name: childOwnerName,
+            new_owner_id: childOwnerId,
+            new_owner_name: childOwnerName,
             hq_country: null,
             children: children.map(child => ({
               ...child,
