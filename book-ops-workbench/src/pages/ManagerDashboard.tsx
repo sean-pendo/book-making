@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -7,13 +7,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
-import { Loader2, CheckCircle, XCircle, AlertCircle, ClipboardCheck } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, AlertCircle, ClipboardCheck, FolderOpen, Calendar, User } from 'lucide-react';
 import ManagerHierarchyView from '@/components/ManagerHierarchyView';
 import ManagerBeforeAfterComparison from '@/components/ManagerBeforeAfterComparison';
 import ManagerPendingApprovals from '@/components/ManagerPendingApprovals';
 import ManagerReviewsAndNotes from '@/components/ManagerReviewsAndNotes';
 import ManagerAIAssistant from '@/components/ManagerAIAssistant';
 import SLMApprovalQueue from '@/components/SLMApprovalQueue';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 export default function ManagerDashboard() {
   const { user, effectiveProfile } = useAuth();
@@ -146,20 +147,31 @@ export default function ManagerDashboard() {
     },
   });
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, small = false) => {
+    const iconSize = small ? "w-2.5 h-2.5" : "w-3 h-3";
+    const textSize = small ? "text-xs" : "";
     switch (status) {
       case 'pending':
-        return <Badge variant="outline"><AlertCircle className="w-3 h-3 mr-1" />Pending Review</Badge>;
+        return <Badge variant="outline" className={`${textSize} bg-amber-50 text-amber-700 border-amber-300`}><AlertCircle className={`${iconSize} mr-1`} />Needs Review</Badge>;
       case 'accepted':
-        return <Badge className="bg-success/10 text-success hover:bg-success/20"><CheckCircle className="w-3 h-3 mr-1" />Accepted</Badge>;
+        return <Badge className={`${textSize} bg-success/10 text-success hover:bg-success/20`}><CheckCircle className={`${iconSize} mr-1`} />Accepted</Badge>;
       case 'declined':
-        return <Badge variant="destructive"><XCircle className="w-3 h-3 mr-1" />Declined</Badge>;
+        return <Badge variant="destructive" className={textSize}><XCircle className={`${iconSize} mr-1`} />Declined</Badge>;
       case 'in_review':
-        return <Badge variant="secondary"><AlertCircle className="w-3 h-3 mr-1" />In Review</Badge>;
+        return <Badge variant="secondary" className={textSize}><AlertCircle className={`${iconSize} mr-1`} />In Review</Badge>;
       default:
-        return <Badge>{status}</Badge>;
+        return <Badge className={textSize}>{status}</Badge>;
     }
   };
+
+  // Auto-select first review if none selected
+  useEffect(() => {
+    if (reviews && reviews.length > 0 && !selectedReview) {
+      setSelectedReview(reviews[0].id);
+    }
+  }, [reviews, selectedReview]);
+
+  const selectedReviewData = reviews?.find((r: any) => r.id === selectedReview);
 
   if (isLoading) {
     return (
@@ -171,7 +183,7 @@ export default function ManagerDashboard() {
 
   return (
     <div className="container mx-auto py-8">
-      <div className="mb-8">
+      <div className="mb-6">
         <h1 className="text-3xl font-bold mb-2">Manager Dashboard</h1>
         <p className="text-muted-foreground">
           Review and manage account assignments for your team
@@ -181,86 +193,137 @@ export default function ManagerDashboard() {
       {!reviews || reviews.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
-            <p className="text-muted-foreground">No reviews assigned to you yet.</p>
+            <FolderOpen className="w-12 h-12 mx-auto mb-4 text-muted-foreground opacity-50" />
+            <p className="text-muted-foreground">No builds have been shared with you yet.</p>
+            <p className="text-sm text-muted-foreground mt-2">RevOps will share builds when they're ready for your review.</p>
           </CardContent>
         </Card>
       ) : (
-        <Tabs defaultValue={reviews[0]?.id} value={selectedReview || reviews[0]?.id} onValueChange={setSelectedReview}>
-          <TabsList className="mb-4">
-            {reviews.map((review: any) => (
-              <TabsTrigger key={review.id} value={review.id}>
-                {review.builds?.name || 'Unnamed Build'} {getStatusBadge(review.status)}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+        <div className="grid grid-cols-12 gap-6">
+          {/* Left Sidebar - Build List */}
+          <div className="col-span-3">
+            <Card className="sticky top-4">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                  Shared Builds ({reviews.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <ScrollArea className="h-[calc(100vh-280px)]">
+                  <div className="space-y-1 p-2">
+                    {reviews.map((review: any) => (
+                      <button
+                        key={review.id}
+                        onClick={() => setSelectedReview(review.id)}
+                        className={`w-full text-left p-3 rounded-lg transition-colors ${
+                          selectedReview === review.id 
+                            ? 'bg-primary/10 border border-primary/20' 
+                            : 'hover:bg-muted/50'
+                        }`}
+                      >
+                        <div className="font-medium text-sm mb-1 truncate">
+                          {review.builds?.name || 'Unnamed Build'}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                          <User className="w-3 h-3" />
+                          <span>{review.manager_level}</span>
+                          <span>•</span>
+                          <Calendar className="w-3 h-3" />
+                          <span>{new Date(review.sent_at).toLocaleDateString()}</span>
+                        </div>
+                        {getStatusBadge(review.status, true)}
+                      </button>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </div>
 
-          {reviews.map((review: any) => (
-            <TabsContent key={review.id} value={review.id}>
-              <div className="grid gap-6">
+          {/* Main Content */}
+          <div className="col-span-9">
+            {selectedReviewData ? (
+              <div className="space-y-6">
+                {/* Build Header */}
                 <Card>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <CardTitle>{review.builds?.name || 'Unnamed Build'}</CardTitle>
+                  <CardHeader className="pb-4">
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-3">
+                          <CardTitle className="text-xl">{selectedReviewData.builds?.name || 'Unnamed Build'}</CardTitle>
+                          {getStatusBadge(selectedReviewData.status)}
+                        </div>
                         <CardDescription>
-                          {review.builds?.description || 'No description'} • 
-                          Manager Level: <Badge variant="outline">{review.manager_level}</Badge> • 
-                          Sent: {new Date(review.sent_at).toLocaleDateString()}
+                          {selectedReviewData.builds?.description || 'No description'}
                         </CardDescription>
+                        <div className="flex items-center gap-4 text-sm text-muted-foreground pt-1">
+                          <span className="flex items-center gap-1">
+                            <User className="w-4 h-4" />
+                            Your role: <Badge variant="outline" className="ml-1">{selectedReviewData.manager_level}</Badge>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Calendar className="w-4 h-4" />
+                            Shared: {new Date(selectedReviewData.sent_at).toLocaleDateString()}
+                          </span>
+                        </div>
                       </div>
                       <div className="flex gap-2">
-                        {review.status === 'pending' && (
+                        {selectedReviewData.status === 'pending' && (
                           <>
                             <Button 
-                              onClick={() => handleAccept(review.id)}
-                              className="gap-2"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                              Accept
-                            </Button>
-                            <Button 
-                              onClick={() => handleDecline(review.id)}
+                              onClick={() => handleDecline(selectedReviewData.id)}
                               variant="outline"
-                              className="gap-2"
+                              size="sm"
+                              className="gap-1"
                             >
                               <XCircle className="w-4 h-4" />
-                              Decline & Review
+                              Review & Edit
+                            </Button>
+                            <Button 
+                              onClick={() => handleAccept(selectedReviewData.id)}
+                              size="sm"
+                              className="gap-1"
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                              Accept All
                             </Button>
                           </>
                         )}
-                        {/* SLMs can approve FLM proposals - FLMs can only propose */}
-                        {effectiveProfile?.role === 'SLM' && (review.status === 'in_review' || review.status === 'pending') && (
+                        {effectiveProfile?.role === 'SLM' && selectedReviewData.status === 'in_review' && (
                           <Button 
-                            onClick={() => approveAllMutation.mutate(review.build_id)}
+                            onClick={() => approveAllMutation.mutate(selectedReviewData.build_id)}
                             disabled={approveAllMutation.isPending}
-                            variant="default"
-                            className="gap-2"
+                            size="sm"
+                            className="gap-1"
                           >
                             {approveAllMutation.isPending ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
                             ) : (
                               <CheckCircle className="w-4 h-4" />
                             )}
-                            Approve All FLM Proposals
+                            Approve FLM Proposals
                           </Button>
                         )}
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent>
-                    {review.status === 'accepted' && (
-                      <div className="bg-success/10 text-success p-4 rounded-lg mb-4">
-                        <p className="font-medium">✓ This review has been accepted and assignments are locked.</p>
+                  {selectedReviewData.status === 'accepted' && (
+                    <CardContent className="pt-0">
+                      <div className="bg-success/10 text-success p-3 rounded-lg text-sm">
+                        <p className="font-medium">✓ You've accepted this build. Assignments are locked.</p>
                       </div>
-                    )}
-                    {review.status === 'in_review' && (
-                      <div className="bg-primary/10 text-primary p-4 rounded-lg mb-4">
+                    </CardContent>
+                  )}
+                  {selectedReviewData.status === 'in_review' && (
+                    <CardContent className="pt-0">
+                      <div className="bg-primary/10 text-primary p-3 rounded-lg text-sm">
                         <p className="font-medium">You can now reassign accounts and add notes below.</p>
                       </div>
-                    )}
-                  </CardContent>
+                    </CardContent>
+                  )}
                 </Card>
 
+                {/* Content Tabs */}
                 <Tabs defaultValue="team-view" className="w-full">
                   <TabsList className={`grid w-full ${effectiveProfile?.role === 'SLM' ? 'grid-cols-4' : 'grid-cols-3'}`}>
                     <TabsTrigger value="team-view">Team View</TabsTrigger>
@@ -276,44 +339,50 @@ export default function ManagerDashboard() {
 
                   <TabsContent value="team-view" className="mt-6 relative">
                     <ManagerHierarchyView 
-                      buildId={review.build_id}
-                      managerLevel={review.manager_level}
-                      managerName={review.manager_name}
-                      reviewStatus={review.status}
+                      buildId={selectedReviewData.build_id}
+                      managerLevel={selectedReviewData.manager_level}
+                      managerName={selectedReviewData.manager_name}
+                      reviewStatus={selectedReviewData.status}
                     />
                     <ManagerAIAssistant 
-                      buildId={review.build_id}
-                      buildName={review.builds?.name || 'Unnamed Build'}
-                      managerName={review.manager_name}
-                      managerLevel={review.manager_level}
+                      buildId={selectedReviewData.build_id}
+                      buildName={selectedReviewData.builds?.name || 'Unnamed Build'}
+                      managerName={selectedReviewData.manager_name}
+                      managerLevel={selectedReviewData.manager_level}
                     />
                   </TabsContent>
 
                   <TabsContent value="before-after" className="mt-6">
                     <ManagerBeforeAfterComparison 
-                      buildId={review.build_id}
-                      managerLevel={review.manager_level}
-                      managerName={review.manager_name}
+                      buildId={selectedReviewData.build_id}
+                      managerLevel={selectedReviewData.manager_level}
+                      managerName={selectedReviewData.manager_name}
                     />
                   </TabsContent>
 
                   <TabsContent value="approvals" className="mt-6">
-                    <ManagerPendingApprovals buildId={review.build_id} />
+                    <ManagerPendingApprovals buildId={selectedReviewData.build_id} />
                   </TabsContent>
 
                   {effectiveProfile?.role === 'SLM' && (
                     <TabsContent value="slm-queue" className="mt-6">
                       <SLMApprovalQueue 
-                        buildId={review.build_id} 
-                        slmName={review.manager_name}
+                        buildId={selectedReviewData.build_id} 
+                        slmName={selectedReviewData.manager_name}
                       />
                     </TabsContent>
                   )}
                 </Tabs>
               </div>
-            </TabsContent>
-          ))}
-        </Tabs>
+            ) : (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <p className="text-muted-foreground">Select a build from the list to view details.</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
