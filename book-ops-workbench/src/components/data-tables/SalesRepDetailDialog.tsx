@@ -611,7 +611,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
               </div>
 
               <div className="border rounded-lg" style={{ width: '100% !important', minWidth: '1400px !important' }}>
-                <div className="text-xs text-muted-foreground mb-2 p-2 bg-yellow-50 border">
+                <div className="text-xs text-muted-foreground mb-2 p-2 bg-yellow-50 dark:bg-yellow-950/30 border dark:border-yellow-800">
                   DEBUG: Table should have 10 columns. Check if all are visible.
                 </div>
                 <div className="max-h-96 overflow-auto" style={{ width: '100% !important' }}>
@@ -619,8 +619,8 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                     <TableHeader className="sticky top-0 bg-background z-10">
                         <TableRow>
                           <TableHead style={{ width: '200px' }}>Account</TableHead>
-                          <TableHead style={{ width: '150px' }} className="bg-blue-50">Previous Owner</TableHead>
-                          <TableHead style={{ width: '120px' }} className="bg-green-50">HQ Location</TableHead>
+                          <TableHead style={{ width: '150px' }} className="bg-blue-50 dark:bg-blue-950/30">Previous Owner</TableHead>
+                          <TableHead style={{ width: '120px' }} className="bg-green-50 dark:bg-green-950/30">HQ Location</TableHead>
                           <TableHead style={{ width: '100px' }}>Type</TableHead>
                           <TableHead style={{ width: '140px' }}>Industry</TableHead>
                           <TableHead style={{ width: '120px' }}>Geography</TableHead>
@@ -661,12 +661,12 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                   </div>
                                  </div>
                                </TableCell>
-                                 <TableCell className="text-sm bg-blue-50">
+                                 <TableCell className="text-sm bg-blue-50 dark:bg-blue-950/30">
                                    <Badge variant={getPreviousOwnerInfo(account) === 'No Change' ? 'outline' : 'secondary'} className="text-xs">
                                      {getPreviousOwnerInfo(account)}
                                    </Badge>
                                  </TableCell>
-                                 <TableCell className="text-sm bg-green-50">{account.hq_country || '-'}</TableCell>
+                                 <TableCell className="text-sm bg-green-50 dark:bg-green-950/30">{account.hq_country || '-'}</TableCell>
                                 <TableCell>
                                 <div className="flex flex-col gap-1">
                                   {(() => {

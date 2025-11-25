@@ -352,10 +352,22 @@ export const DataImport = () => {
 
   const loadBuilds = useCallback(async () => {
     console.log('🏗️ Loading builds...');
-    const { data, error } = await supabase
+    
+    // Get user's teams for filtering
+    const userTeams = effectiveProfile?.teams || [effectiveProfile?.team || 'AMER'];
+    const teamsToFilter = userTeams.filter(Boolean);
+    
+    let query = supabase
       .from('builds')
-      .select('id, name')
+      .select('id, name, team')
       .order('created_at', { ascending: false });
+    
+    // Filter by team unless user is REVOPS (REVOPS sees all)
+    if (teamsToFilter.length > 0 && effectiveProfile?.role !== 'REVOPS') {
+      query = query.in('team', teamsToFilter);
+    }
+    
+    const { data, error } = await query;
     
     if (!error && data) {
       console.log('✅ Builds loaded:', data.length);
@@ -386,7 +398,7 @@ export const DataImport = () => {
     } else {
       console.error('❌ Failed to load builds:', error);
     }
-  }, [currentBuildId]);
+  }, [currentBuildId, effectiveProfile]);
 
   // Load existing imported data from Supabase to show in "Uploaded Files" table
   useEffect(() => {
@@ -609,15 +621,19 @@ export const DataImport = () => {
         throw new Error("User not authenticated");
       }
 
+      // Use user's first team or default to AMER
+      const userTeam = effectiveProfile?.teams?.[0] || effectiveProfile?.team || 'AMER';
+      
       const { data, error } = await supabase
         .from('builds')
         .insert([{
           name: newBuildName.trim(),
           description: `Build created from Import page - ${new Date().toLocaleDateString()}`,
           status: 'DRAFT',
+          team: userTeam,
           created_by: user.id
         }])
-        .select('id, name')
+        .select('id, name, team')
         .single();
 
       if (error) throw error;

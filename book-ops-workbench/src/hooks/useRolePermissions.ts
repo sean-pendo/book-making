@@ -55,6 +55,60 @@ const REVOPS_PERMISSIONS: RolePermissions = {
   },
 };
 
+// SLM permissions - can approve FLM proposals, view their hierarchy
+const SLM_PERMISSIONS: RolePermissions = {
+  pages: {
+    dashboard: false,
+    manager_dashboard: true,
+    data_import: false,
+    review_notes: false,
+    revops_final: false,
+    export: false,
+    settings: true,
+  },
+  capabilities: {
+    view_all_builds: false,
+    view_own_hierarchy: true,  // Only see reps where slm = their name
+    create_builds: false,
+    edit_builds: false,
+    delete_builds: false,
+    manage_assignments: false,
+    create_notes: true,        // Can add notes
+    create_reassignments: true, // Can propose reassignments
+    approve_reassignments: true, // Can approve FLM proposals
+    view_reports: false,
+    export_data: false,
+    manage_users: false,
+  },
+};
+
+// FLM permissions - can propose, cannot approve
+const FLM_PERMISSIONS: RolePermissions = {
+  pages: {
+    dashboard: false,
+    manager_dashboard: true,
+    data_import: false,
+    review_notes: false,
+    revops_final: false,
+    export: false,
+    settings: true,
+  },
+  capabilities: {
+    view_all_builds: false,
+    view_own_hierarchy: true,  // Only see reps where flm = their name
+    create_builds: false,
+    edit_builds: false,
+    delete_builds: false,
+    manage_assignments: false,
+    create_notes: true,        // Can add notes
+    create_reassignments: true, // Can propose reassignments
+    approve_reassignments: false, // Cannot approve - SLM must approve
+    view_reports: false,
+    export_data: false,
+    manage_users: false,
+  },
+};
+
 // Default fallback permissions (minimal access)
 const DEFAULT_PERMISSIONS: RolePermissions = {
   pages: {
@@ -94,7 +148,16 @@ export function useRolePermissions() {
         return REVOPS_PERMISSIONS;
       }
 
-      // Fetch permissions for SLM and FLM from database
+      // Use default permissions for SLM and FLM roles
+      if (role === "SLM") {
+        return SLM_PERMISSIONS;
+      }
+
+      if (role === "FLM") {
+        return FLM_PERMISSIONS;
+      }
+
+      // Fetch permissions from database as fallback (for custom configurations)
       const { data, error } = await supabase
         .from("role_permissions")
         .select("permissions")

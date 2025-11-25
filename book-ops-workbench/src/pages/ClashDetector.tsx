@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,6 +50,7 @@ interface AutoResolutionRule {
 
 export const ClashDetector = () => {
   const { toast } = useToast();
+  const { effectiveProfile } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [resolutionFilter, setResolutionFilter] = useState<string>('all');
   const [selectedClash, setSelectedClash] = useState<Clash | null>(null);
@@ -56,14 +58,40 @@ export const ClashDetector = () => {
   const [resolutionReason, setResolutionReason] = useState('');
   const [proposedOwner, setProposedOwner] = useState('');
 
-  // Fetch real clashes from database
+  // Get user's teams for filtering
+  const userTeams = effectiveProfile?.teams || [effectiveProfile?.team || 'AMER'];
+
+  // Fetch clashes scoped to user's team builds
   const { data: clashes = [], isLoading, refetch } = useQuery({
-    queryKey: ['clashes'],
+    queryKey: ['clashes', userTeams],
     queryFn: async () => {
-      const { data, error } = await supabase
+      // First get build IDs for user's teams
+      const teamsToFilter = userTeams.filter(Boolean);
+      
+      let buildsQuery = supabase
+        .from('builds')
+        .select('id');
+      
+      // Filter builds by team (unless REVOPS)
+      if (teamsToFilter.length > 0 && effectiveProfile?.role !== 'REVOPS') {
+        buildsQuery = buildsQuery.in('team', teamsToFilter);
+      }
+      
+      const { data: teamBuilds } = await buildsQuery;
+      const teamBuildIds = teamBuilds?.map(b => b.id) || [];
+      
+      // Now fetch clashes for those builds
+      let query = supabase
         .from('clashes')
         .select('*')
         .order('created_at', { ascending: false });
+      
+      // Filter clashes to only those in team builds
+      if (teamBuildIds.length > 0 && effectiveProfile?.role !== 'REVOPS') {
+        query = query.in('build_id', teamBuildIds);
+      }
+      
+      const { data, error } = await query;
       
       if (error) throw error;
       

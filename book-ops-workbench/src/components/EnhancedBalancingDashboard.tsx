@@ -89,9 +89,9 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
   if (error) {
     return (
       <div className="p-6">
-        <Alert className="border-red-200 bg-red-50">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertDescription>
+        <Alert className="border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30">
+          <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
+          <AlertDescription className="text-red-900 dark:text-red-200">
             Error loading balancing data: {error}
           </AlertDescription>
         </Alert>
@@ -102,9 +102,9 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
   if (!data) {
     return (
       <div className="p-6 space-y-4">
-        <Alert className="border-yellow-200 bg-yellow-50">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertDescription>
+        <Alert className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-950/30">
+          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+          <AlertDescription className="text-yellow-900 dark:text-yellow-200">
             <strong>No Assignment Data Available</strong>
             <p className="mt-2 text-sm">
               No balanced assignments have been generated yet for this build. 
@@ -311,9 +311,9 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
         </div>
 
         {/* Balance Status Alert */}
-        <Alert className={balanceMetrics.arrBalance === 'Unbalanced' ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}>
+        <Alert className={balanceMetrics.arrBalance === 'Unbalanced' ? 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30' : 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30'}>
           <TrendingUp className="h-4 w-4" />
-          <AlertDescription>
+          <AlertDescription className={balanceMetrics.arrBalance === 'Unbalanced' ? 'text-red-900 dark:text-red-200' : 'text-green-900 dark:text-green-200'}>
             <strong>Territory Status:</strong> {balanceMetrics.arrBalance}
             {balanceMetrics.arrBalance === 'Unbalanced' && (
               <span className="ml-2 text-sm">Territory rebalancing may be needed for optimal distribution.</span>
@@ -431,7 +431,7 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
                                 {rep.status}
                               </Badge>
                               {warnings.length > 0 && (
-                                <Badge variant="outline" className="border-amber-500 text-amber-700 bg-amber-50">
+                                <Badge variant="outline" className="border-amber-500 dark:border-amber-600 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30">
                                   <AlertTriangle className="h-3 w-3 mr-1" />
                                   {warnings.length} {warnings.length === 1 ? 'Warning' : 'Warnings'}
                                 </Badge>
@@ -474,7 +474,7 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
                         {warnings.length > 0 && (
                           <div className="mt-3 pt-3 border-t space-y-1">
                             {warnings.map((warning, idx) => (
-                              <div key={idx} className="text-xs text-amber-700 flex items-center gap-1">
+                              <div key={idx} className="text-xs text-amber-700 dark:text-amber-300 flex items-center gap-1">
                                 <AlertTriangle className="h-3 w-3" />
                                 <span className="font-medium">{warning.type}:</span>
                                 <span>{warning.message}</span>

@@ -11,7 +11,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Progress } from '@/components/ui/progress';
-import { Download, CheckCircle, AlertCircle, ArrowRight, FileText, Users, TrendingUp, Info, HelpCircle, Send, Undo2, Lock, ArrowLeft, RotateCcw } from 'lucide-react';
+import { Download, CheckCircle, AlertCircle, ArrowRight, FileText, Users, TrendingUp, Info, HelpCircle, Send, Undo2, Lock, ArrowLeft, RotateCcw, Loader2, Building, Building2, Target } from 'lucide-react';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useToast } from '@/components/ui/use-toast';
 import { useBuildDataRelationships } from '@/hooks/useBuildData';
 import { AccountDetailDialog } from '@/components/AccountDetailDialog';
@@ -32,6 +33,9 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
   
   // Active tab state for switching between summary and account moves
   const [activeTab, setActiveTab] = useState('summary');
+  // View mode for customers vs prospects vs all
+  const [viewMode, setViewMode] = useState<'customers' | 'prospects' | 'all'>('all');
+  const [portfolioType, setPortfolioType] = useState<'customers' | 'prospects'>('customers');
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
   const [isAccountDialogOpen, setIsAccountDialogOpen] = useState(false);
   const [selectedFLM, setSelectedFLM] = useState<{
@@ -91,6 +95,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
           atr,
           cre_count,
           cre_risk,
+          cre_status,
           expansion_tier,
           is_customer
         `)
@@ -100,6 +105,95 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       
       if (error) throw error;
       return data || [];
+    },
+    enabled: !!buildId
+  });
+
+  // Fetch opportunities to calculate ATR properly (ATR comes from renewal opportunities)
+  const { data: opportunitiesForATR } = useQuery({
+    queryKey: ['opportunities-for-atr', buildId],
+    queryFn: async (): Promise<Map<string, number>> => {
+      if (!buildId) return new Map<string, number>();
+      
+      const { data, error } = await supabase
+        .from('opportunities')
+        .select('sfdc_account_id, available_to_renew, opportunity_type')
+        .eq('build_id', buildId)
+        .eq('opportunity_type', 'Renewals')
+        .not('available_to_renew', 'is', null);
+      
+      if (error) throw error;
+      
+      // Aggregate ATR by account
+      const atrByAccount = new Map<string, number>();
+      (data || []).forEach(opp => {
+        const current = atrByAccount.get(opp.sfdc_account_id) || 0;
+        atrByAccount.set(opp.sfdc_account_id, current + (opp.available_to_renew || 0));
+      });
+      
+      return atrByAccount;
+    },
+    enabled: !!buildId
+  });
+
+  // Fetch all prospect parent accounts for prospect portfolio view
+  const { data: prospectAccounts, isLoading: prospectsLoading } = useQuery({
+    queryKey: ['prospect-parent-accounts', buildId],
+    queryFn: async () => {
+      if (!buildId) return [];
+      
+      // First get count to determine pagination needs
+      const { count } = await supabase
+        .from('accounts')
+        .select('*', { count: 'exact', head: true })
+        .eq('build_id', buildId)
+        .eq('is_customer', false)
+        .eq('is_parent', true);
+      
+      const totalCount = count || 0;
+      const pageSize = 1000;
+      const pages = Math.ceil(totalCount / pageSize);
+      
+      // Fetch all pages in parallel
+      const pagePromises = Array.from({ length: pages }, (_, i) => 
+        supabase
+          .from('accounts')
+          .select(`
+            sfdc_account_id,
+            account_name,
+            owner_id,
+            owner_name,
+            new_owner_id,
+            new_owner_name,
+            is_parent,
+            ultimate_parent_id,
+            has_split_ownership,
+            hierarchy_bookings_arr_converted,
+            calculated_arr,
+            calculated_atr,
+            arr,
+            atr,
+            cre_count,
+            cre_risk,
+            cre_status,
+            expansion_tier,
+            initial_sale_tier,
+            is_customer,
+            geo,
+            hq_country,
+            sales_territory
+          `)
+          .eq('build_id', buildId)
+          .eq('is_customer', false)
+          .eq('is_parent', true)
+          .range(i * pageSize, (i + 1) * pageSize - 1)
+      );
+      
+      const results = await Promise.all(pagePromises);
+      const allData = results.flatMap(r => r.data || []);
+      
+      console.log(`[ComprehensiveReview] Loaded ${allData.length} prospect accounts (${pages} pages)`);
+      return allData;
     },
     enabled: !!buildId
   });
@@ -124,6 +218,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
           calculated_arr,
           arr,
           cre_risk,
+          cre_status,
           risk_flag,
           cre_count,
           expansion_tier
@@ -230,7 +325,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       
       // Risk filter
       if (riskFilter !== 'all') {
-        const hasRisk = change.cre_risk || (change.cre_count && change.cre_count > 0) || change.risk_flag;
+        const hasRisk = change.cre_status !== null || change.risk_flag;
         if (riskFilter === 'risk' && !hasRisk) return false;
         if (riskFilter === 'no-risk' && hasRisk) return false;
       }
@@ -241,6 +336,12 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
 
   const portfolioSummary = useMemo(() => {
     if (!allAccounts || !buildData || !allActiveSalesReps) return null;
+    
+    // Helper to get ATR from opportunities (more accurate than calculated_atr)
+    const getAccountATR = (accountId: string): number => {
+      if (!opportunitiesForATR) return 0;
+      return opportunitiesForATR.get(accountId) || 0;
+    };
 
     // Separate parent and child accounts
     const parentAccounts = allAccounts.filter(acc => acc.is_parent);
@@ -274,12 +375,14 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         return sum + arrValue;
       }, 0);
     const totalARR = totalParentARR + splitOwnershipChildrenARR;
+    // Calculate ATR from opportunities data (more reliable than calculated_atr field)
     const totalATR = parentAccounts.reduce((sum, acc) => {
-      const atrValue = parseFloat(acc.calculated_atr) || parseFloat(acc.atr) || 0;
-      return sum + atrValue;
+      const atrFromOpps = getAccountATR(acc.sfdc_account_id);
+      const atrFromAccount = parseFloat(acc.calculated_atr) || parseFloat(acc.atr) || 0;
+      return sum + (atrFromOpps || atrFromAccount); // Prefer opportunities data
     }, 0);
     const totalRiskAccounts = parentAccounts.filter(acc => 
-      acc.cre_risk || (acc.cre_count && acc.cre_count > 0)
+      acc.cre_status !== null
     ).length;
     const totalActiveReps = allActiveSalesReps.length;
     
@@ -318,7 +421,9 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       }
       
       const arr = parseFloat(account.hierarchy_bookings_arr_converted) || parseFloat(account.calculated_arr) || parseFloat(account.arr) || 0;
-      const atr = parseFloat(account.calculated_atr) || parseFloat(account.atr) || 0;
+      // Get ATR from opportunities (preferred) or fall back to account field
+      const atrFromOpps = getAccountATR(account.sfdc_account_id);
+      const atr = atrFromOpps || parseFloat(account.calculated_atr) || parseFloat(account.atr) || 0;
 
       acc[slm][flm].totalAccounts++;
       acc[slm][flm].totalARR += arr;
@@ -361,8 +466,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         acc[slm][flm].unassignedTierCount++;
       }
       
-      // Enhanced Risk accounts (includes multiple risk factors)
-      if (account.cre_risk || (account.cre_count && account.cre_count > 0)) {
+      // Risk accounts - based on CRE status from opportunities
+      if (account.cre_status !== null) {
         acc[slm][flm].riskCount++;
       }
       
@@ -445,7 +550,133 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       totalActiveReps,
       portfoliosBySLM: processedPortfoliosBySLM
     };
-  }, [allAccounts, buildData, allActiveSalesReps]);
+  }, [allAccounts, buildData, allActiveSalesReps, opportunitiesForATR]);
+
+  // Calculate prospect portfolio summary by SLM/FLM
+  const prospectPortfolioSummary = useMemo(() => {
+    if (!prospectAccounts || !buildData || !allActiveSalesReps) return null;
+
+    const salesRepsMap = buildData.salesRepsByRepId;
+    const totalAccounts = prospectAccounts.length;
+    const totalActiveReps = allActiveSalesReps.length;
+
+    // Group prospect accounts by SLM/FLM
+    const portfoliosBySLM = prospectAccounts.reduce((acc, account) => {
+      const currentOwnerId = account.new_owner_id || account.owner_id;
+      const currentOwnerRep = salesRepsMap.get(currentOwnerId);
+      const slm = currentOwnerRep?.slm || 'Unassigned SLM';
+      const flm = currentOwnerRep?.flm || currentOwnerRep?.manager || 'Unassigned FLM';
+      
+      if (!acc[slm]) {
+        acc[slm] = {};
+      }
+      
+      if (!acc[slm][flm]) {
+        acc[slm][flm] = { 
+          totalAccounts: 0,
+          tier1Count: 0,
+          tier2Count: 0,
+          tier3Count: 0,
+          tier4Count: 0,
+          unassignedTierCount: 0,
+          retainedCount: 0,
+          reps: new Set(),
+          activeReps: new Set(),
+          accounts: [],
+          geoBreakdown: new Map<string, number>()
+        };
+      }
+
+      acc[slm][flm].totalAccounts++;
+      acc[slm][flm].accounts.push(account);
+      
+      // Track geo distribution
+      const geo = account.geo || 'Unknown';
+      acc[slm][flm].geoBreakdown.set(geo, (acc[slm][flm].geoBreakdown.get(geo) || 0) + 1);
+      
+      // Add rep names
+      if (account.new_owner_name || account.owner_name) {
+        acc[slm][flm].reps.add(account.new_owner_name || account.owner_name);
+      }
+      
+      // Add active reps only
+      if (currentOwnerId) {
+        const activeRep = allActiveSalesReps.find(rep => rep.rep_id === currentOwnerId);
+        if (activeRep) {
+          acc[slm][flm].activeReps.add(activeRep.name);
+        }
+      }
+      
+      // Calculate retention
+      if (!account.new_owner_id || account.owner_id === account.new_owner_id) {
+        acc[slm][flm].retainedCount++;
+      }
+      
+      // Tier classification (use initial_sale_tier for prospects)
+      const tier = account.initial_sale_tier?.toLowerCase() || account.expansion_tier?.toLowerCase();
+      if (tier === 'tier 1' || tier === '1') {
+        acc[slm][flm].tier1Count++;
+      } else if (tier === 'tier 2' || tier === '2') {
+        acc[slm][flm].tier2Count++;
+      } else if (tier === 'tier 3' || tier === '3') {
+        acc[slm][flm].tier3Count++;
+      } else if (tier === 'tier 4' || tier === '4') {
+        acc[slm][flm].tier4Count++;
+      } else {
+        acc[slm][flm].unassignedTierCount++;
+      }
+      
+      return acc;
+    }, {} as Record<string, Record<string, { 
+      totalAccounts: number;
+      tier1Count: number;
+      tier2Count: number;
+      tier3Count: number;
+      tier4Count: number;
+      unassignedTierCount: number;
+      retainedCount: number;
+      reps: Set<string>;
+      activeReps: Set<string>;
+      accounts: any[];
+      geoBreakdown: Map<string, number>;
+    }>>);
+
+    // Convert Sets to arrays and calculate percentages
+    const processedPortfoliosBySLM = Object.entries(portfoliosBySLM).reduce((slmAcc, [slm, flmData]) => {
+      slmAcc[slm] = Object.entries(flmData).reduce((flmAcc, [flm, data]) => {
+        const retentionPercentage = data.totalAccounts > 0 ? (data.retainedCount / data.totalAccounts) * 100 : 0;
+        const activeRepCount = data.activeReps.size;
+        
+        // Get top geo
+        let topGeo = '-';
+        let topGeoCount = 0;
+        data.geoBreakdown.forEach((count, geo) => {
+          if (count > topGeoCount) {
+            topGeoCount = count;
+            topGeo = geo;
+          }
+        });
+        
+        flmAcc[flm] = {
+          ...data,
+          reps: Array.from(data.reps),
+          activeReps: Array.from(data.activeReps),
+          activeRepCount,
+          retentionPercentage,
+          topGeo,
+          geoBreakdown: Object.fromEntries(data.geoBreakdown)
+        };
+        return flmAcc;
+      }, {} as Record<string, any>);
+      return slmAcc;
+    }, {} as Record<string, Record<string, any>>);
+
+    return {
+      totalAccounts,
+      totalActiveReps,
+      portfoliosBySLM: processedPortfoliosBySLM
+    };
+  }, [prospectAccounts, buildData, allActiveSalesReps]);
 
   const handleExportReview = () => {
     if (!allAccounts || !portfolioSummary) return;
@@ -461,7 +692,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
     // Portfolio Summary Section
     csvRows.push('=== PORTFOLIO SUMMARY BY FLM/SLM ===');
     csvRows.push('');
-    csvRows.push('SLM,FLM,Total Accounts,Total ARR,Total ATR,Active Reps,Tier 1,Tier 2,Tier 3,Tier 4,Unassigned Tier,Risk Accounts,Retention Rate %');
+    csvRows.push('SLM,FLM,Parent Accounts,Total ARR,Total ATR,Active Reps,Tier 1,Tier 2,Tier 3,Tier 4,Unassigned Tier,At-Risk Parents,Retention Rate %');
     
     Object.entries(portfolioSummary.portfoliosBySLM).forEach(([slm, flmData]) => {
       Object.entries(flmData).forEach(([flm, data]: [string, any]) => {
@@ -504,9 +735,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         change.expansion_tier || 'Unassigned',
         `"${change.owner_name || 'Unassigned'}"`,
         `"${change.new_owner_name || 'Unassigned'}"`,
-        change.cre_risk ? 'Yes' : 'No',
-        change.cre_count || 0,
-        change.risk_flag ? 'Yes' : 'No'
+        change.cre_status || '',
+        change.cre_count || 0
       ].join(','));
     });
     
@@ -530,13 +760,33 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
     });
   };
 
-  if (buildLoading || accountsLoading || changesLoading || repsLoading || reviewsLoading) {
+  // Calculate prospect metrics (must be before conditional returns to follow React hooks rules)
+  const prospectMetrics = useMemo(() => {
+    if (!prospectAccounts) return null;
+    
+    const totalProspects = prospectAccounts.length;
+    const assignedProspects = prospectAccounts.filter(acc => acc.new_owner_id && acc.new_owner_id.trim() !== '');
+    const reassignedProspects = prospectAccounts.filter(acc => {
+      const hasNewOwner = acc.new_owner_id && acc.new_owner_id.trim() !== '';
+      const ownerChanged = acc.owner_id !== acc.new_owner_id;
+      return hasNewOwner && ownerChanged;
+    });
+    
+    return {
+      total: totalProspects,
+      assigned: assignedProspects.length,
+      reassigned: reassignedProspects.length,
+      retentionRate: totalProspects > 0 
+        ? ((totalProspects - reassignedProspects.length) / totalProspects) * 100 
+        : 0
+    };
+  }, [prospectAccounts]);
+
+  if (buildLoading || accountsLoading || prospectsLoading || changesLoading || repsLoading || reviewsLoading) {
     return (
-      <div className="space-y-6">
-        <div className="flex items-center gap-2">
-          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-          <span>Loading review data...</span>
-        </div>
+      <div className="p-6 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin mr-2" />
+        <span>Loading review data...</span>
       </div>
     );
   }
@@ -637,139 +887,289 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         </div>
       </div>
 
-      {/* Portfolio Summary Cards */}
-      {portfolioSummary && (
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Customer Accounts</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{portfolioSummary.totalAccounts}</div>
-              <p className="text-xs text-muted-foreground">
-                Customer accounts only
-              </p>
-            </CardContent>
-          </Card>
+      {/* View Mode Toggle */}
+      <div className="flex items-center justify-between">
+        <ToggleGroup 
+          type="single" 
+          value={viewMode} 
+          onValueChange={(value) => value && setViewMode(value as 'customers' | 'prospects' | 'all')}
+          className="bg-muted p-1 rounded-lg"
+        >
+          <ToggleGroupItem value="all" className="data-[state=on]:bg-background px-4">
+            <Users className="h-4 w-4 mr-2" />
+            All Accounts
+          </ToggleGroupItem>
+          <ToggleGroupItem value="customers" className="data-[state=on]:bg-background px-4">
+            <Building2 className="h-4 w-4 mr-2" />
+            Customers
+          </ToggleGroupItem>
+          <ToggleGroupItem value="prospects" className="data-[state=on]:bg-background px-4">
+            <Target className="h-4 w-4 mr-2" />
+            Prospects
+          </ToggleGroupItem>
+        </ToggleGroup>
+        <p className="text-sm text-muted-foreground">
+          {viewMode === 'all' && `${portfolioSummary?.totalAccounts || 0} customers + ${prospectMetrics?.total || 0} prospects`}
+          {viewMode === 'customers' && `${portfolioSummary?.totalAccounts || 0} customer accounts`}
+          {viewMode === 'prospects' && `${prospectMetrics?.total || 0} prospect accounts`}
+        </p>
+      </div>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Active Reps</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{portfolioSummary.totalActiveReps}</div>
-              <p className="text-xs text-muted-foreground">
-                Assignment eligible
-              </p>
-            </CardContent>
-          </Card>
+      {/* Summary Cards - Combined View */}
+      {(viewMode === 'all' || viewMode === 'customers') && portfolioSummary && (
+        <div className="space-y-2">
+          {viewMode === 'all' && <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Building2 className="h-4 w-4" /> Customer Portfolio</h3>}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <Card className="border-l-4 border-l-green-500">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Parent Accounts</CardTitle>
+                <Building2 className="h-4 w-4 text-green-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{portfolioSummary.totalAccounts}</div>
+                <p className="text-xs text-muted-foreground">
+                  Customer hierarchies
+                </p>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total ARR</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">${(portfolioSummary.totalARR / 1000000).toFixed(1)}M</div>
-              <p className="text-xs text-muted-foreground">
-                Total revenue
-              </p>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total ARR</CardTitle>
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">${(portfolioSummary.totalARR / 1000000).toFixed(1)}M</div>
+                <p className="text-xs text-muted-foreground">
+                  Customer revenue
+                </p>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total ATR</CardTitle>
-              <CheckCircle className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">${(portfolioSummary.totalATR / 1000000).toFixed(1)}M</div>
-              <p className="text-xs text-muted-foreground">
-                Available to renew
-              </p>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total ATR</CardTitle>
+                <CheckCircle className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">${(portfolioSummary.totalATR / 1000000).toFixed(1)}M</div>
+                <p className="text-xs text-muted-foreground">
+                  Available to renew
+                </p>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Risk Accounts</CardTitle>
-              <AlertCircle className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-red-600">{portfolioSummary.totalRiskAccounts}</div>
-              <p className="text-xs text-muted-foreground">
-                Require attention
-              </p>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">At-Risk Parents</CardTitle>
+                <AlertCircle className="h-4 w-4 text-red-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-600">{portfolioSummary.totalRiskAccounts}</div>
+                <p className="text-xs text-muted-foreground">
+                  Parent accounts with CRE status
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Active Reps</CardTitle>
+                <Users className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{portfolioSummary.totalActiveReps}</div>
+                <p className="text-xs text-muted-foreground">
+                  Assignment eligible
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+          
+          {/* Customer Impact Analytics Row */}
+          {assignmentChanges && allAccounts && (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-3">
+              <Card className="border-l-4 border-l-green-500">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Parents Reassigned</CardTitle>
+                  <ArrowRight className="h-4 w-4 text-green-600" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{assignmentChanges.length}</div>
+                  <p className="text-xs text-muted-foreground">
+                    {allAccounts.length > 0 ? ((assignmentChanges.length / allAccounts.length) * 100).toFixed(1) : 0}% of parent accounts
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">ARR Impacted</CardTitle>
+                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">
+                    ${(assignmentChanges.reduce((sum, acc) => {
+                      const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                      return sum + arrValue;
+                    }, 0) / 1000000).toFixed(1)}M
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    From reassigned accounts
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Retention Rate</CardTitle>
+                  <CheckCircle className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">
+                    {allAccounts.length > 0 ? (((allAccounts.length - assignmentChanges.length) / allAccounts.length) * 100).toFixed(1) : 0}%
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Accounts staying with same owner
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">High-Risk Reassignments</CardTitle>
+                  <AlertCircle className="h-4 w-4 text-red-500" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-red-600">
+                    {assignmentChanges.filter(acc => acc.cre_status !== null).length}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Parents with CRE status being reassigned
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Impact Analytics Row */}
-      {assignmentChanges && allAccounts && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Accounts Reassigned</CardTitle>
-              <ArrowRight className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{assignmentChanges.length}</div>
-              <p className="text-xs text-muted-foreground">
-                {allAccounts.length > 0 ? ((assignmentChanges.length / allAccounts.length) * 100).toFixed(1) : 0}% of total
-              </p>
-            </CardContent>
-          </Card>
+      {/* Prospect Summary Cards */}
+      {(viewMode === 'all' || viewMode === 'prospects') && prospectMetrics && (
+        <div className="space-y-2">
+          {viewMode === 'all' && <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Target className="h-4 w-4" /> Prospect Portfolio</h3>}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Card className="border-l-4 border-l-blue-500">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Parent Accounts</CardTitle>
+                <Target className="h-4 w-4 text-blue-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{prospectMetrics.total}</div>
+                <p className="text-xs text-muted-foreground">
+                  Prospect hierarchies
+                </p>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">ARR Impacted</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                ${(assignmentChanges.reduce((sum, acc) => {
-                  const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
-                  return sum + arrValue;
-                }, 0) / 1000000).toFixed(1)}M
-              </div>
-              <p className="text-xs text-muted-foreground">
-                From reassigned accounts
-              </p>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Assigned</CardTitle>
+                <CheckCircle className="h-4 w-4 text-green-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{prospectMetrics.assigned}</div>
+                <p className="text-xs text-muted-foreground">
+                  Have new owner
+                </p>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Retention Rate</CardTitle>
-              <CheckCircle className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {allAccounts.length > 0 ? (((allAccounts.length - assignmentChanges.length) / allAccounts.length) * 100).toFixed(1) : 0}%
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Accounts staying with same owner
-              </p>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Reassigned</CardTitle>
+                <ArrowRight className="h-4 w-4 text-amber-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{prospectMetrics.reassigned}</div>
+                <p className="text-xs text-muted-foreground">
+                  Ownership changed
+                </p>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">High-Risk Reassignments</CardTitle>
-              <AlertCircle className="h-4 w-4 text-destructive" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-destructive">
-                {assignmentChanges.filter(acc => (acc.cre_count || 0) > 0 || acc.cre_risk || acc.risk_flag).length}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                CRE accounts being reassigned
-              </p>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Retention Rate</CardTitle>
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{prospectMetrics.retentionRate.toFixed(1)}%</div>
+                <p className="text-xs text-muted-foreground">
+                  Same owner kept
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+          
+          {/* Prospect Impact Analytics Row */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-3">
+            <Card className="border-l-4 border-l-blue-500">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Prospects Reassigned</CardTitle>
+                <ArrowRight className="h-4 w-4 text-blue-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{prospectMetrics.reassigned}</div>
+                <p className="text-xs text-muted-foreground">
+                  {prospectMetrics.total > 0 ? ((prospectMetrics.reassigned / prospectMetrics.total) * 100).toFixed(1) : 0}% of prospects
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">New Assignments</CardTitle>
+                <CheckCircle className="h-4 w-4 text-green-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">{prospectMetrics.assigned}</div>
+                <p className="text-xs text-muted-foreground">
+                  Now have owner assigned
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Kept Same Owner</CardTitle>
+                <Users className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {prospectMetrics.total - prospectMetrics.reassigned}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Owner unchanged
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Coverage Rate</CardTitle>
+                <Target className="h-4 w-4 text-blue-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-blue-600">
+                  {prospectMetrics.total > 0 ? ((prospectMetrics.assigned / prospectMetrics.total) * 100).toFixed(1) : 0}%
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Prospects with owners
+                </p>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       )}
 
@@ -783,6 +1183,33 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         </TabsList>
 
         <TabsContent value="summary" className="space-y-6">
+          {/* Portfolio Type Toggle */}
+          <div className="flex items-center gap-4 p-4 bg-muted/30 rounded-lg">
+            <span className="text-sm font-medium">View:</span>
+            <div className="flex gap-2">
+              <Button
+                variant={portfolioType === 'customers' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setPortfolioType('customers')}
+                className="gap-2"
+              >
+                <Users className="h-4 w-4" />
+                Customers ({allAccounts?.length || 0})
+              </Button>
+              <Button
+                variant={portfolioType === 'prospects' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setPortfolioType('prospects')}
+                className="gap-2"
+              >
+                <Building className="h-4 w-4" />
+                Prospects ({prospectAccounts?.length || 0})
+              </Button>
+            </div>
+          </div>
+
+          {/* Customer Portfolio Summary */}
+          {portfolioType === 'customers' && (
           <Card>
             <CardHeader>
               <CardTitle>Customer Portfolio Summary by FLM and SLM</CardTitle>
@@ -804,10 +1231,10 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                              <TableRow>
                                <TableHead>Manager/Rep</TableHead>
                                <TableHead className="text-center">Reps</TableHead>
-                               <TableHead className="text-center">Accounts</TableHead>
+                               <TableHead className="text-center">Parents</TableHead>
                                <TableHead className="text-center">ARR</TableHead>
                                <TableHead className="text-center">ATR</TableHead>
-                               <TableHead className="text-center">Risk Accounts</TableHead>
+                               <TableHead className="text-center">At-Risk</TableHead>
                                <TableHead className="text-center">Retention %</TableHead>
                                <TableHead className="text-center">Tier Distribution</TableHead>
                                <TableHead>Actions</TableHead>
@@ -918,6 +1345,132 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
               )}
             </CardContent>
           </Card>
+          )}
+
+          {/* Prospect Portfolio Summary */}
+          {portfolioType === 'prospects' && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Prospect Portfolio Summary by FLM and SLM</CardTitle>
+              <CardDescription>
+                Complete view of all prospect account portfolios organized by First Line Manager (FLM) and Second Line Manager (SLM)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {prospectPortfolioSummary ? (
+                <div className="space-y-6">
+                  {Object.entries(prospectPortfolioSummary.portfoliosBySLM).map(([slm, flmData]) => (
+                    <div key={slm} className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-semibold">{slm}</h3>
+                        <Badge variant="outline" className="text-xs">SLM</Badge>
+                      </div>
+                          <Table>
+                           <TableHeader>
+                             <TableRow>
+                               <TableHead>Manager/Rep</TableHead>
+                               <TableHead className="text-center">Reps</TableHead>
+                               <TableHead className="text-center">Prospects</TableHead>
+                               <TableHead className="text-center">Top Geo</TableHead>
+                               <TableHead className="text-center">Retention %</TableHead>
+                               <TableHead className="text-center">Tier Distribution</TableHead>
+                               <TableHead>Actions</TableHead>
+                             </TableRow>
+                           </TableHeader>
+                          <TableBody>
+                            {Object.entries(flmData).map(([flm, data]) => (
+                              <>
+                                 <TableRow key={`${slm}-${flm}`} className="border-l-2 border-blue-200 hover:bg-muted/50 transition-colors cursor-pointer"
+                                   onClick={() => setSelectedFLM({ flm, slm, data })}>
+                                  <TableCell className="pl-4 font-medium">{flm} (FLM)</TableCell>
+                                  <TableCell className="text-center">{data.activeRepCount}</TableCell>
+                                  <TableCell className="text-center font-medium text-blue-600">{data.totalAccounts}</TableCell>
+                                  <TableCell className="text-center">
+                                    <Badge variant="outline" className="text-xs">{data.topGeo}</Badge>
+                                  </TableCell>
+                                  <TableCell className="text-center">
+                                    <div className="flex items-center justify-center gap-2">
+                                      <Progress 
+                                        value={data.retentionPercentage} 
+                                        className="w-16" 
+                                      />
+                                      <span className="text-xs font-medium">{data.retentionPercentage.toFixed(1)}%</span>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-center">
+                                    <div className="flex flex-wrap gap-1 justify-center">
+                                      {data.tier1Count > 0 && (
+                                        <Badge variant="default" className="text-xs">T1: {data.tier1Count}</Badge>
+                                      )}
+                                      {data.tier2Count > 0 && (
+                                        <Badge variant="secondary" className="text-xs">T2: {data.tier2Count}</Badge>
+                                      )}
+                                      {data.tier3Count > 0 && (
+                                        <Badge variant="outline" className="text-xs">T3: {data.tier3Count}</Badge>
+                                      )}
+                                      {data.tier4Count > 0 && (
+                                        <Badge variant="outline" className="text-xs">T4: {data.tier4Count}</Badge>
+                                      )}
+                                      {data.unassignedTierCount > 0 && (
+                                        <Badge variant="outline" className="text-xs text-muted-foreground">?: {data.unassignedTierCount}</Badge>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <span className="text-sm text-muted-foreground">View Details</span>
+                                  </TableCell>
+                                </TableRow>
+                              </>
+                            ))}
+                            {/* SLM Total Row */}
+                            <TableRow className="bg-blue-50/50 border-l-4 border-blue-500 font-semibold">
+                              <TableCell className="pl-4 font-bold text-blue-700">
+                                {slm} Total
+                              </TableCell>
+                              <TableCell className="text-center font-bold text-blue-700">
+                                {Object.values(flmData).reduce((sum, data) => sum + data.activeRepCount, 0)}
+                              </TableCell>
+                              <TableCell className="text-center font-bold text-blue-700">
+                                {Object.values(flmData).reduce((sum, data) => sum + data.totalAccounts, 0)}
+                              </TableCell>
+                              <TableCell className="text-center">-</TableCell>
+                              <TableCell className="text-center font-bold text-blue-700">
+                                {(() => {
+                                  const totalAccounts = Object.values(flmData).reduce((sum, data) => sum + data.totalAccounts, 0);
+                                  const totalRetained = Object.values(flmData).reduce((sum, data) => sum + data.retainedCount, 0);
+                                  return totalAccounts > 0 ? ((totalRetained / totalAccounts) * 100).toFixed(1) : 0;
+                                })()}%
+                              </TableCell>
+                              <TableCell></TableCell>
+                              <TableCell>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedSLMForSend(slm);
+                                  }}
+                                  className="gap-2"
+                                >
+                                  <Send className="h-4 w-4" />
+                                  Send to Manager
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                            </TableBody>
+                          </Table>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground">No prospect portfolio data found</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="changes" className="space-y-6">
@@ -1023,10 +1576,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                    </TableHeader>
                    <TableBody>
                      {largestChanges.map((change) => {
-                       const riskBadges = [];
-                       if (change.cre_risk) riskBadges.push("CRE Risk");
-                       if (change.risk_flag) riskBadges.push("Risk Flag");
-                       if (change.cre_count > 0) riskBadges.push(`CRE: ${change.cre_count}`);
+                       // Show CRE status badge if present
+                       const creStatus = change.cre_status;
 
                        return (
                          <TableRow 
@@ -1047,22 +1598,21 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                            </TableCell>
                            <TableCell>{change.owner_name || 'Unassigned'}</TableCell>
                            <TableCell className="font-medium">{change.new_owner_name}</TableCell>
-                           <TableCell>
-                             {riskBadges.length > 0 ? (
-                               <div className="flex flex-wrap gap-1">
-                                 {riskBadges.map((risk, index) => (
-                                   <Badge key={index} variant="destructive" className="text-xs">
-                                     {risk}
-                                   </Badge>
-                                 ))}
-                               </div>
-                             ) : (
-                               <span className="text-xs text-muted-foreground">None</span>
-                             )}
-                           </TableCell>
-                         </TableRow>
-                       );
-                     })}
+                          <TableCell>
+                            {creStatus ? (
+                              <Badge 
+                                variant={creStatus === 'Confirmed Churn' || creStatus === 'At Risk' ? 'destructive' : 'secondary'}
+                                className="text-xs"
+                              >
+                                {creStatus}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">None</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                    </TableBody>
                  </Table>
               ) : (
@@ -1200,23 +1750,28 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
               </CardContent>
             </Card>
 
-            {/* High-Risk Reassignments */}
+            {/* At-Risk Parent Reassignments */}
             <Card>
               <CardHeader>
-                <CardTitle>High-Risk Reassignments</CardTitle>
+                <CardTitle>At-Risk Parent Reassignments</CardTitle>
                 <CardDescription>
-                  CRE accounts being moved to new owners
+                  Parent accounts with CRE status being moved to new owners
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 {assignmentChanges && (
                   <div className="space-y-3">
                     {assignmentChanges
-                      .filter(acc => (acc.cre_count || 0) > 0 || acc.cre_risk || acc.risk_flag)
-                      .sort((a, b) => (b.cre_count || 0) - (a.cre_count || 0))
+                      .filter(acc => acc.cre_status !== null)
+                      .sort((a, b) => {
+                        // Sort by severity: Confirmed Churn > At Risk > Pre-Risk Discovery > Monitoring > Closed
+                        const severity: Record<string, number> = { 'Confirmed Churn': 5, 'At Risk': 4, 'Pre-Risk Discovery': 3, 'Monitoring': 2, 'Closed': 1 };
+                        return (severity[b.cre_status] || 0) - (severity[a.cre_status] || 0);
+                      })
                       .slice(0, 5)
                       .map(acc => {
                         const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                        const isHighRisk = acc.cre_status === 'Confirmed Churn' || acc.cre_status === 'At Risk';
                         return (
                           <div
                             key={acc.sfdc_account_id}
@@ -1228,7 +1783,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                           >
                             <div className="flex-1 min-w-0">
                               <div className="font-medium truncate flex items-center gap-2">
-                                <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />
+                                <AlertCircle className={`h-4 w-4 flex-shrink-0 ${isHighRisk ? 'text-destructive' : 'text-amber-500'}`} />
                                 {acc.account_name}
                               </div>
                               <div className="text-sm text-muted-foreground">
@@ -1236,8 +1791,11 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                               </div>
                             </div>
                             <div className="text-right ml-4">
-                              <Badge variant="destructive" className="mb-1">
-                                {acc.cre_count} CRE
+                              <Badge 
+                                variant={isHighRisk ? 'destructive' : 'secondary'} 
+                                className="mb-1"
+                              >
+                                {acc.cre_status}
                               </Badge>
                               <div className="text-xs text-muted-foreground">
                                 ${(arrValue / 1000000).toFixed(1)}M ARR
@@ -1246,9 +1804,9 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                           </div>
                         );
                       })}
-                    {assignmentChanges.filter(acc => (acc.cre_count || 0) > 0 || acc.cre_risk || acc.risk_flag).length === 0 && (
+                    {assignmentChanges.filter(acc => acc.cre_status !== null).length === 0 && (
                       <p className="text-center text-muted-foreground py-4">
-                        No high-risk accounts being reassigned
+                        No at-risk parent accounts being reassigned
                       </p>
                     )}
                   </div>

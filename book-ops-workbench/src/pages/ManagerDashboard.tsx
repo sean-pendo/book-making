@@ -7,12 +7,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
-import { Loader2, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, AlertCircle, ClipboardCheck } from 'lucide-react';
 import ManagerHierarchyView from '@/components/ManagerHierarchyView';
 import ManagerBeforeAfterComparison from '@/components/ManagerBeforeAfterComparison';
 import ManagerPendingApprovals from '@/components/ManagerPendingApprovals';
 import ManagerReviewsAndNotes from '@/components/ManagerReviewsAndNotes';
 import ManagerAIAssistant from '@/components/ManagerAIAssistant';
+import SLMApprovalQueue from '@/components/SLMApprovalQueue';
 
 export default function ManagerDashboard() {
   const { user, effectiveProfile } = useAuth();
@@ -96,60 +97,45 @@ export default function ManagerDashboard() {
     }
   };
 
-  // Approve all reassignments mutation
+  // SLM approves FLM proposals - moves them to pending_revops for final approval
   const approveAllMutation = useMutation({
     mutationFn: async (buildId: string) => {
-      // Fetch all pending reassignments for this build and manager
+      // Fetch all pending_slm reassignments for FLMs under this SLM
       const { data: reassignments, error: fetchError } = await supabase
         .from('manager_reassignments')
         .select('*')
         .eq('build_id', buildId)
-        .eq('manager_user_id', user!.id)
-        .eq('status', 'pending');
+        .eq('approval_status', 'pending_slm');
 
       if (fetchError) throw fetchError;
       if (!reassignments || reassignments.length === 0) {
-        throw new Error('No pending reassignments found');
+        throw new Error('No pending FLM proposals found');
       }
 
-      // Update all reassignments to approved
+      // Update all reassignments to pending_revops (awaiting RevOps final approval)
       const { error: updateError } = await supabase
         .from('manager_reassignments')
         .update({
-          status: 'approved',
-          approved_by: user!.id,
-          approved_at: new Date().toISOString(),
+          approval_status: 'pending_revops',
+          slm_approved_by: user!.id,
+          slm_approved_at: new Date().toISOString(),
         })
         .eq('build_id', buildId)
-        .eq('manager_user_id', user!.id)
-        .eq('status', 'pending');
+        .eq('approval_status', 'pending_slm');
 
       if (updateError) throw updateError;
-
-      // Update all accounts with new owners
-      for (const reassignment of reassignments) {
-        const { error: accountError } = await supabase
-          .from('accounts')
-          .update({
-            new_owner_id: reassignment.proposed_owner_id,
-            new_owner_name: reassignment.proposed_owner_name,
-          })
-          .eq('sfdc_account_id', reassignment.sfdc_account_id)
-          .eq('build_id', reassignment.build_id);
-
-        if (accountError) throw accountError;
-      }
 
       return reassignments.length;
     },
     onSuccess: (count) => {
       toast({
-        title: 'All Books Approved',
-        description: `Successfully approved ${count} reassignment${count !== 1 ? 's' : ''} and updated accounts.`,
+        title: 'FLM Proposals Approved',
+        description: `Approved ${count} proposal${count !== 1 ? 's' : ''}. Sent to RevOps for final approval.`,
       });
       queryClient.invalidateQueries({ queryKey: ['reassignments-for-review'] });
       queryClient.invalidateQueries({ queryKey: ['manager-accounts'] });
       queryClient.invalidateQueries({ queryKey: ['manager-sales-reps'] });
+      queryClient.invalidateQueries({ queryKey: ['slm-pending-approvals'] });
     },
     onError: (error: any) => {
       toast({
@@ -242,7 +228,8 @@ export default function ManagerDashboard() {
                             </Button>
                           </>
                         )}
-                        {(review.status === 'in_review' || review.status === 'pending') && (
+                        {/* SLMs can approve FLM proposals - FLMs can only propose */}
+                        {effectiveProfile?.role === 'SLM' && (review.status === 'in_review' || review.status === 'pending') && (
                           <Button 
                             onClick={() => approveAllMutation.mutate(review.build_id)}
                             disabled={approveAllMutation.isPending}
@@ -254,7 +241,7 @@ export default function ManagerDashboard() {
                             ) : (
                               <CheckCircle className="w-4 h-4" />
                             )}
-                            Approve All Books
+                            Approve All FLM Proposals
                           </Button>
                         )}
                       </div>
@@ -275,10 +262,16 @@ export default function ManagerDashboard() {
                 </Card>
 
                 <Tabs defaultValue="team-view" className="w-full">
-                  <TabsList className="grid w-full grid-cols-3">
+                  <TabsList className={`grid w-full ${effectiveProfile?.role === 'SLM' ? 'grid-cols-4' : 'grid-cols-3'}`}>
                     <TabsTrigger value="team-view">Team View</TabsTrigger>
                     <TabsTrigger value="before-after">Before & After</TabsTrigger>
-                    <TabsTrigger value="approvals">Pending Approvals</TabsTrigger>
+                    <TabsTrigger value="approvals">My Proposals</TabsTrigger>
+                    {effectiveProfile?.role === 'SLM' && (
+                      <TabsTrigger value="slm-queue" className="gap-1">
+                        <ClipboardCheck className="w-4 h-4" />
+                        FLM Approvals
+                      </TabsTrigger>
+                    )}
                   </TabsList>
 
                   <TabsContent value="team-view" className="mt-6 relative">
@@ -307,6 +300,15 @@ export default function ManagerDashboard() {
                   <TabsContent value="approvals" className="mt-6">
                     <ManagerPendingApprovals buildId={review.build_id} />
                   </TabsContent>
+
+                  {effectiveProfile?.role === 'SLM' && (
+                    <TabsContent value="slm-queue" className="mt-6">
+                      <SLMApprovalQueue 
+                        buildId={review.build_id} 
+                        slmName={review.manager_name}
+                      />
+                    </TabsContent>
+                  )}
                 </Tabs>
               </div>
             </TabsContent>

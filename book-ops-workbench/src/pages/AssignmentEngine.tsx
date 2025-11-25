@@ -34,6 +34,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { AIBalancingOptimizer } from '@/services/aiBalancingOptimizer';
 import { AIBalancingOptimizerDialog } from '@/components/AIBalancingOptimizerDialog';
 import { ImbalanceWarningDialog } from '@/components/ImbalanceWarningDialog';
+import { AssignmentSuccessDialog } from '@/components/AssignmentSuccessDialog';
 import { fixOwnerAssignments } from '@/utils/fixOwnerAssignments';
 import { QuickResetButton } from '@/components/QuickResetButton';
 
@@ -98,6 +99,8 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
   const [newOwnerFilter, setNewOwnerFilter] = useState('');
   const [lockStatusFilter, setLockStatusFilter] = useState('all');
   const [showPreviewDialog, setShowPreviewDialog] = useState(false);
+  const [showSuccessDialog, setShowSuccessDialog] = useState(false);
+  const [appliedAssignmentCount, setAppliedAssignmentCount] = useState(0);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [showAssignmentProgress, setShowAssignmentProgress] = useState(false);
   const [assignmentProgress, setAssignmentProgress] = useState({
@@ -696,10 +699,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
       
       console.log('[Execute] ✅ Assignment execution completed successfully');
       
-      toast({
-        title: "✅ Assignments Applied Successfully", 
-        description: `${proposalCount} assignments executed. New owners assigned and all tabs refreshed with current data.`,
-      });
+      // Show success dialog with animated confirmation
+      setAppliedAssignmentCount(proposalCount);
+      setShowSuccessDialog(true);
 
       // Force refresh all data after execution
       console.log('[Execute] 🔄 Triggering final data refresh...');
@@ -2287,6 +2289,21 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
           onDismiss={handleImbalanceDismiss}
         />
       )}
+
+      {/* Assignment Success Dialog - animated confirmation */}
+      <AssignmentSuccessDialog
+        open={showSuccessDialog}
+        onClose={() => setShowSuccessDialog(false)}
+        assignmentCount={appliedAssignmentCount}
+        onViewBalancing={() => {
+          setShowSuccessDialog(false);
+          navigate(`/build/${buildId}?tab=balancing`);
+        }}
+        onViewReview={() => {
+          setShowSuccessDialog(false);
+          navigate(`/build/${buildId}?tab=review`);
+        }}
+      />
     </div>
   );
 };

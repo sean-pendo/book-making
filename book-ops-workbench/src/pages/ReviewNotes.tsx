@@ -52,8 +52,11 @@ export default function ReviewNotes() {
         .select('*')
         .eq('build_id', selectedBuildId);
 
-      // Role-based filtering
-      if (effectiveProfile?.role === 'SLM' || effectiveProfile?.role === 'FLM') {
+      // Role-based filtering and approval_status filtering
+      if (effectiveProfile?.role === 'REVOPS') {
+        // REVOPS sees items awaiting their final approval (pending_revops)
+        query = query.eq('approval_status', 'pending_revops');
+      } else if (effectiveProfile?.role === 'SLM' || effectiveProfile?.role === 'FLM') {
         // Get the manager's name from sales_reps to determine if they're FLM or SLM
         const managerName = effectiveProfile.full_name;
         
@@ -71,7 +74,6 @@ export default function ReviewNotes() {
           query = query.in('current_owner_id', managedRepIds);
         }
       }
-      // REVOPS and LEADERSHIP see everything (no additional filter)
 
       const { data, error } = await query.order('created_at', { ascending: false });
 
@@ -139,7 +141,7 @@ export default function ReviewNotes() {
     enabled: !!selectedBuildId,
   });
 
-  // Approve reassignment mutation
+  // RevOps final approval - applies the change to the account
   const approveMutation = useMutation({
     mutationFn: async ({ id, rationale }: { id: string; rationale: string }) => {
       // First, get the reassignment details
@@ -151,11 +153,14 @@ export default function ReviewNotes() {
 
       if (fetchError) throw fetchError;
 
-      // Update the reassignment status
+      // Update the reassignment status to final approved
       const { error: updateError } = await supabase
         .from('manager_reassignments')
         .update({
           status: 'approved',
+          approval_status: 'approved',
+          revops_approved_by: user!.id,
+          revops_approved_at: new Date().toISOString(),
           approved_by: user!.id,
           approved_at: new Date().toISOString(),
         })
@@ -163,7 +168,7 @@ export default function ReviewNotes() {
 
       if (updateError) throw updateError;
 
-      // Update the account with the new owner
+      // Update the account with the new owner (final step - change is applied)
       const { error: accountError } = await supabase
         .from('accounts')
         .update({
@@ -178,11 +183,12 @@ export default function ReviewNotes() {
     onSuccess: () => {
       toast({
         title: 'Reassignment Approved',
-        description: 'The account reassignment has been approved and reflected in manager dashboards.',
+        description: 'Final approval complete. The account has been reassigned.',
       });
       queryClient.invalidateQueries({ queryKey: ['reassignments-for-review'] });
       queryClient.invalidateQueries({ queryKey: ['manager-accounts'] });
       queryClient.invalidateQueries({ queryKey: ['manager-sales-reps'] });
+      queryClient.invalidateQueries({ queryKey: ['slm-pending-approvals'] });
       setSelectedReassignment(null);
       setReviewRationale('');
     },
@@ -195,15 +201,17 @@ export default function ReviewNotes() {
     },
   });
 
-  // Reject reassignment mutation
+  // RevOps reject - sends back to SLM/FLM
   const rejectMutation = useMutation({
     mutationFn: async ({ id, rationale }: { id: string; rationale: string }) => {
       const { error } = await supabase
         .from('manager_reassignments')
         .update({
           status: 'rejected',
-          approved_by: user!.id,
-          approved_at: new Date().toISOString(),
+          approval_status: 'rejected',
+          revops_approved_by: user!.id,
+          revops_approved_at: new Date().toISOString(),
+          rationale: rationale ? `[RevOps Rejected] ${rationale}` : '[RevOps Rejected]',
         })
         .eq('id', id);
 
@@ -212,9 +220,10 @@ export default function ReviewNotes() {
     onSuccess: () => {
       toast({
         title: 'Reassignment Rejected',
-        description: 'The account reassignment has been rejected.',
+        description: 'The proposal has been rejected and sent back to the manager.',
       });
       queryClient.invalidateQueries({ queryKey: ['reassignments-for-review'] });
+      queryClient.invalidateQueries({ queryKey: ['slm-pending-approvals'] });
       setSelectedReassignment(null);
       setReviewRationale('');
     },
@@ -227,16 +236,22 @@ export default function ReviewNotes() {
     },
   });
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
+  const getStatusBadge = (status: string, approvalStatus?: string) => {
+    // Use approval_status if available, otherwise fall back to status
+    const effectiveStatus = approvalStatus || status;
+    
+    switch (effectiveStatus) {
       case 'approved':
         return <Badge className="bg-success/10 text-success hover:bg-success/20"><CheckCircle className="w-3 h-3 mr-1" />Approved</Badge>;
       case 'rejected':
         return <Badge variant="destructive"><XCircle className="w-3 h-3 mr-1" />Rejected</Badge>;
       case 'pending':
-        return <Badge variant="outline"><Clock className="w-3 h-3 mr-1" />Pending</Badge>;
+      case 'pending_slm':
+        return <Badge variant="outline" className="bg-amber-50 text-amber-700"><Clock className="w-3 h-3 mr-1" />Awaiting SLM</Badge>;
+      case 'pending_revops':
+        return <Badge variant="outline" className="bg-blue-50 text-blue-700"><Clock className="w-3 h-3 mr-1" />Awaiting RevOps</Badge>;
       default:
-        return <Badge variant="secondary">{status}</Badge>;
+        return <Badge variant="secondary">{effectiveStatus}</Badge>;
     }
   };
 

@@ -25,6 +25,7 @@ export type Database = {
           calculated_atr: number | null
           cre_count: number | null
           cre_risk: boolean | null
+          cre_status: string | null
           created_at: string | null
           employees: number | null
           enterprise_vs_commercial: string | null
@@ -75,6 +76,7 @@ export type Database = {
           calculated_atr?: number | null
           cre_count?: number | null
           cre_risk?: boolean | null
+          cre_status?: string | null
           created_at?: string | null
           employees?: number | null
           enterprise_vs_commercial?: string | null
@@ -125,6 +127,7 @@ export type Database = {
           calculated_atr?: number | null
           cre_count?: number | null
           cre_risk?: boolean | null
+          cre_status?: string | null
           created_at?: string | null
           employees?: number | null
           enterprise_vs_commercial?: string | null
@@ -661,6 +664,7 @@ export type Database = {
           owner_id: string | null
           status: Database["public"]["Enums"]["build_status"] | null
           target_date: string | null
+          team: string
           updated_at: string | null
           version_tag: string | null
         }
@@ -677,6 +681,7 @@ export type Database = {
           owner_id?: string | null
           status?: Database["public"]["Enums"]["build_status"] | null
           target_date?: string | null
+          team?: string
           updated_at?: string | null
           version_tag?: string | null
         }
@@ -693,6 +698,7 @@ export type Database = {
           owner_id?: string | null
           status?: Database["public"]["Enums"]["build_status"] | null
           target_date?: string | null
+          team?: string
           updated_at?: string | null
           version_tag?: string | null
         }
@@ -903,6 +909,7 @@ export type Database = {
       manager_reassignments: {
         Row: {
           account_name: string
+          approval_status: string | null
           approved_at: string | null
           approved_by: string | null
           build_id: string
@@ -915,12 +922,17 @@ export type Database = {
           proposed_owner_id: string
           proposed_owner_name: string
           rationale: string | null
+          revops_approved_at: string | null
+          revops_approved_by: string | null
           sfdc_account_id: string
+          slm_approved_at: string | null
+          slm_approved_by: string | null
           status: string
           updated_at: string
         }
         Insert: {
           account_name: string
+          approval_status?: string | null
           approved_at?: string | null
           approved_by?: string | null
           build_id: string
@@ -933,12 +945,17 @@ export type Database = {
           proposed_owner_id: string
           proposed_owner_name: string
           rationale?: string | null
+          revops_approved_at?: string | null
+          revops_approved_by?: string | null
           sfdc_account_id: string
+          slm_approved_at?: string | null
+          slm_approved_by?: string | null
           status?: string
           updated_at?: string
         }
         Update: {
           account_name?: string
+          approval_status?: string | null
           approved_at?: string | null
           approved_by?: string | null
           build_id?: string
@@ -951,7 +968,11 @@ export type Database = {
           proposed_owner_id?: string
           proposed_owner_name?: string
           rationale?: string | null
+          revops_approved_at?: string | null
+          revops_approved_by?: string | null
           sfdc_account_id?: string
+          slm_approved_at?: string | null
+          slm_approved_by?: string | null
           status?: string
           updated_at?: string
         }
@@ -1140,6 +1161,7 @@ export type Database = {
           region: string | null
           role: Database["public"]["Enums"]["user_role"]
           team: string | null
+          teams: string[] | null
           updated_at: string | null
         }
         Insert: {
@@ -1151,6 +1173,7 @@ export type Database = {
           region?: string | null
           role?: Database["public"]["Enums"]["user_role"]
           team?: string | null
+          teams?: string[] | null
           updated_at?: string | null
         }
         Update: {
@@ -1162,6 +1185,7 @@ export type Database = {
           region?: string | null
           role?: Database["public"]["Enums"]["user_role"]
           team?: string | null
+          teams?: string[] | null
           updated_at?: string | null
         }
         Relationships: []

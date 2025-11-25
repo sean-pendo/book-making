@@ -14,8 +14,9 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
-import { Loader2, Send, Users } from 'lucide-react';
+import { Loader2, Send, Users, Copy, Check } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 
 interface SendToManagerDialogProps {
   open: boolean;
@@ -35,6 +36,9 @@ export default function SendToManagerDialog({
   const { user } = useAuth();
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [sendToAllSLMs, setSendToAllSLMs] = useState(false);
+  const [showSuccessDialog, setShowSuccessDialog] = useState(false);
+  const [shareableLink, setShareableLink] = useState<string>('');
+  const [copied, setCopied] = useState(false);
   const queryClient = useQueryClient();
 
   // Fetch ALL users (any role can receive manager books)
@@ -108,7 +112,7 @@ export default function SendToManagerDialog({
         const { error } = await supabase
           .from('manager_reviews')
           .upsert(upserts, {
-            onConflict: 'build_id,manager_user_id',
+            onConflict: 'build_id,manager_user_id,manager_name',
             ignoreDuplicates: false,
           });
         
@@ -133,7 +137,7 @@ export default function SendToManagerDialog({
             sent_by: user!.id,
             sent_at: new Date().toISOString(),
           }, {
-            onConflict: 'build_id,manager_user_id',
+            onConflict: 'build_id,manager_user_id,manager_name',
             ignoreDuplicates: false,
           });
 
@@ -141,14 +145,27 @@ export default function SendToManagerDialog({
         return 1;
       }
     },
-    onSuccess: (count) => {
-      toast({
-        title: 'Sent to Manager(s)',
-        description: `Build sent to ${count} manager${count > 1 ? 's' : ''} for review.`,
-      });
+    onSuccess: (count, variables) => {
       queryClient.invalidateQueries({ queryKey: ['existing-reviews'] });
       queryClient.invalidateQueries({ queryKey: ['manager-reviews'] });
-      onClose();
+      
+      // Generate shareable link
+      const baseUrl = window.location.origin;
+      let link = '';
+      
+      if (sendToAllSLMs && slmNames && slmNames.length > 0) {
+        // For "send all SLMs", generate link with buildId only (manager dashboard will show all)
+        link = `${baseUrl}/manager-dashboard?buildId=${buildId}`;
+      } else if (managerName && selectedUserId) {
+        // For specific manager, include managerName in query params
+        link = `${baseUrl}/manager-dashboard?buildId=${buildId}&managerName=${encodeURIComponent(managerName)}`;
+      } else {
+        // Fallback to just buildId
+        link = `${baseUrl}/manager-dashboard?buildId=${buildId}`;
+      }
+      
+      setShareableLink(link);
+      setShowSuccessDialog(true);
       setSelectedUserId('');
       setSendToAllSLMs(false);
     },
@@ -161,9 +178,85 @@ export default function SendToManagerDialog({
     },
   });
 
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareableLink);
+      setCopied(true);
+      toast({
+        title: 'Link Copied',
+        description: 'Shareable link copied to clipboard.',
+      });
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      toast({
+        title: 'Copy Failed',
+        description: 'Could not copy link to clipboard. Please copy manually.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleSuccessClose = () => {
+    setShowSuccessDialog(false);
+    setShareableLink('');
+    setCopied(false);
+    onClose();
+  };
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <>
+      {/* Success Dialog with Link */}
+      <Dialog open={showSuccessDialog} onOpenChange={handleSuccessClose}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Check className="w-5 h-5 text-green-600" />
+              Sent Successfully
+            </DialogTitle>
+            <DialogDescription>
+              Manager access has been granted. Share this link to provide direct access.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Shareable Link</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={shareableLink}
+                  readOnly
+                  className="flex-1 font-mono text-sm"
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={handleCopyLink}
+                  className="flex-shrink-0"
+                >
+                  {copied ? (
+                    <Check className="h-4 w-4 text-green-600" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Click the link to select it, or use the copy button to share with the manager.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button onClick={handleSuccessClose}>
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Main Send Dialog */}
+      <Dialog open={open && !showSuccessDialog} onOpenChange={onClose}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -274,5 +367,6 @@ export default function SendToManagerDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    </>
   );
 }

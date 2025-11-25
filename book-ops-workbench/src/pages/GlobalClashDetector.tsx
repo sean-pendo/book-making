@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -36,20 +37,34 @@ interface AccountClash {
 
 export const GlobalClashDetector = () => {
   const { toast } = useToast();
+  const { effectiveProfile } = useAuth();
   const { id: currentBuildId } = useParams();
   const [selectedClash, setSelectedClash] = useState<AccountClash | null>(null);
   const [selectedResolution, setSelectedResolution] = useState<{type: 'build' | 'custom', buildId?: string, ownerId?: string, ownerName?: string}>({type: 'build'});
   const [resolutionRationale, setResolutionRationale] = useState('');
   const [showResolutionDialog, setShowResolutionDialog] = useState(false);
 
-  // Fetch all builds to detect clashes between them
+  // Get user's teams for filtering
+  const userTeams = effectiveProfile?.teams || [effectiveProfile?.team || 'AMER'];
+
+  // Fetch builds within the same team to detect clashes
+  // Conflicts are only relevant between builds in the same team workspace
   const { data: builds, isLoading: buildsLoading } = useQuery({
-    queryKey: ['builds-for-clash-detection'],
+    queryKey: ['builds-for-clash-detection', userTeams],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const teamsToFilter = userTeams.filter(Boolean);
+      
+      let query = supabase
         .from('builds')
-        .select('id, name, status, created_at')
+        .select('id, name, status, created_at, team')
         .order('created_at', { ascending: false });
+      
+      // Only detect clashes within same team (unless REVOPS who sees all)
+      if (teamsToFilter.length > 0 && effectiveProfile?.role !== 'REVOPS') {
+        query = query.in('team', teamsToFilter);
+      }
+      
+      const { data, error } = await query;
       
       if (error) throw error;
       return data || [];

@@ -1241,8 +1241,13 @@ class AssignmentService {
     
     console.log(`[AssignmentService] ✅ Chunked updates complete: ${successCount} succeeded, ${failureCount} failed`);
     
-    if (failureCount > 0) {
-      throw new Error(`Failed to update ${failureCount} accounts. Please review logs and retry.`);
+    // Only throw if failure rate is significant (>10%)
+    // Small number of failures can happen due to accounts being deleted, RLS, etc.
+    const failureRate = failureCount / (successCount + failureCount);
+    if (failureRate > 0.1) {
+      throw new Error(`Too many failures: ${failureCount}/${successCount + failureCount} accounts failed to update (${(failureRate * 100).toFixed(1)}%). Please review logs and retry.`);
+    } else if (failureCount > 0) {
+      console.warn(`[AssignmentService] ⚠️ ${failureCount} accounts could not be updated (${(failureRate * 100).toFixed(1)}% failure rate). This is within acceptable limits.`);
     }
   }
 

@@ -396,6 +396,7 @@ export default function ManagerHierarchyView({
           proposed_owner_name: newOwner.name,
           rationale: reassignmentRationale || 'Manager reassignment',
           status: 'pending',
+          approval_status: 'pending_slm', // Start approval chain at SLM
         });
 
       if (error) throw error;
@@ -403,9 +404,10 @@ export default function ManagerHierarchyView({
     onSuccess: () => {
       toast({
         title: 'Reassignment Proposed',
-        description: 'Your reassignment request has been submitted for approval.',
+        description: 'Your reassignment request has been submitted for SLM approval.',
       });
       queryClient.invalidateQueries({ queryKey: ['manager-accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['slm-pending-approvals'] });
       setReassigningAccount(null);
       setNewOwnerId('');
       setReassignmentRationale('');

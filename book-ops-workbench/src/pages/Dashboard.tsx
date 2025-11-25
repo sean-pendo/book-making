@@ -43,7 +43,11 @@ interface Build {
   updated_at: string;
   owner_id: string | null;
   owner_name: string | null;
+  team: string;
 }
+
+const TEAMS = ['AMER', 'EMEA', 'APAC'] as const;
+type Team = typeof TEAMS[number];
 
 interface RevOpsUser {
   id: string;
@@ -59,6 +63,7 @@ const Dashboard = () => {
   const [newBuildDescription, setNewBuildDescription] = useState('');
   const [newBuildTargetDate, setNewBuildTargetDate] = useState('');
   const [newBuildOwnerId, setNewBuildOwnerId] = useState('');
+  const [newBuildTeam, setNewBuildTeam] = useState<Team>('AMER');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -67,9 +72,12 @@ const Dashboard = () => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [revopsUsers, setRevopsUsers] = useState<RevOpsUser[]>([]);
-  const { profile, loading: authLoading } = useAuth();
+  const { profile, effectiveProfile, loading: authLoading } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  
+  // Get user's teams for filtering
+  const userTeams = effectiveProfile?.teams || [effectiveProfile?.team || 'AMER'];
 
   useEffect(() => {
     loadBuilds();
@@ -78,20 +86,31 @@ const Dashboard = () => {
 
   const loadBuilds = async () => {
     try {
-      const { data, error } = await supabase
+      // Filter builds by user's team memberships
+      const teamsToFilter = userTeams.filter(Boolean);
+      
+      let query = supabase
         .from('builds')
         .select(`
           *,
           owner:profiles!builds_owner_id_fkey(full_name)
         `)
         .order('created_at', { ascending: false });
+      
+      // Only filter by team if user has teams assigned (non-REVOPS may have limited access)
+      if (teamsToFilter.length > 0 && effectiveProfile?.role !== 'REVOPS') {
+        query = query.in('team', teamsToFilter);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       
       // Transform the data to include owner_name
       const transformedBuilds = (data || []).map(build => ({
         ...build,
-        owner_name: build.owner?.full_name || null
+        owner_name: build.owner?.full_name || null,
+        team: build.team || 'AMER'
       }));
       
       setBuilds(transformedBuilds);
@@ -135,6 +154,7 @@ const Dashboard = () => {
             description: newBuildDescription.trim() || null,
             target_date: newBuildTargetDate || null,
             owner_id: newBuildOwnerId,
+            team: newBuildTeam,
             created_by: (await supabase.auth.getUser()).data.user?.id || '',
           },
         ])
@@ -148,7 +168,8 @@ const Dashboard = () => {
 
       const transformedBuild = {
         ...data,
-        owner_name: data.owner?.full_name || null
+        owner_name: data.owner?.full_name || null,
+        team: data.team || 'AMER'
       };
 
       toast({
@@ -161,6 +182,7 @@ const Dashboard = () => {
       setNewBuildDescription('');
       setNewBuildTargetDate('');
       setNewBuildOwnerId('');
+      setNewBuildTeam('AMER');
       setDialogOpen(false);
     } catch (error) {
       console.error('Error creating build:', error);
@@ -421,6 +443,22 @@ const Dashboard = () => {
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="build-team" className="text-sm font-medium">Team *</Label>
+                  <Select value={newBuildTeam} onValueChange={(v) => setNewBuildTeam(v as Team)}>
+                    <SelectTrigger className="transition-all duration-200 focus:ring-2 focus:ring-primary focus:border-primary">
+                      <SelectValue placeholder="Select team..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TEAMS.map((team) => (
+                        <SelectItem key={team} value={team}>
+                          {team}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Builds are isolated by team workspace</p>
+                </div>
                 <div className="flex justify-end space-x-3 pt-4">
                   <Button
                     variant="outline"
@@ -502,6 +540,9 @@ const Dashboard = () => {
                         <span className={`inline-flex items-center rounded-full ${getStatusColor(build.status)} font-medium px-3 py-1 text-xs shrink-0 border`}>
                           {build.status.replace('_', ' ')}
                         </span>
+                        <Badge variant="outline" className="text-xs">
+                          {build.team}
+                        </Badge>
                       </div>
                       {build.description && (
                         <CardDescription className="text-sm line-clamp-2 mt-1">

@@ -2,6 +2,135 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - Team Workspaces & Manager Approval Chain
+
+### Architecture: Team-Based Workspaces
+- **Feature**: Builds are now scoped to teams (AMER, EMEA, APAC)
+- **Feature**: Users can belong to multiple teams via new `teams` array field on profiles
+- **Feature**: Builds filtered by user's team memberships (REVOPS sees all)
+- **Migration**: `20251126100001_add_team_to_builds.sql` - Added `team` column to builds
+- **Migration**: `20251126100002_multi_team_profiles.sql` - Added `teams[]` to profiles
+- **UI**: Team badge shown on build cards in Dashboard
+- **UI**: Team selector when creating new builds
+
+### Manager Approval Chain (FLM → SLM → RevOps)
+- **Feature**: 3-tier approval workflow for account reassignments
+  - FLM proposes → status: `pending_slm`
+  - SLM approves → status: `pending_revops`
+  - RevOps finalizes → status: `approved` (change applied)
+- **Migration**: `20251126100003_approval_chain_reassignments.sql`
+  - Added `approval_status` field with values: pending_slm, pending_revops, approved, rejected
+  - Added `slm_approved_by`, `slm_approved_at` for SLM approval tracking
+  - Added `revops_approved_by`, `revops_approved_at` for RevOps final approval
+- **Component**: New `SLMApprovalQueue.tsx` for SLMs to review FLM proposals
+- **ManagerDashboard**: FLM Approvals tab visible only to SLMs
+- **ManagerDashboard**: "Approve All FLM Proposals" button for SLMs only
+- **ReviewNotes**: RevOps now sees only `pending_revops` items awaiting final approval
+
+### Permission Model Updates
+- **FLM Permissions**: Can view own reps, add notes, propose reassignments (cannot approve)
+- **SLM Permissions**: Can view their FLMs, add notes, propose reassignments, approve FLM proposals
+- **REVOPS Permissions**: Full access, final approval authority
+- **File**: Updated `useRolePermissions.ts` with explicit SLM_PERMISSIONS and FLM_PERMISSIONS
+
+### Conflict Detection Scoping
+- **Fix**: GlobalClashDetector now only detects conflicts between builds in the same team
+- **Fix**: ClashDetector now filters clashes by user's team builds
+- Cross-team conflicts are no longer relevant (separate workspaces)
+
+### Files Changed
+- `supabase/migrations/` - 3 new migrations
+- `src/integrations/supabase/types.ts` - New fields for builds, profiles, manager_reassignments
+- `src/contexts/AuthContext.tsx` - Added `teams` to Profile interface
+- `src/pages/Dashboard.tsx` - Team filtering and team selector
+- `src/pages/DataImport.tsx` - Team filtering and auto-set team on build creation
+- `src/pages/ManagerDashboard.tsx` - Role-based tabs and approval flow
+- `src/pages/ReviewNotes.tsx` - Filter by approval_status, RevOps final approval
+- `src/pages/GlobalClashDetector.tsx` - Team-scoped conflict detection
+- `src/pages/ClashDetector.tsx` - Team-scoped clash filtering
+- `src/components/ManagerHierarchyView.tsx` - Set approval_status on reassignments
+- `src/components/SLMApprovalQueue.tsx` - New component for SLM approval queue
+- `src/hooks/useRolePermissions.ts` - FLM/SLM permission definitions
+
+## [2025-11-26] - CRE Status Field & Parent Account Labels
+
+### Database Changes
+- **New Field**: Added `cre_status` (text) to accounts table
+- **Migration**: `20251126000001_add_cre_status_to_accounts.sql`
+  - Syncs worst CRE status from opportunities with hierarchy rollup
+  - Priority: Confirmed Churn > At Risk > Pre-Risk Discovery > Monitoring > Closed
+  - Parent accounts inherit worst status from self + all children
+
+### Risk Detection Updates
+- **Improved**: Risk detection now uses `cre_status` field instead of `cre_risk`/`cre_count` booleans
+- **Severity Badges**: Color-coded badges based on CRE status severity
+  - Red/destructive: "Confirmed Churn", "At Risk"
+  - Gray/secondary: "Pre-Risk Discovery", "Monitoring", "Closed"
+
+### UI Label Clarity
+- **Review Page**: All account counts now specify "Parent Accounts" instead of generic "Accounts"
+  - "Customer Accounts" → "Parent Accounts" (subtext: Customer hierarchies)
+  - "Risk Accounts" → "At-Risk Parents" (subtext: Parent accounts with CRE status)
+  - "Accounts Reassigned" → "Parents Reassigned"
+  - "Prospect Accounts" → "Parent Accounts" (subtext: Prospect hierarchies)
+  - Table column "Accounts" → "Parents"
+- **FLM Detail Dialog**: Labels updated to "Parent Accounts"
+- **High-Risk Section**: Now shows actual CRE status values with severity colors
+
+## [2025-11-25 11:30 AM] - ATR Fix & Prospect Overview Cards
+- **Fix**: ATR now fetches directly from opportunities table (Renewals with available_to_renew) instead of relying on calculated_atr field
+- **Fix**: React Error #310 - Fixed type mismatch in opportunitiesForATR query causing blank screen
+- **Feature**: View Mode Toggle on Review screen (All Accounts / Customers / Prospects)
+- **Feature**: Prospect overview cards showing total, assigned, reassigned, retention rate
+
+## [2025-11-25] - Fix: "Send All SLM Books to All Users" Upsert Error
+- **Fix**: Fixed PostgreSQL error "ON CONFLICT DO UPDATE command cannot affect a row a second time"
+  - Root cause: The `manager_reviews` table had a unique constraint on only `(build_id, manager_user_id)`
+  - When sending ALL SLM books to ALL users, each user got multiple records (one per SLM)
+  - PostgreSQL can't update the same conflict key twice in one batch
+- **Solution**: Updated unique constraint to include `manager_name`: `(build_id, manager_user_id, manager_name)`
+  - Now each user can have multiple manager assignments (one per SLM)
+  - Updated upsert `onConflict` clause to match new constraint
+- **Files**:
+  - New migration: `20251125000001_fix_manager_reviews_unique_constraint.sql`
+  - Updated: `SendToManagerDialog.tsx`
+
+## [2025-11-25] - Feature: Deep Drill-Down in Review Dashboard (FLM → Accounts → Children)
+- **Feature**: Enhanced FLM detail dialog with new "All Accounts" tab
+  - Click any FLM row in Portfolio Summary → See both **Sales Reps** and **All Accounts** tabs
+  - Accounts tab shows all parent accounts under that FLM with expandable child accounts
+  - Filter by: Customers, Prospects, or All
+  - Search by account name, owner, or location
+  - Click parent row to expand and see all child accounts underneath
+  - Click account row to open Account Detail dialog
+- **Feature**: Portfolio Summary now supports Customers AND Prospects
+  - Toggle button at top: "Customers (N)" / "Prospects (N)"
+  - Customers view: Same as before with ARR, ATR, tier distribution
+  - Prospects view: Shows prospect count, top geo, tier distribution, retention %
+  - Prospect table has blue accent styling to differentiate from customers
+- **Technical**: New `prospectAccounts` query fetches all prospect parent accounts
+- **Technical**: New `prospectPortfolioSummary` useMemo calculates prospect metrics by SLM/FLM
+- **Files**: `FLMDetailDialog.tsx` (major rewrite), `ComprehensiveReview.tsx`
+
+## [2025-11-25] - UX: Review Page Now Shows Both Customers AND Prospects
+- **Feature**: Added view mode toggle (All / Customers / Prospects)
+  - "All Accounts" view shows both customer and prospect portfolios
+  - Dedicated summary cards for each account type
+  - Customer cards show ARR, ATR, Risk accounts
+  - Prospect cards show assignment count, retention rate
+- **UX**: Visual distinction with colored left borders (green=customers, blue=prospects)
+- Files: `ComprehensiveReview.tsx`
+
+## [2025-11-25] - UX: Assignment Success Confirmation Dialog
+- **Feature**: New animated success dialog when assignments are applied
+  - Animated checkmark with confetti effect
+  - Shows count of applied assignments
+  - Quick navigation buttons to Balancing or Review dashboards
+- **Fix**: Batch update now tolerates small failure rates (<10%)
+  - Previously 196 failures out of 6,380 (3%) would crash the entire process
+  - Now logs warning but completes successfully if >90% succeed
+- Files: `AssignmentSuccessDialog.tsx` (new), `AssignmentEngine.tsx`, `assignmentService.ts`
+
 ## [2025-11-25] - UX: Fix Navigation from Locked Pages & Lock Review Tab
 - **Fix**: "Go to Assignments" button on locked Balancing/Review pages now correctly switches to Assignments tab
   - Added URL query parameter support (`?tab=assignments`) to BuildDetail
