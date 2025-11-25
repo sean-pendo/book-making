@@ -662,9 +662,9 @@ export type Database = {
           id: string
           name: string
           owner_id: string | null
+          region: string
           status: Database["public"]["Enums"]["build_status"] | null
           target_date: string | null
-          team: string
           updated_at: string | null
           version_tag: string | null
         }
@@ -679,9 +679,9 @@ export type Database = {
           id?: string
           name: string
           owner_id?: string | null
+          region?: string
           status?: Database["public"]["Enums"]["build_status"] | null
           target_date?: string | null
-          team?: string
           updated_at?: string | null
           version_tag?: string | null
         }
@@ -696,9 +696,9 @@ export type Database = {
           id?: string
           name?: string
           owner_id?: string | null
+          region?: string
           status?: Database["public"]["Enums"]["build_status"] | null
           target_date?: string | null
-          team?: string
           updated_at?: string | null
           version_tag?: string | null
         }
@@ -1161,7 +1161,6 @@ export type Database = {
           region: string | null
           role: Database["public"]["Enums"]["user_role"]
           team: string | null
-          teams: string[] | null
           updated_at: string | null
         }
         Insert: {
@@ -1173,7 +1172,6 @@ export type Database = {
           region?: string | null
           role?: Database["public"]["Enums"]["user_role"]
           team?: string | null
-          teams?: string[] | null
           updated_at?: string | null
         }
         Update: {
@@ -1185,7 +1183,6 @@ export type Database = {
           region?: string | null
           role?: Database["public"]["Enums"]["user_role"]
           team?: string | null
-          teams?: string[] | null
           updated_at?: string | null
         }
         Relationships: []

@@ -44,24 +44,22 @@ export const GlobalClashDetector = () => {
   const [resolutionRationale, setResolutionRationale] = useState('');
   const [showResolutionDialog, setShowResolutionDialog] = useState(false);
 
-  // Get user's teams for filtering
-  const userTeams = effectiveProfile?.teams || [effectiveProfile?.team || 'AMER'];
+  // Get user's region for filtering
+  const userRegion = effectiveProfile?.region;
 
-  // Fetch builds within the same team to detect clashes
-  // Conflicts are only relevant between builds in the same team workspace
+  // Fetch builds within the same region to detect clashes
+  // Conflicts are only relevant between builds in the same region workspace
   const { data: builds, isLoading: buildsLoading } = useQuery({
-    queryKey: ['builds-for-clash-detection', userTeams],
+    queryKey: ['builds-for-clash-detection', userRegion],
     queryFn: async () => {
-      const teamsToFilter = userTeams.filter(Boolean);
-      
       let query = supabase
         .from('builds')
-        .select('id, name, status, created_at, team')
+        .select('id, name, status, created_at, region')
         .order('created_at', { ascending: false });
       
-      // Only detect clashes within same team (unless REVOPS who sees all)
-      if (teamsToFilter.length > 0 && effectiveProfile?.role !== 'REVOPS') {
-        query = query.in('team', teamsToFilter);
+      // Only detect clashes within same region (unless REVOPS who sees all)
+      if (userRegion && effectiveProfile?.role !== 'REVOPS') {
+        query = query.eq('region', userRegion);
       }
       
       const { data, error } = await query;

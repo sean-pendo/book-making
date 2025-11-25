@@ -353,18 +353,17 @@ export const DataImport = () => {
   const loadBuilds = useCallback(async () => {
     console.log('🏗️ Loading builds...');
     
-    // Get user's teams for filtering
-    const userTeams = effectiveProfile?.teams || [effectiveProfile?.team || 'AMER'];
-    const teamsToFilter = userTeams.filter(Boolean);
+    // Get user's region for filtering
+    const userRegion = effectiveProfile?.region;
     
     let query = supabase
       .from('builds')
-      .select('id, name, team')
+      .select('id, name, region')
       .order('created_at', { ascending: false });
     
-    // Filter by team unless user is REVOPS (REVOPS sees all)
-    if (teamsToFilter.length > 0 && effectiveProfile?.role !== 'REVOPS') {
-      query = query.in('team', teamsToFilter);
+    // Filter by region unless user is REVOPS (REVOPS sees all)
+    if (userRegion && effectiveProfile?.role !== 'REVOPS') {
+      query = query.eq('region', userRegion);
     }
     
     const { data, error } = await query;
@@ -621,8 +620,8 @@ export const DataImport = () => {
         throw new Error("User not authenticated");
       }
 
-      // Use user's first team or default to AMER
-      const userTeam = effectiveProfile?.teams?.[0] || effectiveProfile?.team || 'AMER';
+      // Use user's region or default to GLOBAL
+      const userRegion = effectiveProfile?.region || 'GLOBAL';
       
       const { data, error } = await supabase
         .from('builds')
@@ -630,10 +629,10 @@ export const DataImport = () => {
           name: newBuildName.trim(),
           description: `Build created from Import page - ${new Date().toLocaleDateString()}`,
           status: 'DRAFT',
-          team: userTeam,
+          region: userRegion,
           created_by: user.id
         }])
-        .select('id, name, team')
+        .select('id, name, region')
         .single();
 
       if (error) throw error;

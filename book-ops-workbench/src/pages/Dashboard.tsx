@@ -76,8 +76,8 @@ const Dashboard = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   
-  // Get user's teams for filtering
-  const userTeams = effectiveProfile?.teams || [effectiveProfile?.team || 'AMER'];
+  // Get user's region for filtering
+  const userRegion = effectiveProfile?.region;
 
   useEffect(() => {
     loadBuilds();
@@ -86,9 +86,6 @@ const Dashboard = () => {
 
   const loadBuilds = async () => {
     try {
-      // Filter builds by user's team memberships
-      const teamsToFilter = userTeams.filter(Boolean);
-      
       let query = supabase
         .from('builds')
         .select(`
@@ -97,9 +94,9 @@ const Dashboard = () => {
         `)
         .order('created_at', { ascending: false });
       
-      // Only filter by team if user has teams assigned (non-REVOPS may have limited access)
-      if (teamsToFilter.length > 0 && effectiveProfile?.role !== 'REVOPS') {
-        query = query.in('team', teamsToFilter);
+      // Filter by region unless user is REVOPS (REVOPS sees all)
+      if (userRegion && effectiveProfile?.role !== 'REVOPS') {
+        query = query.eq('region', userRegion);
       }
 
       const { data, error } = await query;
@@ -110,7 +107,7 @@ const Dashboard = () => {
       const transformedBuilds = (data || []).map(build => ({
         ...build,
         owner_name: build.owner?.full_name || null,
-        team: build.team || 'AMER'
+        region: build.region || 'GLOBAL'
       }));
       
       setBuilds(transformedBuilds);

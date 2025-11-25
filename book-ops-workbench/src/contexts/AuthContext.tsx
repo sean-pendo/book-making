@@ -12,7 +12,6 @@ interface Profile {
   full_name: string | null;
   role: UserRole;
   team: string | null;
-  teams: string[] | null;
   region: UserRegion | null;
   developer: boolean | null;
 }
@@ -23,7 +22,6 @@ interface ImpersonatedUser {
   full_name: string;
   role: UserRole;
   team: string | null;
-  teams: string[] | null;
   region: UserRegion | null;
   developer: boolean | null;
 }
@@ -81,7 +79,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 full_name: user.user.user_metadata?.full_name || 'Admin User',
                 role: 'REVOPS' as UserRole,
                 region: 'GLOBAL' as UserRegion,
-                teams: ['AMER'],
               }])
               .select()
               .single();

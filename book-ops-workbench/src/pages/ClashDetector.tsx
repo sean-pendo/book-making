@@ -58,27 +58,25 @@ export const ClashDetector = () => {
   const [resolutionReason, setResolutionReason] = useState('');
   const [proposedOwner, setProposedOwner] = useState('');
 
-  // Get user's teams for filtering
-  const userTeams = effectiveProfile?.teams || [effectiveProfile?.team || 'AMER'];
+  // Get user's region for filtering
+  const userRegion = effectiveProfile?.region;
 
-  // Fetch clashes scoped to user's team builds
+  // Fetch clashes scoped to user's region builds
   const { data: clashes = [], isLoading, refetch } = useQuery({
-    queryKey: ['clashes', userTeams],
+    queryKey: ['clashes', userRegion],
     queryFn: async () => {
-      // First get build IDs for user's teams
-      const teamsToFilter = userTeams.filter(Boolean);
-      
+      // First get build IDs for user's region
       let buildsQuery = supabase
         .from('builds')
         .select('id');
       
-      // Filter builds by team (unless REVOPS)
-      if (teamsToFilter.length > 0 && effectiveProfile?.role !== 'REVOPS') {
-        buildsQuery = buildsQuery.in('team', teamsToFilter);
+      // Filter builds by region (unless REVOPS)
+      if (userRegion && effectiveProfile?.role !== 'REVOPS') {
+        buildsQuery = buildsQuery.eq('region', userRegion);
       }
       
-      const { data: teamBuilds } = await buildsQuery;
-      const teamBuildIds = teamBuilds?.map(b => b.id) || [];
+      const { data: regionBuilds } = await buildsQuery;
+      const regionBuildIds = regionBuilds?.map(b => b.id) || [];
       
       // Now fetch clashes for those builds
       let query = supabase
@@ -86,9 +84,9 @@ export const ClashDetector = () => {
         .select('*')
         .order('created_at', { ascending: false });
       
-      // Filter clashes to only those in team builds
-      if (teamBuildIds.length > 0 && effectiveProfile?.role !== 'REVOPS') {
-        query = query.in('build_id', teamBuildIds);
+      // Filter clashes to only those in region builds
+      if (regionBuildIds.length > 0 && effectiveProfile?.role !== 'REVOPS') {
+        query = query.in('build_id', regionBuildIds);
       }
       
       const { data, error } = await query;
