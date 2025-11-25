@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-25] - Fix: Parent Account Owner Shows "Unknown" in Rep Detail View
+- **Fix**: Parent accounts labeled "(Parent - Not Owned)" now display the owner from their children
+  - Previously, virtual parent accounts showed "Unknown" in the Previous Owner column
+  - Now inherits owner info from child accounts (since they share ownership in the rep's view)
+  - Affected view: Sales Rep Detail Dialog → Account Portfolio tab
+  - File: `SalesRepDetailDialog.tsx`
+
 ## [2025-11-26] - Team Workspaces & Manager Approval Chain
 
 ### Architecture: Team-Based Workspaces
