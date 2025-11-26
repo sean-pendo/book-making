@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - Fix: ATR Not Displaying in Manager Hierarchy View
+- **Fix**: ATR values showing $0 in Manager Dashboard hierarchy view
+  - Root cause: `calculated_atr` field in accounts table was not populated
+  - Solution: Query opportunities table directly for `Renewals` type with `available_to_renew` values
+  - Now matches the approach used in `FLMDetailDialog` which correctly displays ATR
+- **Files**: `ManagerHierarchyView.tsx`
+
 ## [2025-11-26] - Fix: ProtectedRoute Redirect Loop & Auth Context Cleanup
 - **Fix**: Fixed ProtectedRoute causing infinite redirect loop when profile not yet loaded
   - Root cause: `authLoading` set to false before profile finished loading, causing `hasPageAccess` to return false

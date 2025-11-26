@@ -146,6 +146,34 @@ export default function ManagerHierarchyView({
     enabled: !!salesReps && salesReps.length > 0,
   });
 
+  // Fetch ATR from opportunities (more accurate than calculated_atr field)
+  // ATR comes from renewal opportunities' available_to_renew field
+  const { data: atrByAccount } = useQuery({
+    queryKey: ['manager-opportunities-atr', buildId],
+    queryFn: async (): Promise<Map<string, number>> => {
+      if (!buildId) return new Map<string, number>();
+      
+      const { data, error } = await supabase
+        .from('opportunities')
+        .select('sfdc_account_id, available_to_renew, opportunity_type')
+        .eq('build_id', buildId)
+        .eq('opportunity_type', 'Renewals')
+        .not('available_to_renew', 'is', null);
+      
+      if (error) throw error;
+      
+      // Aggregate ATR by account
+      const atrMap = new Map<string, number>();
+      (data || []).forEach(opp => {
+        const current = atrMap.get(opp.sfdc_account_id) || 0;
+        atrMap.set(opp.sfdc_account_id, current + (opp.available_to_renew || 0));
+      });
+      
+      return atrMap;
+    },
+    enabled: !!buildId,
+  });
+
   const toggleRep = (repId: string) => {
     const newExpanded = new Set(expandedReps);
     if (newExpanded.has(repId)) {
@@ -241,6 +269,13 @@ export default function ManagerHierarchyView({
       parentAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0) + 
       splitOwnershipChildrenARR;
     
+    // ATR calculation - prioritize opportunities data over calculated_atr field
+    const getATRForAccount = (acc: any) => {
+      const atrFromOpps = atrByAccount?.get(acc.sfdc_account_id) || 0;
+      const atrFromAccount = getAccountATR(acc);
+      return atrFromOpps || atrFromAccount;
+    };
+
     // ATR follows same pattern
     const splitOwnershipChildrenATR = childAccounts
       .filter(child => {
@@ -250,10 +285,10 @@ export default function ManagerHierarchyView({
         const parentOwnerId = parentOwnerMap.get(parentId);
         return childOwnerId !== parentOwnerId;
       })
-      .reduce((sum, child) => sum + getAccountATR(child), 0);
+      .reduce((sum, child) => sum + getATRForAccount(child), 0);
     
     const totalATR = 
-      parentAccounts.reduce((sum, acc) => sum + getAccountATR(acc), 0) + 
+      parentAccounts.reduce((sum, acc) => sum + getATRForAccount(acc), 0) + 
       splitOwnershipChildrenATR;
     
     // Calculate tier distribution (only from parent accounts)
@@ -355,6 +390,13 @@ export default function ManagerHierarchyView({
       parentAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0) + 
       splitOwnershipChildrenARR;
     
+    // ATR calculation - prioritize opportunities data over calculated_atr field
+    const getFLMATRForAccount = (acc: any) => {
+      const atrFromOpps = atrByAccount?.get(acc.sfdc_account_id) || 0;
+      const atrFromAccount = getAccountATR(acc);
+      return atrFromOpps || atrFromAccount;
+    };
+
     // ATR follows same pattern
     const splitOwnershipChildrenATR = childAccounts
       .filter(child => {
@@ -364,10 +406,10 @@ export default function ManagerHierarchyView({
         const parentOwnerId = parentOwnerMap.get(parentId);
         return childOwnerId !== parentOwnerId;
       })
-      .reduce((sum, child) => sum + getAccountATR(child), 0);
+      .reduce((sum, child) => sum + getFLMATRForAccount(child), 0);
     
     const totalATR = 
-      parentAccounts.reduce((sum, acc) => sum + getAccountATR(acc), 0) + 
+      parentAccounts.reduce((sum, acc) => sum + getFLMATRForAccount(acc), 0) + 
       splitOwnershipChildrenATR;
     
     return {
@@ -638,7 +680,7 @@ export default function ManagerHierarchyView({
                                               )}
                                             </TableCell>
                                             <TableCell className="text-right">{formatCurrency(getAccountARR(account))}</TableCell>
-                                            <TableCell className="text-right">{formatCurrency(getAccountATR(account))}</TableCell>
+                                            <TableCell className="text-right">{formatCurrency(atrByAccount?.get(account.sfdc_account_id) || getAccountATR(account))}</TableCell>
                                             <TableCell>{account.hq_country || account.sales_territory || account.geo || 'N/A'}</TableCell>
                                             <TableCell>
                                               <div className="flex gap-2">
