@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - Fix: ARR/ATR Showing $0 in Before & After Comparison
+
+- **Fix**: ARR and ATR values were showing $0 in the Before & After tab
+  - Root cause: Query was missing `arr`, `atr`, `hierarchy_bookings_arr_converted` fields
+  - Root cause: Restrictive filters (`.eq('is_customer', true)`) were excluding accounts
+  - Solution: Added all necessary ARR fields to query
+  - Solution: Added opportunities query for accurate ATR from Renewals
+  - Solution: Query accounts per rep to properly handle owner_id vs new_owner_id
+- **Files**: `ManagerBeforeAfterComparison.tsx`
+
 ## [2025-11-26] - Feature: Manager View Enhancements
 
 ### Parent/Child Account Nesting
