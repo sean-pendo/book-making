@@ -20,7 +20,7 @@ USING (
   EXISTS (
     SELECT 1 FROM profiles 
     WHERE profiles.id = auth.uid() 
-    AND profiles.role IN ('REVOPS', 'LEADERSHIP')
+    AND profiles.role = 'REVOPS'
   )
 );
 
