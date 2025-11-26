@@ -42,25 +42,71 @@ export default function ManagerBeforeAfterComparison({
     },
   });
 
+  // Fetch ATR from opportunities (more accurate than calculated_atr field)
+  const { data: atrByAccount } = useQuery({
+    queryKey: ['manager-comparison-opportunities-atr', buildId],
+    queryFn: async (): Promise<Map<string, number>> => {
+      if (!buildId) return new Map<string, number>();
+      
+      const { data, error } = await supabase
+        .from('opportunities')
+        .select('sfdc_account_id, available_to_renew, opportunity_type')
+        .eq('build_id', buildId)
+        .eq('opportunity_type', 'Renewals')
+        .not('available_to_renew', 'is', null);
+      
+      if (error) throw error;
+      
+      // Aggregate ATR by account
+      const atrMap = new Map<string, number>();
+      (data || []).forEach(opp => {
+        const current = atrMap.get(opp.sfdc_account_id) || 0;
+        atrMap.set(opp.sfdc_account_id, current + (opp.available_to_renew || 0));
+      });
+      
+      return atrMap;
+    },
+    enabled: !!buildId,
+  });
+
   // Fetch all accounts that belong to this manager's hierarchy (before and after)
   const { data: comparisonData, isLoading } = useQuery({
-    queryKey: ['manager-before-after-comparison', buildId, salesReps],
+    queryKey: ['manager-before-after-comparison', buildId, salesReps, atrByAccount],
     queryFn: async () => {
       if (!salesReps || salesReps.length === 0) return [];
 
+      // Helper to get ATR for an account - prioritize opportunities data
+      const getATRForAccount = (acc: any) => {
+        const atrFromOpps = atrByAccount?.get(acc.sfdc_account_id) || 0;
+        const atrFromAccount = getAccountATR(acc);
+        return atrFromOpps || atrFromAccount;
+      };
+
       const repIds = salesReps.map(rep => rep.rep_id);
       
-      // Get all accounts where either owner_id or new_owner_id matches a rep in this hierarchy
-      const { data: accounts, error } = await supabase
-        .from('accounts')
-        .select('sfdc_account_id, account_name, build_id, is_parent, is_customer, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, calculated_atr, ultimate_parent_id, has_split_ownership')
-        .eq('build_id', buildId)
-        .eq('is_customer', true)
-        .or('is_parent.eq.true,has_split_ownership.eq.true')
-        .or(`owner_id.in.(${repIds.join(',')}),new_owner_id.in.(${repIds.join(',')})`)
-        .order('new_owner_name');
+      // Fetch accounts for all reps - include ALL accounts (customers + prospects)
+      // Query each rep's accounts separately to properly handle owner_id vs new_owner_id
+      const accountsPromises = repIds.map(repId => 
+        supabase
+          .from('accounts')
+          .select('sfdc_account_id, account_name, build_id, is_parent, is_customer, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, calculated_atr, arr, atr, hierarchy_bookings_arr_converted, ultimate_parent_id, has_split_ownership')
+          .eq('build_id', buildId)
+          .or(`owner_id.eq.${repId},new_owner_id.eq.${repId}`)
+      );
 
-      if (error) throw error;
+      const accountsResults = await Promise.all(accountsPromises);
+      const allAccounts = accountsResults.flatMap(result => result.data || []);
+      
+      // Remove duplicates based on sfdc_account_id
+      const uniqueAccountsMap = new Map();
+      allAccounts.forEach(acc => {
+        if (!uniqueAccountsMap.has(acc.sfdc_account_id)) {
+          uniqueAccountsMap.set(acc.sfdc_account_id, acc);
+        }
+      });
+      const accounts = Array.from(uniqueAccountsMap.values());
+
+      if (accountsResults.some(r => r.error)) throw accountsResults.find(r => r.error)?.error;
 
       // Group by rep and calculate before/after metrics with split ownership logic
       const repComparisons = salesReps.map(rep => {
@@ -94,7 +140,7 @@ export default function ManagerBeforeAfterComparison({
             const parentOwnerId = beforeParentOwnerMap.get(parentId);
             return childOwnerId !== parentOwnerId;
           })
-          .reduce((sum, child) => sum + getAccountATR(child), 0);
+          .reduce((sum, child) => sum + getATRForAccount(child), 0);
 
         // AFTER (new_owner_id based)
         const afterParents = afterAccounts.filter(acc => acc.is_parent);
@@ -123,21 +169,21 @@ export default function ManagerBeforeAfterComparison({
             const parentOwnerId = afterParentOwnerMap.get(parentId);
             return childOwnerId !== parentOwnerId;
           })
-          .reduce((sum, child) => sum + getAccountATR(child), 0);
+          .reduce((sum, child) => sum + getATRForAccount(child), 0);
 
         return {
           rep,
           before: {
             totalAccounts: beforeParents.length,
             totalARR: beforeParents.reduce((sum, acc) => sum + getAccountARR(acc), 0) + beforeSplitChildrenARR,
-            totalATR: beforeParents.reduce((sum, acc) => sum + getAccountATR(acc), 0) + beforeSplitChildrenATR,
+            totalATR: beforeParents.reduce((sum, acc) => sum + getATRForAccount(acc), 0) + beforeSplitChildrenATR,
             customers: beforeParents.filter(acc => acc.is_customer).length,
             prospects: beforeParents.filter(acc => !acc.is_customer).length,
           },
           after: {
             totalAccounts: afterParents.length,
             totalARR: afterParents.reduce((sum, acc) => sum + getAccountARR(acc), 0) + afterSplitChildrenARR,
-            totalATR: afterParents.reduce((sum, acc) => sum + getAccountATR(acc), 0) + afterSplitChildrenATR,
+            totalATR: afterParents.reduce((sum, acc) => sum + getATRForAccount(acc), 0) + afterSplitChildrenATR,
             customers: afterParents.filter(acc => acc.is_customer).length,
             prospects: afterParents.filter(acc => !acc.is_customer).length,
           },
@@ -154,7 +200,7 @@ export default function ManagerBeforeAfterComparison({
 
       return grouped;
     },
-    enabled: !!salesReps && salesReps.length > 0,
+    enabled: !!salesReps && salesReps.length > 0 && !!atrByAccount,
   });
 
   // Calculate FLM totals
