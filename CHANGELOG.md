@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - Fix: Approve Book Button, Note Counts, Layout & RLS
+
+- **Feature**: Approve Book button now functional
+  - Creates an approval note record for the rep's book
+  - Shows loading state while processing
+- **Feature**: Note buttons now show count badge when notes exist
+  - Badge displays number of existing notes for that account
+  - Both parent and child account rows have this feature
+- **Fix**: Layout improvements for rep row stats
+  - Shifted stats left to make room for button
+  - Shortened labels (CRE Parents → CRE, Retention → Retain)
+  - More compact column widths
+- **Fix**: RLS policy for `manager_review_analytics` table
+  - Added policy to allow managers to insert their own analytics records
+  - The trigger that fires on note creation can now work for FLM/SLM users
+- **Files**: `ManagerHierarchyView.tsx`, `20251126120001_fix_manager_review_analytics_rls.sql`
+
 ## [2025-11-26] - UI: Clarify Parent Account Counts in FLM Dialog
 
 - **UI**: Added "(Parents)" subtitle to Customers, Prospects, and Risk column headers
