@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - UI: Clarify Parent Account Counts in FLM Dialog
+
+- **UI**: Added "(Parents)" subtitle to Customers, Prospects, and Risk column headers
+  - Makes it clear these counts are parent-level accounts only, not all accounts
+- **Files**: `FLMDetailDialog.tsx`
+
+## [2025-11-26] - Fix: FLM Detail Dialog Active Reps Count Blank
+
+- **Fix**: Active Reps card and Sales Reps tab showing blank/0
+  - Root cause: `activeReps` is converted from `Set` to `Array` in ComprehensiveReview.tsx before passing to dialog
+  - Dialog was calling `.size` on what's actually an Array (Arrays use `.length`, not `.size`)
+  - Solution: Handle both Set and Array types when displaying count
+  - Updated interface to reflect `activeReps: Set<string> | string[]`
+- **Files**: `FLMDetailDialog.tsx`
+
 ## [2025-11-26] - Fix: ARR/ATR Showing $0 in Before & After Comparison
 
 - **Fix**: ARR and ATR values were showing $0 in the Before & After tab

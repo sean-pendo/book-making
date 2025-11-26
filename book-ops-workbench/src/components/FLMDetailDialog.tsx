@@ -26,7 +26,7 @@ interface FLMDetailDialogProps {
       totalATR: number;
       riskCount: number;
       retainedCount: number;
-      activeReps: Set<string>;
+      activeReps: Set<string> | string[]; // Can be Set or Array depending on source
       accounts: any[];
     };
   } | null;
@@ -435,7 +435,9 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="reps" className="flex items-center gap-2">
                 <Users className="h-4 w-4" />
-                Sales Reps ({flmRepsData?.length || 0})
+                Sales Reps ({flmRepsData?.length ?? (flmData?.data.activeReps instanceof Set 
+                  ? flmData.data.activeReps.size 
+                  : (Array.isArray(flmData?.data.activeReps) ? flmData.data.activeReps.length : 0))})
               </TabsTrigger>
               <TabsTrigger value="accounts" className="flex items-center gap-2">
                 <Building2 className="h-4 w-4" />
@@ -456,7 +458,9 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                   </CardHeader>
                   <CardContent>
                     <div className="text-2xl font-bold text-primary">
-                      {flmData.data.activeReps.size}
+                      {flmData.data.activeReps instanceof Set 
+                        ? flmData.data.activeReps.size 
+                        : (Array.isArray(flmData.data.activeReps) ? flmData.data.activeReps.length : 0)}
                     </div>
                   </CardContent>
                 </Card>
@@ -547,11 +551,26 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                         <TableRow>
                           <TableHead>Rep Name</TableHead>
                           <TableHead className="text-center">Team</TableHead>
-                          <TableHead className="text-center">Customers</TableHead>
-                          <TableHead className="text-center">Prospects</TableHead>
+                          <TableHead className="text-center">
+                            <div className="flex flex-col">
+                              <span>Customers</span>
+                              <span className="text-[10px] text-muted-foreground font-normal">(Parents)</span>
+                            </div>
+                          </TableHead>
+                          <TableHead className="text-center">
+                            <div className="flex flex-col">
+                              <span>Prospects</span>
+                              <span className="text-[10px] text-muted-foreground font-normal">(Parents)</span>
+                            </div>
+                          </TableHead>
                           <TableHead className="text-center">ARR</TableHead>
                           <TableHead className="text-center">ATR</TableHead>
-                          <TableHead className="text-center">Risk</TableHead>
+                          <TableHead className="text-center">
+                            <div className="flex flex-col">
+                              <span>Risk</span>
+                              <span className="text-[10px] text-muted-foreground font-normal">(Parents)</span>
+                            </div>
+                          </TableHead>
                           <TableHead className="text-center">Retention</TableHead>
                           <TableHead className="text-center">Actions</TableHead>
                         </TableRow>

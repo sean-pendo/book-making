@@ -150,7 +150,7 @@ export default function ManagerHierarchyView({
     enabled: !!salesReps && salesReps.length > 0,
   });
 
-  // Fetch notes for accounts
+  // Fetch notes for accounts (with counts)
   const { data: accountNotes } = useQuery({
     queryKey: ['manager-all-notes', buildId],
     queryFn: async () => {
@@ -162,13 +162,18 @@ export default function ManagerHierarchyView({
 
       if (error) throw error;
       
-      // Group notes by account ID, keeping most recent
+      // Group notes by account ID - store all notes and count
       const notesByAccount = data?.reduce((acc, note) => {
         if (!acc[note.sfdc_account_id]) {
-          acc[note.sfdc_account_id] = note;
+          acc[note.sfdc_account_id] = {
+            latestNote: note,
+            count: 1,
+          };
+        } else {
+          acc[note.sfdc_account_id].count++;
         }
         return acc;
-      }, {} as Record<string, any>);
+      }, {} as Record<string, { latestNote: any; count: number }>);
       
       return notesByAccount;
     },
@@ -442,7 +447,11 @@ export default function ManagerHierarchyView({
   };
 
   const hasNotes = (accountId: string) => {
-    return accountNotes?.[accountId];
+    return accountNotes?.[accountId]?.latestNote;
+  };
+
+  const getNoteCount = (accountId: string) => {
+    return accountNotes?.[accountId]?.count || 0;
   };
 
   const hasReassignment = (accountId: string) => {
@@ -694,6 +703,43 @@ export default function ManagerHierarchyView({
     });
   };
 
+  // Approve a rep's entire book
+  const approveRepBookMutation = useMutation({
+    mutationFn: async (repId: string) => {
+      const rep = salesReps?.find(r => r.rep_id === repId);
+      if (!rep) throw new Error('Rep not found');
+
+      // Create an approval note for this rep's book
+      const { error } = await supabase
+        .from('manager_notes')
+        .insert({
+          build_id: buildId,
+          sfdc_account_id: `rep-book-${repId}`, // Special ID for rep-level approvals
+          manager_user_id: user!.id,
+          note_text: `Book approved by ${effectiveProfile?.full_name || 'Manager'}`,
+          category: 'approval',
+          status: 'resolved',
+          tags: ['book-approval', rep.name],
+        });
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast({
+        title: 'Book Approved',
+        description: 'The rep\'s book has been approved.',
+      });
+      queryClient.invalidateQueries({ queryKey: ['manager-all-notes'] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
   if (repsLoading || accountsLoading) {
     return (
       <Card>
@@ -796,53 +842,59 @@ export default function ManagerHierarchyView({
                                     </div>
                                   </div>
                                 </CollapsibleTrigger>
-                                <div className="flex items-center gap-6">
-                                  <div className="text-right">
-                                    <div className="text-sm font-medium">{metrics.totalAccounts} accounts</div>
+                                <div className="flex items-center gap-4">
+                                  <div className="text-right min-w-[90px]">
+                                    <div className="text-sm font-medium">{metrics.totalAccounts}</div>
                                     <div className="text-xs text-muted-foreground">
-                                      {metrics.customers} customers • {metrics.prospects} prospects
+                                      {metrics.customers}C • {metrics.prospects}P
                                     </div>
                                   </div>
-                                  <div className="text-right">
+                                  <div className="text-right min-w-[90px]">
                                     <div className="text-sm font-medium">{formatCurrency(metrics.totalARR)}</div>
                                     <div className="text-xs text-muted-foreground">ARR</div>
                                   </div>
-                                  <div className="text-right">
+                                  <div className="text-right min-w-[90px]">
                                     <div className="text-sm font-medium">{formatCurrency(metrics.totalATR)}</div>
                                     <div className="text-xs text-muted-foreground">ATR</div>
                                   </div>
-                                                  <div className="text-right min-w-[200px]">
-                                                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                                                      <div className="text-right">
-                                                        <span className="text-muted-foreground">T1&T2:</span>
-                                                        <span className="ml-1 font-medium">{metrics.tier1And2Pct.toFixed(0)}%</span>
-                                                      </div>
-                                                      <div className="text-right">
-                                                        <span className="text-muted-foreground">T3&T4:</span>
-                                                        <span className="ml-1 font-medium">{metrics.tier3And4Pct.toFixed(0)}%</span>
-                                                      </div>
-                                                      <div className="text-right">
-                                                        <span className="text-muted-foreground">Region:</span>
-                                                        <span className="ml-1 font-medium">{metrics.regionMatchPct.toFixed(0)}%</span>
-                                                      </div>
-                                                      <div className="text-right">
-                                                        <span className="text-muted-foreground">Retention:</span>
-                                                        <span className="ml-1 font-medium">{metrics.retentionPct.toFixed(0)}%</span>
-                                                      </div>
-                                                    </div>
-                                                  </div>
-                                  <div className="text-right min-w-[100px]">
+                                  <div className="text-right min-w-[140px]">
+                                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-xs">
+                                      <div className="text-right">
+                                        <span className="text-muted-foreground">T1&T2:</span>
+                                        <span className="ml-1 font-medium">{metrics.tier1And2Pct.toFixed(0)}%</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-muted-foreground">T3&T4:</span>
+                                        <span className="ml-1 font-medium">{metrics.tier3And4Pct.toFixed(0)}%</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-muted-foreground">Region:</span>
+                                        <span className="ml-1 font-medium">{metrics.regionMatchPct.toFixed(0)}%</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-muted-foreground">Retain:</span>
+                                        <span className="ml-1 font-medium">{metrics.retentionPct.toFixed(0)}%</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="text-right min-w-[70px]">
                                     <div className="text-xs">
-                                      <span className="text-muted-foreground">CRE Parents:</span>
+                                      <span className="text-muted-foreground">CRE:</span>
                                       <span className="ml-1 font-medium">{metrics.creCount}</span>
                                     </div>
                                   </div>
                                   <Button 
                                     variant="default"
                                     size="sm"
-                                    disabled={reviewStatus === 'accepted'}
+                                    onClick={() => approveRepBookMutation.mutate(rep.rep_id)}
+                                    disabled={reviewStatus === 'accepted' || approveRepBookMutation.isPending}
+                                    className="min-w-[120px]"
                                   >
-                                    Approve Book
+                                    {approveRepBookMutation.isPending ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      'Approve Book'
+                                    )}
                                   </Button>
                                 </div>
                               </div>
@@ -938,18 +990,17 @@ export default function ManagerHierarchyView({
                                                     variant={note ? "default" : "outline"}
                                                     size="sm"
                                                     onClick={() => setSelectedAccount({ ...account, currentOwner: rep })}
-                                                    className="gap-2"
+                                                    className="gap-1 relative"
                                                   >
-                                                    {note ? (
-                                                      <>
-                                                        <Edit2 className="w-3 h-3" />
-                                                        Note
-                                                      </>
+                                                    <MessageSquare className="w-3 h-3" />
+                                                    {getNoteCount(account.sfdc_account_id) > 0 ? (
+                                                      <span className="flex items-center gap-1">
+                                                        <span className="bg-primary text-primary-foreground rounded-full px-1.5 py-0.5 text-xs font-medium min-w-[18px] text-center">
+                                                          {getNoteCount(account.sfdc_account_id)}
+                                                        </span>
+                                                      </span>
                                                     ) : (
-                                                      <>
-                                                        <MessageSquare className="w-3 h-3" />
-                                                        Note
-                                                      </>
+                                                      'Note'
                                                     )}
                                                   </Button>
                                                   <Button
@@ -1037,8 +1088,14 @@ export default function ManagerHierarchyView({
                                                         onClick={() => setSelectedAccount({ ...child, currentOwner: rep })}
                                                         className="gap-1 text-xs"
                                                       >
-                                                        {childNote ? <Edit2 className="w-3 h-3" /> : <MessageSquare className="w-3 h-3" />}
-                                                        Note
+                                                        <MessageSquare className="w-3 h-3" />
+                                                        {getNoteCount(child.sfdc_account_id) > 0 ? (
+                                                          <span className="bg-primary text-primary-foreground rounded-full px-1 py-0.5 text-xs font-medium min-w-[16px] text-center">
+                                                            {getNoteCount(child.sfdc_account_id)}
+                                                          </span>
+                                                        ) : (
+                                                          'Note'
+                                                        )}
                                                       </Button>
                                                       <Button
                                                         variant="outline"
