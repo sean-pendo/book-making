@@ -275,11 +275,6 @@ export default function ManagerHierarchyView({
     const tier3 = customerAccounts.filter(acc => acc.expansion_tier === 'Tier 3').length;
     const tier4 = customerAccounts.filter(acc => acc.expansion_tier === 'Tier 4').length;
     
-    // Calculate region match % (only from parent accounts - applies to all)
-    const regionMatches = parentAccounts.filter(acc => 
-      rep?.region && (acc.geo === rep.region || acc.sales_territory === rep.region)
-    ).length;
-    
     // Calculate retention % (CUSTOMER accounts they previously owned that they still own)
     const retainedAccounts = customerAccounts.filter(acc => 
       acc.owner_id === acc.new_owner_id && acc.owner_id === repId
@@ -288,19 +283,22 @@ export default function ManagerHierarchyView({
     // Calculate CRE Parents count (parent accounts with cre_status set - matches ComprehensiveReview)
     const creCount = customerAccounts.filter(acc => acc.cre_status !== null && acc.cre_status !== '').length;
     
+    // Calculate region match % only for CUSTOMER accounts
+    const customerRegionMatches = customerAccounts.filter(acc => 
+      rep?.region && (acc.geo === rep.region || acc.sales_territory === rep.region)
+    ).length;
+
     return {
       totalAccounts: parentAccounts.length,
       totalARR,
       totalATR,
       customers: customerCount,
       prospects: prospectAccounts.length,
-      // Tier %s are based on CUSTOMER count only (tiers don't apply to prospects)
-      tier1Pct: customerCount > 0 ? (tier1 / customerCount * 100) : 0,
-      tier2Pct: customerCount > 0 ? (tier2 / customerCount * 100) : 0,
-      tier3Pct: customerCount > 0 ? (tier3 / customerCount * 100) : 0,
-      tier4Pct: customerCount > 0 ? (tier4 / customerCount * 100) : 0,
-      // Region % applies to all accounts
-      regionMatchPct: parentAccounts.length > 0 ? (regionMatches / parentAccounts.length * 100) : 0,
+      // Combined tier %s based on CUSTOMER count only (tiers don't apply to prospects)
+      tier1And2Pct: customerCount > 0 ? ((tier1 + tier2) / customerCount * 100) : 0,
+      tier3And4Pct: customerCount > 0 ? ((tier3 + tier4) / customerCount * 100) : 0,
+      // Region % now based on CUSTOMER count only
+      regionMatchPct: customerCount > 0 ? (customerRegionMatches / customerCount * 100) : 0,
       // Retention % is based on CUSTOMER count only
       retentionPct: customerCount > 0 ? (retainedAccounts / customerCount * 100) : 0,
       creCount,
@@ -566,26 +564,26 @@ export default function ManagerHierarchyView({
                                     <div className="text-sm font-medium">{formatCurrency(metrics.totalATR)}</div>
                                     <div className="text-xs text-muted-foreground">ATR</div>
                                   </div>
-                                  <div className="text-right min-w-[180px]">
-                                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                                      <div className="text-right">
-                                        <span className="text-muted-foreground">T1:</span>
-                                        <span className="ml-1 font-medium">{metrics.tier1Pct.toFixed(0)}%</span>
-                                      </div>
-                                      <div className="text-right">
-                                        <span className="text-muted-foreground">T2:</span>
-                                        <span className="ml-1 font-medium">{metrics.tier2Pct.toFixed(0)}%</span>
-                                      </div>
-                                      <div className="text-right">
-                                        <span className="text-muted-foreground">Region:</span>
-                                        <span className="ml-1 font-medium">{metrics.regionMatchPct.toFixed(0)}%</span>
-                                      </div>
-                                      <div className="text-right">
-                                        <span className="text-muted-foreground">Retention:</span>
-                                        <span className="ml-1 font-medium">{metrics.retentionPct.toFixed(0)}%</span>
-                                      </div>
-                                    </div>
-                                  </div>
+                                                  <div className="text-right min-w-[200px]">
+                                                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                                                      <div className="text-right">
+                                                        <span className="text-muted-foreground">T1&T2:</span>
+                                                        <span className="ml-1 font-medium">{metrics.tier1And2Pct.toFixed(0)}%</span>
+                                                      </div>
+                                                      <div className="text-right">
+                                                        <span className="text-muted-foreground">T3&T4:</span>
+                                                        <span className="ml-1 font-medium">{metrics.tier3And4Pct.toFixed(0)}%</span>
+                                                      </div>
+                                                      <div className="text-right">
+                                                        <span className="text-muted-foreground">Region:</span>
+                                                        <span className="ml-1 font-medium">{metrics.regionMatchPct.toFixed(0)}%</span>
+                                                      </div>
+                                                      <div className="text-right">
+                                                        <span className="text-muted-foreground">Retention:</span>
+                                                        <span className="ml-1 font-medium">{metrics.retentionPct.toFixed(0)}%</span>
+                                                      </div>
+                                                    </div>
+                                                  </div>
                                   <div className="text-right min-w-[100px]">
                                     <div className="text-xs">
                                       <span className="text-muted-foreground">CRE Parents:</span>

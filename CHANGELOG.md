@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - UI: Manager Review Summary Stats Update
+- **Change**: Combined tier percentages in rep stats display
+  - T1 & T2 → now shown as single "T1&T2" combined percentage
+  - Added "T3&T4" combined percentage (replaces standalone T2)
+- **Fix**: Region match % now uses only CUSTOMER accounts as denominator
+  - Previously: Region match counted all parent accounts (customers + prospects)
+  - Now: Region match % is customers-only, matching tier and retention calculations
+- **Files**: `ManagerHierarchyView.tsx`
+
 ## [2025-11-26] - Fix: Manager Hierarchy View Metrics & Sorting
 - **Fix**: Tier percentages (T1%, T2%) now calculated against CUSTOMERS only, not all accounts
   - Previously: T1 = 1/127 total accounts = 1%
