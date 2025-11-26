@@ -76,7 +76,7 @@ export default function ManagerHierarchyView({
       const accountsPromises = repIds.map(repId => 
         supabase
           .from('accounts')
-          .select('sfdc_account_id, account_name, build_id, is_parent, is_customer, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, calculated_atr, arr, atr, hierarchy_bookings_arr_converted, expansion_tier, geo, sales_territory, hq_country, cre_count, ultimate_parent_id, has_split_ownership')
+          .select('sfdc_account_id, account_name, build_id, is_parent, is_customer, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, calculated_atr, arr, atr, hierarchy_bookings_arr_converted, expansion_tier, geo, sales_territory, hq_country, cre_count, cre_risk, ultimate_parent_id, has_split_ownership')
           .eq('build_id', buildId)
           .or(`new_owner_id.eq.${repId},and(owner_id.eq.${repId},new_owner_id.is.null)`)
       );
@@ -285,8 +285,8 @@ export default function ManagerHierarchyView({
       acc.owner_id === acc.new_owner_id && acc.owner_id === repId
     ).length;
 
-    // Calculate CRE count (only from customer parent accounts)
-    const creCount = customerAccounts.reduce((sum, acc) => sum + (acc.cre_count || 0), 0);
+    // Calculate CRE Parents count (parent accounts with cre_risk status)
+    const creCount = customerAccounts.filter(acc => acc.cre_risk === true).length;
     
     return {
       totalAccounts: parentAccounts.length,
