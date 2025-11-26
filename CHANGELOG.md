@@ -8,8 +8,9 @@ All notable changes to this project will be documented in this file.
   - Now: T1 = 1/8 customers = 12.5%
 - **Fix**: Retention % now based on customer count only
 - **Fix**: Accounts now sort by type first (Customers → Prospects), then by ARR
-- **Fix**: CRE Parents now counts accounts with `cre_risk=true` (was incorrectly summing `cre_count`)
-  - Now matches ComprehensiveReview calculation
+- **Fix**: CRE Parents now counts accounts with `cre_status !== null` (matches ComprehensiveReview exactly)
+  - Was incorrectly using `cre_risk=true` (wrong field)
+  - Was also incorrectly summing `cre_count` before that
 - **UI**: Changed "CRE" label to "CRE Parents" for clarity
 - **UI**: Removed confusing Q1/Q2/Q3/Q4 renewal counts from rep rows
 - **Files**: `ManagerHierarchyView.tsx`
