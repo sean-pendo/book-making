@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - UI: Manager Dashboard Layout - Dropdown Build Selector
+- **Change**: Replaced left sidebar build list with dropdown selector at top
+  - Review area now uses full width instead of 9/12 columns
+  - Build dropdown shows name, role (SLM/FLM), and shared date
+  - Cleaner, more compact header layout
+- **Files**: `ManagerDashboard.tsx`
+
 ## [2025-11-26] - UI: Manager Review Summary Stats Update
 - **Change**: Combined tier percentages in rep stats display
   - T1 & T2 → now shown as single "T1&T2" combined percentage

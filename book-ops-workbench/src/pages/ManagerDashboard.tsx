@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/hooks/use-toast';
 import { Loader2, CheckCircle, XCircle, AlertCircle, ClipboardCheck, FolderOpen, Calendar, User } from 'lucide-react';
 import ManagerHierarchyView from '@/components/ManagerHierarchyView';
@@ -14,7 +15,6 @@ import ManagerPendingApprovals from '@/components/ManagerPendingApprovals';
 import ManagerReviewsAndNotes from '@/components/ManagerReviewsAndNotes';
 import ManagerAIAssistant from '@/components/ManagerAIAssistant';
 import SLMApprovalQueue from '@/components/SLMApprovalQueue';
-import { ScrollArea } from '@/components/ui/scroll-area';
 
 export default function ManagerDashboard() {
   const { user, effectiveProfile } = useAuth();
@@ -199,189 +199,163 @@ export default function ManagerDashboard() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-12 gap-6">
-          {/* Left Sidebar - Build List */}
-          <div className="col-span-3">
-            <Card className="sticky top-4">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-                  Shared Builds ({reviews.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <ScrollArea className="h-[calc(100vh-280px)]">
-                  <div className="space-y-1 p-2">
-                    {reviews.map((review: any) => (
-                      <button
-                        key={review.id}
-                        onClick={() => setSelectedReview(review.id)}
-                        className={`w-full text-left p-3 rounded-lg transition-colors ${
-                          selectedReview === review.id 
-                            ? 'bg-primary/10 border border-primary/20' 
-                            : 'hover:bg-muted/50'
-                        }`}
-                      >
-                        <div className="font-medium text-sm mb-1 truncate">
-                          {review.builds?.name || 'Unnamed Build'}
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-                          <User className="w-3 h-3" />
-                          <span>{review.manager_level}</span>
-                          <span>•</span>
-                          <Calendar className="w-3 h-3" />
-                          <span>{new Date(review.sent_at).toLocaleDateString()}</span>
-                        </div>
-                        {getStatusBadge(review.status, true)}
-                      </button>
-                    ))}
+        <div className="space-y-6">
+          {/* Build Selector & Header */}
+          <Card>
+            <CardHeader className="pb-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 space-y-3">
+                  {/* Build Dropdown */}
+                  <div className="flex items-center gap-3">
+                    <Select value={selectedReview || ''} onValueChange={setSelectedReview}>
+                      <SelectTrigger className="w-[350px]">
+                        <SelectValue placeholder="Select a shared build..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {reviews.map((review: any) => (
+                          <SelectItem key={review.id} value={review.id}>
+                            <div className="flex items-center gap-2">
+                              <span>{review.builds?.name || 'Unnamed Build'}</span>
+                              <span className="text-xs text-muted-foreground">
+                                ({review.manager_level} • {new Date(review.sent_at).toLocaleDateString()})
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedReviewData && getStatusBadge(selectedReviewData.status)}
                   </div>
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Main Content */}
-          <div className="col-span-9">
-            {selectedReviewData ? (
-              <div className="space-y-6">
-                {/* Build Header */}
-                <Card>
-                  <CardHeader className="pb-4">
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-3">
-                          <CardTitle className="text-xl">{selectedReviewData.builds?.name || 'Unnamed Build'}</CardTitle>
-                          {getStatusBadge(selectedReviewData.status)}
-                        </div>
-                        <CardDescription>
-                          {selectedReviewData.builds?.description || 'No description'}
-                        </CardDescription>
-                        <div className="flex items-center gap-4 text-sm text-muted-foreground pt-1">
-                          <span className="flex items-center gap-1">
-                            <User className="w-4 h-4" />
-                            Your role: <Badge variant="outline" className="ml-1">{selectedReviewData.manager_level}</Badge>
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Calendar className="w-4 h-4" />
-                            Shared: {new Date(selectedReviewData.sent_at).toLocaleDateString()}
-                          </span>
-                        </div>
+                  
+                  {selectedReviewData && (
+                    <>
+                      <CardDescription>
+                        {selectedReviewData.builds?.description || 'No description'}
+                      </CardDescription>
+                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <User className="w-4 h-4" />
+                          Your role: <Badge variant="outline" className="ml-1">{selectedReviewData.manager_level}</Badge>
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-4 h-4" />
+                          Shared: {new Date(selectedReviewData.sent_at).toLocaleDateString()}
+                        </span>
                       </div>
-                      <div className="flex gap-2">
-                        {selectedReviewData.status === 'pending' && (
-                          <>
-                            <Button 
-                              onClick={() => handleDecline(selectedReviewData.id)}
-                              variant="outline"
-                              size="sm"
-                              className="gap-1"
-                            >
-                              <XCircle className="w-4 h-4" />
-                              Review & Edit
-                            </Button>
-                            <Button 
-                              onClick={() => handleAccept(selectedReviewData.id)}
-                              size="sm"
-                              className="gap-1"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                              Accept All
-                            </Button>
-                          </>
-                        )}
-                        {effectiveProfile?.role === 'SLM' && selectedReviewData.status === 'in_review' && (
-                          <Button 
-                            onClick={() => approveAllMutation.mutate(selectedReviewData.build_id)}
-                            disabled={approveAllMutation.isPending}
-                            size="sm"
-                            className="gap-1"
-                          >
-                            {approveAllMutation.isPending ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <CheckCircle className="w-4 h-4" />
-                            )}
-                            Approve FLM Proposals
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  </CardHeader>
-                  {selectedReviewData.status === 'accepted' && (
-                    <CardContent className="pt-0">
-                      <div className="bg-success/10 text-success p-3 rounded-lg text-sm">
-                        <p className="font-medium">✓ You've accepted this build. Assignments are locked.</p>
-                      </div>
-                    </CardContent>
+                    </>
                   )}
-                  {selectedReviewData.status === 'in_review' && (
-                    <CardContent className="pt-0">
-                      <div className="bg-primary/10 text-primary p-3 rounded-lg text-sm">
-                        <p className="font-medium">You can now reassign accounts and add notes below.</p>
-                      </div>
-                    </CardContent>
-                  )}
-                </Card>
-
-                {/* Content Tabs */}
-                <Tabs defaultValue="team-view" className="w-full">
-                  <TabsList className={`grid w-full ${effectiveProfile?.role === 'SLM' ? 'grid-cols-4' : 'grid-cols-3'}`}>
-                    <TabsTrigger value="team-view">Team View</TabsTrigger>
-                    <TabsTrigger value="before-after">Before & After</TabsTrigger>
-                    <TabsTrigger value="approvals">My Proposals</TabsTrigger>
-                    {effectiveProfile?.role === 'SLM' && (
-                      <TabsTrigger value="slm-queue" className="gap-1">
-                        <ClipboardCheck className="w-4 h-4" />
-                        FLM Approvals
-                      </TabsTrigger>
+                </div>
+                
+                {selectedReviewData && (
+                  <div className="flex gap-2">
+                    {selectedReviewData.status === 'pending' && (
+                      <>
+                        <Button 
+                          onClick={() => handleDecline(selectedReviewData.id)}
+                          variant="outline"
+                          size="sm"
+                          className="gap-1"
+                        >
+                          <XCircle className="w-4 h-4" />
+                          Review & Edit
+                        </Button>
+                        <Button 
+                          onClick={() => handleAccept(selectedReviewData.id)}
+                          size="sm"
+                          className="gap-1"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          Accept All
+                        </Button>
+                      </>
                     )}
-                  </TabsList>
-
-                  <TabsContent value="team-view" className="mt-6 relative">
-                    <ManagerHierarchyView 
-                      buildId={selectedReviewData.build_id}
-                      managerLevel={selectedReviewData.manager_level}
-                      managerName={selectedReviewData.manager_name}
-                      reviewStatus={selectedReviewData.status}
-                    />
-                    <ManagerAIAssistant 
-                      buildId={selectedReviewData.build_id}
-                      buildName={selectedReviewData.builds?.name || 'Unnamed Build'}
-                      managerName={selectedReviewData.manager_name}
-                      managerLevel={selectedReviewData.manager_level}
-                    />
-                  </TabsContent>
-
-                  <TabsContent value="before-after" className="mt-6">
-                    <ManagerBeforeAfterComparison 
-                      buildId={selectedReviewData.build_id}
-                      managerLevel={selectedReviewData.manager_level}
-                      managerName={selectedReviewData.manager_name}
-                    />
-                  </TabsContent>
-
-                  <TabsContent value="approvals" className="mt-6">
-                    <ManagerPendingApprovals buildId={selectedReviewData.build_id} />
-                  </TabsContent>
-
-                  {effectiveProfile?.role === 'SLM' && (
-                    <TabsContent value="slm-queue" className="mt-6">
-                      <SLMApprovalQueue 
-                        buildId={selectedReviewData.build_id} 
-                        slmName={selectedReviewData.manager_name}
-                      />
-                    </TabsContent>
-                  )}
-                </Tabs>
+                    {effectiveProfile?.role === 'SLM' && selectedReviewData.status === 'in_review' && (
+                      <Button 
+                        onClick={() => approveAllMutation.mutate(selectedReviewData.build_id)}
+                        disabled={approveAllMutation.isPending}
+                        size="sm"
+                        className="gap-1"
+                      >
+                        {approveAllMutation.isPending ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <CheckCircle className="w-4 h-4" />
+                        )}
+                        Approve FLM Proposals
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
-            ) : (
-              <Card>
-                <CardContent className="py-12 text-center">
-                  <p className="text-muted-foreground">Select a build from the list to view details.</p>
-                </CardContent>
-              </Card>
+            </CardHeader>
+            {selectedReviewData?.status === 'accepted' && (
+              <CardContent className="pt-0">
+                <div className="bg-success/10 text-success p-3 rounded-lg text-sm">
+                  <p className="font-medium">✓ You've accepted this build. Assignments are locked.</p>
+                </div>
+              </CardContent>
             )}
-          </div>
+            {selectedReviewData?.status === 'in_review' && (
+              <CardContent className="pt-0">
+                <div className="bg-primary/10 text-primary p-3 rounded-lg text-sm">
+                  <p className="font-medium">You can now reassign accounts and add notes below.</p>
+                </div>
+              </CardContent>
+            )}
+          </Card>
+
+          {/* Content Tabs - Full Width */}
+          {selectedReviewData && (
+            <Tabs defaultValue="team-view" className="w-full">
+              <TabsList className={`grid w-full ${effectiveProfile?.role === 'SLM' ? 'grid-cols-4' : 'grid-cols-3'}`}>
+                <TabsTrigger value="team-view">Team View</TabsTrigger>
+                <TabsTrigger value="before-after">Before & After</TabsTrigger>
+                <TabsTrigger value="approvals">My Proposals</TabsTrigger>
+                {effectiveProfile?.role === 'SLM' && (
+                  <TabsTrigger value="slm-queue" className="gap-1">
+                    <ClipboardCheck className="w-4 h-4" />
+                    FLM Approvals
+                  </TabsTrigger>
+                )}
+              </TabsList>
+
+              <TabsContent value="team-view" className="mt-6 relative">
+                <ManagerHierarchyView 
+                  buildId={selectedReviewData.build_id}
+                  managerLevel={selectedReviewData.manager_level as 'SLM' | 'FLM'}
+                  managerName={selectedReviewData.manager_name}
+                  reviewStatus={selectedReviewData.status}
+                />
+                <ManagerAIAssistant 
+                  buildId={selectedReviewData.build_id}
+                  buildName={selectedReviewData.builds?.name || 'Unnamed Build'}
+                  managerName={selectedReviewData.manager_name}
+                  managerLevel={selectedReviewData.manager_level}
+                />
+              </TabsContent>
+
+              <TabsContent value="before-after" className="mt-6">
+                <ManagerBeforeAfterComparison 
+                  buildId={selectedReviewData.build_id}
+                  managerLevel={selectedReviewData.manager_level as 'SLM' | 'FLM'}
+                  managerName={selectedReviewData.manager_name}
+                />
+              </TabsContent>
+
+              <TabsContent value="approvals" className="mt-6">
+                <ManagerPendingApprovals buildId={selectedReviewData.build_id} />
+              </TabsContent>
+
+              {effectiveProfile?.role === 'SLM' && (
+                <TabsContent value="slm-queue" className="mt-6">
+                  <SLMApprovalQueue 
+                    buildId={selectedReviewData.build_id} 
+                    slmName={selectedReviewData.manager_name}
+                  />
+                </TabsContent>
+              )}
+            </Tabs>
+          )}
         </div>
       )}
     </div>
