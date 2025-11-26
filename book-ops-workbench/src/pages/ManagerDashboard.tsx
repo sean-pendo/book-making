@@ -13,7 +13,6 @@ import ManagerHierarchyView from '@/components/ManagerHierarchyView';
 import ManagerBeforeAfterComparison from '@/components/ManagerBeforeAfterComparison';
 import ManagerPendingApprovals from '@/components/ManagerPendingApprovals';
 import ManagerReviewsAndNotes from '@/components/ManagerReviewsAndNotes';
-import ManagerAIAssistant from '@/components/ManagerAIAssistant';
 import SLMApprovalQueue from '@/components/SLMApprovalQueue';
 
 export default function ManagerDashboard() {
@@ -319,18 +318,12 @@ export default function ManagerDashboard() {
                 )}
               </TabsList>
 
-              <TabsContent value="team-view" className="mt-6 relative">
+              <TabsContent value="team-view" className="mt-6">
                 <ManagerHierarchyView 
                   buildId={selectedReviewData.build_id}
                   managerLevel={selectedReviewData.manager_level as 'SLM' | 'FLM'}
                   managerName={selectedReviewData.manager_name}
                   reviewStatus={selectedReviewData.status}
-                />
-                <ManagerAIAssistant 
-                  buildId={selectedReviewData.build_id}
-                  buildName={selectedReviewData.builds?.name || 'Unnamed Build'}
-                  managerName={selectedReviewData.manager_name}
-                  managerLevel={selectedReviewData.manager_level}
                 />
               </TabsContent>
 
