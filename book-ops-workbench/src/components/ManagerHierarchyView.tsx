@@ -92,9 +92,15 @@ export default function ManagerHierarchyView({
         }
       });
 
-      const data = Array.from(uniqueAccountsMap.values()).sort((a, b) => 
-        (b.calculated_arr || 0) - (a.calculated_arr || 0)
-      );
+      // Sort by account type first (Customers before Prospects), then by ARR descending
+      const data = Array.from(uniqueAccountsMap.values()).sort((a, b) => {
+        // Customers (is_customer=true) come first
+        if (a.is_customer !== b.is_customer) {
+          return a.is_customer ? -1 : 1;
+        }
+        // Then sort by ARR descending
+        return (b.calculated_arr || 0) - (a.calculated_arr || 0);
+      });
 
       if (accountsResults.some(r => r.error)) throw accountsResults.find(r => r.error)?.error;
       return data;
@@ -199,39 +205,6 @@ export default function ManagerHierarchyView({
     },
   });
 
-  const getQuarterFromDate = (dateStr: string | null) => {
-    if (!dateStr) return null;
-    const date = new Date(dateStr);
-    const month = date.getMonth();
-    return Math.floor(month / 3) + 1; // Q1=1, Q2=2, Q3=3, Q4=4
-  };
-
-  const getRepOpportunityMetrics = (repId: string) => {
-    const repOpps = opportunities?.filter(opp => opp.new_owner_id === repId) || [];
-    
-    const q1Renewals = repOpps.filter(opp => 
-      opp.opportunity_type?.toLowerCase().includes('renewal') && 
-      getQuarterFromDate(opp.close_date) === 1
-    ).length;
-    
-    const q2Renewals = repOpps.filter(opp => 
-      opp.opportunity_type?.toLowerCase().includes('renewal') && 
-      getQuarterFromDate(opp.close_date) === 2
-    ).length;
-    
-    const q3Renewals = repOpps.filter(opp => 
-      opp.opportunity_type?.toLowerCase().includes('renewal') && 
-      getQuarterFromDate(opp.close_date) === 3
-    ).length;
-    
-    const q4Renewals = repOpps.filter(opp => 
-      opp.opportunity_type?.toLowerCase().includes('renewal') && 
-      getQuarterFromDate(opp.close_date) === 4
-    ).length;
-
-    return { q1Renewals, q2Renewals, q3Renewals, q4Renewals };
-  };
-
   const getRepAccounts = (repId: string) => {
     return accounts?.filter(acc => acc.new_owner_id === repId) || [];
   };
@@ -291,37 +264,45 @@ export default function ManagerHierarchyView({
       parentAccounts.reduce((sum, acc) => sum + getATRForAccount(acc), 0) + 
       splitOwnershipChildrenATR;
     
-    // Calculate tier distribution (only from parent accounts)
-    const tier1 = parentAccounts.filter(acc => acc.expansion_tier === 'Tier 1').length;
-    const tier2 = parentAccounts.filter(acc => acc.expansion_tier === 'Tier 2').length;
-    const tier3 = parentAccounts.filter(acc => acc.expansion_tier === 'Tier 3').length;
-    const tier4 = parentAccounts.filter(acc => acc.expansion_tier === 'Tier 4').length;
+    // Separate customers and prospects for proper metric calculation
+    const customerAccounts = parentAccounts.filter(acc => acc.is_customer);
+    const prospectAccounts = parentAccounts.filter(acc => !acc.is_customer);
+    const customerCount = customerAccounts.length;
     
-    // Calculate region match % (only from parent accounts)
+    // Calculate tier distribution (ONLY from CUSTOMER accounts - tiers don't apply to prospects)
+    const tier1 = customerAccounts.filter(acc => acc.expansion_tier === 'Tier 1').length;
+    const tier2 = customerAccounts.filter(acc => acc.expansion_tier === 'Tier 2').length;
+    const tier3 = customerAccounts.filter(acc => acc.expansion_tier === 'Tier 3').length;
+    const tier4 = customerAccounts.filter(acc => acc.expansion_tier === 'Tier 4').length;
+    
+    // Calculate region match % (only from parent accounts - applies to all)
     const regionMatches = parentAccounts.filter(acc => 
       rep?.region && (acc.geo === rep.region || acc.sales_territory === rep.region)
     ).length;
     
-    // Calculate retention % (accounts they previously owned that they still own)
-    const retainedAccounts = parentAccounts.filter(acc => 
+    // Calculate retention % (CUSTOMER accounts they previously owned that they still own)
+    const retainedAccounts = customerAccounts.filter(acc => 
       acc.owner_id === acc.new_owner_id && acc.owner_id === repId
     ).length;
 
-    // Calculate CRE count (only from parent accounts)
-    const creCount = parentAccounts.reduce((sum, acc) => sum + (acc.cre_count || 0), 0);
+    // Calculate CRE count (only from customer parent accounts)
+    const creCount = customerAccounts.reduce((sum, acc) => sum + (acc.cre_count || 0), 0);
     
     return {
       totalAccounts: parentAccounts.length,
       totalARR,
       totalATR,
-      customers: parentAccounts.filter(acc => acc.is_customer).length,
-      prospects: parentAccounts.filter(acc => !acc.is_customer).length,
-      tier1Pct: parentAccounts.length > 0 ? (tier1 / parentAccounts.length * 100) : 0,
-      tier2Pct: parentAccounts.length > 0 ? (tier2 / parentAccounts.length * 100) : 0,
-      tier3Pct: parentAccounts.length > 0 ? (tier3 / parentAccounts.length * 100) : 0,
-      tier4Pct: parentAccounts.length > 0 ? (tier4 / parentAccounts.length * 100) : 0,
+      customers: customerCount,
+      prospects: prospectAccounts.length,
+      // Tier %s are based on CUSTOMER count only (tiers don't apply to prospects)
+      tier1Pct: customerCount > 0 ? (tier1 / customerCount * 100) : 0,
+      tier2Pct: customerCount > 0 ? (tier2 / customerCount * 100) : 0,
+      tier3Pct: customerCount > 0 ? (tier3 / customerCount * 100) : 0,
+      tier4Pct: customerCount > 0 ? (tier4 / customerCount * 100) : 0,
+      // Region % applies to all accounts
       regionMatchPct: parentAccounts.length > 0 ? (regionMatches / parentAccounts.length * 100) : 0,
-      retentionPct: parentAccounts.length > 0 ? (retainedAccounts / parentAccounts.length * 100) : 0,
+      // Retention % is based on CUSTOMER count only
+      retentionPct: customerCount > 0 ? (retainedAccounts / customerCount * 100) : 0,
       creCount,
     };
   };
@@ -548,7 +529,6 @@ export default function ManagerHierarchyView({
                     {/* Reps under this FLM */}
                     {flmReps.map((rep) => {
                       const metrics = getRepMetrics(rep.rep_id);
-                      const oppMetrics = getRepOpportunityMetrics(rep.rep_id);
                       const repAccounts = getRepAccounts(rep.rep_id);
                       const isExpanded = expandedReps.has(rep.rep_id);
 
@@ -606,15 +586,10 @@ export default function ManagerHierarchyView({
                                       </div>
                                     </div>
                                   </div>
-                                  <div className="text-right min-w-[140px]">
-                                    <div className="space-y-1 text-xs">
-                                      <div>
-                                        <span className="text-muted-foreground">CRE:</span>
-                                        <span className="ml-1 font-medium">{metrics.creCount}</span>
-                                      </div>
-                                      <div className="text-muted-foreground">
-                                        Q1:{oppMetrics.q1Renewals} Q2:{oppMetrics.q2Renewals} Q3:{oppMetrics.q3Renewals} Q4:{oppMetrics.q4Renewals}
-                                      </div>
+                                  <div className="text-right min-w-[100px]">
+                                    <div className="text-xs">
+                                      <span className="text-muted-foreground">CRE Parents:</span>
+                                      <span className="ml-1 font-medium">{metrics.creCount}</span>
                                     </div>
                                   </div>
                                   <Button 

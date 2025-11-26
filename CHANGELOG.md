@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - Fix: Manager Hierarchy View Metrics & Sorting
+- **Fix**: Tier percentages (T1%, T2%) now calculated against CUSTOMERS only, not all accounts
+  - Previously: T1 = 1/127 total accounts = 1%
+  - Now: T1 = 1/8 customers = 12.5%
+- **Fix**: Retention % now based on customer count only
+- **Fix**: Accounts now sort by type first (Customers → Prospects), then by ARR
+- **UI**: Changed "CRE" label to "CRE Parents" for clarity
+- **UI**: Removed confusing Q1/Q2/Q3/Q4 renewal counts from rep rows
+- **Files**: `ManagerHierarchyView.tsx`
+
 ## [2025-11-26] - Fix: ATR Not Displaying in Manager Hierarchy View
 - **Fix**: ATR values showing $0 in Manager Dashboard hierarchy view
   - Root cause: `calculated_atr` field in accounts table was not populated
