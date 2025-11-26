@@ -3,8 +3,11 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, TrendingUp, TrendingDown } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Loader2, TrendingUp, TrendingDown, Download } from 'lucide-react';
 import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
+import { downloadFile } from '@/utils/exportUtils';
+import { toast } from '@/hooks/use-toast';
 
 interface ManagerBeforeAfterComparisonProps {
   buildId: string;
@@ -193,6 +196,76 @@ export default function ManagerBeforeAfterComparison({
     }).format(value);
   };
 
+  // Export comparison data to CSV
+  const exportComparisonCSV = () => {
+    if (!comparisonData || Object.keys(comparisonData).length === 0) {
+      toast({
+        title: 'Export Failed',
+        description: 'No comparison data available to export.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const csvRows: string[] = [];
+    
+    // Header
+    csvRows.push([
+      'FLM',
+      'Rep Name',
+      'Rep Team',
+      'Rep Region',
+      'Before Accounts',
+      'Before Customers',
+      'Before Prospects',
+      'Before ARR',
+      'Before ATR',
+      'After Accounts',
+      'After Customers',
+      'After Prospects',
+      'After ARR',
+      'After ATR',
+      'ARR Change',
+      'ARR Change %'
+    ].join(','));
+
+    // Data rows
+    Object.entries(comparisonData).forEach(([flm, reps]) => {
+      reps.forEach(({ rep, before, after }) => {
+        const arrChange = after.totalARR - before.totalARR;
+        const arrChangePct = before.totalARR === 0 ? 0 : ((arrChange / before.totalARR) * 100);
+        
+        csvRows.push([
+          `"${flm}"`,
+          `"${rep.name}"`,
+          `"${rep.team || ''}"`,
+          `"${rep.region || ''}"`,
+          before.totalAccounts,
+          before.customers,
+          before.prospects,
+          before.totalARR,
+          before.totalATR,
+          after.totalAccounts,
+          after.customers,
+          after.prospects,
+          after.totalARR,
+          after.totalATR,
+          arrChange,
+          arrChangePct.toFixed(1)
+        ].join(','));
+      });
+    });
+
+    const csvContent = csvRows.join('\n');
+    const timestamp = new Date().toISOString().split('T')[0];
+    downloadFile(csvContent, `before-after-comparison-${managerName}-${timestamp}.csv`, 'text/csv');
+
+    toast({
+      title: 'Export Complete',
+      description: 'Comparison data exported to CSV.',
+    });
+  };
+
   const getDifference = (before: number, after: number) => {
     const diff = after - before;
     const percentChange = before === 0 ? 0 : ((diff / before) * 100);
@@ -226,6 +299,21 @@ export default function ManagerBeforeAfterComparison({
 
   return (
     <div className="space-y-6">
+      {/* Export Button */}
+      {comparisonData && Object.keys(comparisonData).length > 0 && (
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportComparisonCSV}
+            className="gap-2"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </Button>
+        </div>
+      )}
+
       {!comparisonData || Object.keys(comparisonData).length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">

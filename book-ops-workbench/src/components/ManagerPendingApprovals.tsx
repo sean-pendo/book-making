@@ -8,10 +8,12 @@ import { Loader2, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react'
 
 interface ManagerPendingApprovalsProps {
   buildId: string;
+  managerLevel?: 'FLM' | 'SLM';
 }
 
-export default function ManagerPendingApprovals({ buildId }: ManagerPendingApprovalsProps) {
-  const { user } = useAuth();
+export default function ManagerPendingApprovals({ buildId, managerLevel }: ManagerPendingApprovalsProps) {
+  const { user, effectiveProfile } = useAuth();
+  const userRole = effectiveProfile?.role || 'FLM';
 
   const { data: reassignments, isLoading } = useQuery({
     queryKey: ['manager-pending-approvals', buildId, user?.id],
@@ -68,33 +70,58 @@ export default function ManagerPendingApprovals({ buildId }: ManagerPendingAppro
   const approvedCount = reassignments?.filter(r => r.approval_status === 'approved').length || 0;
   const rejectedCount = reassignments?.filter(r => r.approval_status === 'rejected').length || 0;
 
+  // Determine which cards to show based on role
+  // FLM: Show all 4 (their proposals start at pending_slm)
+  // SLM: Hide "Awaiting SLM" (their proposals skip to pending_revops)
+  // RevOps: Show only "Applied" and "Rejected" (their proposals auto-approve)
+  const showAwaitingSlm = userRole === 'FLM' || (managerLevel === 'FLM' && userRole !== 'REVOPS');
+  const showAwaitingRevops = userRole !== 'REVOPS';
+  const isRevOps = userRole === 'REVOPS';
+
+  // Calculate grid columns based on visible cards
+  const visibleCardCount = (showAwaitingSlm ? 1 : 0) + (showAwaitingRevops ? 1 : 0) + 2; // Always show Approved + Rejected
+  const gridCols = `grid-cols-${visibleCardCount}`;
+
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-amber-600">{pendingSlmCount}</div>
-              <div className="text-sm text-muted-foreground">Awaiting SLM</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">{pendingRevopsCount}</div>
-              <div className="text-sm text-muted-foreground">Awaiting RevOps</div>
-            </div>
-          </CardContent>
-        </Card>
+      <div className={`grid gap-4 ${visibleCardCount === 4 ? 'grid-cols-4' : visibleCardCount === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+        {/* Awaiting SLM - Only show for FLMs */}
+        {showAwaitingSlm && (
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-amber-600">{pendingSlmCount}</div>
+                <div className="text-sm text-muted-foreground">Awaiting SLM</div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        
+        {/* Awaiting RevOps - Show for FLM and SLM, not RevOps */}
+        {showAwaitingRevops && (
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-blue-600">{pendingRevopsCount}</div>
+                <div className="text-sm text-muted-foreground">Awaiting RevOps</div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        
+        {/* Approved/Applied - Show for all */}
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
               <div className="text-2xl font-bold text-success">{approvedCount}</div>
-              <div className="text-sm text-muted-foreground">Approved</div>
+              <div className="text-sm text-muted-foreground">
+                {isRevOps ? 'Applied' : 'Approved'}
+              </div>
             </div>
           </CardContent>
         </Card>
+        
+        {/* Rejected - Show for all */}
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">

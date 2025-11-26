@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Search, User, Split } from 'lucide-react';
+import { Loader2, Search, User, Split, Download } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,36 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
+import { downloadFile } from '@/utils/exportUtils';
+
+// Interface for hierarchical account display
+interface AccountWithHierarchy {
+  sfdc_account_id: string;
+  account_name: string;
+  build_id: string;
+  is_parent: boolean;
+  is_customer: boolean;
+  owner_id: string;
+  owner_name: string | null;
+  new_owner_id: string | null;
+  new_owner_name: string | null;
+  calculated_arr: number | null;
+  calculated_atr: number | null;
+  arr: number | null;
+  atr: number | null;
+  hierarchy_bookings_arr_converted: number | null;
+  expansion_tier: string | null;
+  geo: string | null;
+  sales_territory: string | null;
+  hq_country: string | null;
+  cre_count: number | null;
+  cre_risk: boolean | null;
+  cre_status: string | null;
+  ultimate_parent_id: string | null;
+  has_split_ownership: boolean | null;
+  children?: AccountWithHierarchy[];
+  isVirtualParent?: boolean;
+}
 
 interface ManagerHierarchyViewProps {
   buildId: string;
@@ -35,12 +65,24 @@ export default function ManagerHierarchyView({
 }: ManagerHierarchyViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedReps, setExpandedReps] = useState<Set<string>>(new Set());
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
   const [reassigningAccount, setReassigningAccount] = useState<any>(null);
   const [newOwnerId, setNewOwnerId] = useState<string>('');
   const [reassignmentRationale, setReassignmentRationale] = useState<string>('');
-  const { user } = useAuth();
+  const { user, effectiveProfile } = useAuth();
   const queryClient = useQueryClient();
+
+  // Toggle parent account expansion
+  const toggleParentExpansion = (accountId: string) => {
+    const newExpanded = new Set(expandedParents);
+    if (newExpanded.has(accountId)) {
+      newExpanded.delete(accountId);
+    } else {
+      newExpanded.add(accountId);
+    }
+    setExpandedParents(newExpanded);
+  };
 
   // Fetch sales reps in this manager's hierarchy
   const { data: salesReps, isLoading: repsLoading } = useQuery({
@@ -209,6 +251,100 @@ export default function ManagerHierarchyView({
     return accounts?.filter(acc => acc.new_owner_id === repId) || [];
   };
 
+  // Build hierarchical account structure for a rep (matching SalesRepDetailDialog pattern)
+  const getHierarchicalAccounts = (repId: string): AccountWithHierarchy[] => {
+    const repAccounts = getRepAccounts(repId);
+    if (!repAccounts.length) return [];
+
+    // Separate parent accounts (no ultimate_parent_id) and child accounts
+    const parentAccounts = repAccounts.filter(a => 
+      !a.ultimate_parent_id || 
+      a.ultimate_parent_id === '' || 
+      a.ultimate_parent_id.trim() === ''
+    );
+    
+    const childAccounts = repAccounts.filter(a => 
+      a.ultimate_parent_id && 
+      a.ultimate_parent_id !== '' && 
+      a.ultimate_parent_id.trim() !== ''
+    );
+
+    const hierarchicalAccounts: AccountWithHierarchy[] = [];
+
+    // Add parent accounts to hierarchy with their children
+    parentAccounts.forEach(parent => {
+      const children = childAccounts.filter(c => c.ultimate_parent_id === parent.sfdc_account_id);
+      hierarchicalAccounts.push({
+        ...parent,
+        children: children.map(child => ({
+          ...child,
+          children: [],
+          isVirtualParent: false,
+        })),
+        isVirtualParent: false,
+      });
+    });
+
+    // Group orphaned children (whose parent is not owned by this rep) by their parent
+    const childAccountsByParent = new Map<string, typeof childAccounts>();
+    childAccounts.forEach(child => {
+      const parentId = child.ultimate_parent_id!;
+      // Check if this child's parent is already in parentAccounts
+      const hasParent = parentAccounts.some(p => p.sfdc_account_id === parentId);
+      if (!hasParent) {
+        if (!childAccountsByParent.has(parentId)) {
+          childAccountsByParent.set(parentId, []);
+        }
+        childAccountsByParent.get(parentId)!.push(child);
+      }
+    });
+
+    // Create virtual parent entries for orphaned children
+    childAccountsByParent.forEach((children, parentId) => {
+      const firstChild = children[0];
+      const virtualParent: AccountWithHierarchy = {
+        sfdc_account_id: `virtual-parent-${parentId}`,
+        account_name: `${firstChild.account_name.split(' - ')[0] || 'Unknown Parent'} (Parent - Not Owned)`,
+        build_id: firstChild.build_id,
+        is_parent: true,
+        is_customer: false,
+        owner_id: firstChild.owner_id,
+        owner_name: firstChild.owner_name,
+        new_owner_id: firstChild.new_owner_id,
+        new_owner_name: firstChild.new_owner_name,
+        calculated_arr: 0,
+        calculated_atr: 0,
+        arr: 0,
+        atr: 0,
+        hierarchy_bookings_arr_converted: 0,
+        expansion_tier: null,
+        geo: firstChild.geo,
+        sales_territory: firstChild.sales_territory,
+        hq_country: firstChild.hq_country,
+        cre_count: 0,
+        cre_risk: false,
+        cre_status: null,
+        ultimate_parent_id: null,
+        has_split_ownership: true,
+        children: children.map(child => ({
+          ...child,
+          children: [],
+          isVirtualParent: false,
+        })),
+        isVirtualParent: true,
+      };
+      hierarchicalAccounts.push(virtualParent);
+    });
+
+    // Sort: Customers first, then by ARR descending
+    return hierarchicalAccounts.sort((a, b) => {
+      if (a.is_customer !== b.is_customer) {
+        return a.is_customer ? -1 : 1;
+      }
+      return (getAccountARR(b) || 0) - (getAccountARR(a) || 0);
+    });
+  };
+
   const getRepMetrics = (repId: string) => {
     const repAccounts = getRepAccounts(repId);
     const rep = salesReps?.find(r => r.rep_id === repId);
@@ -322,6 +458,75 @@ export default function ManagerHierarchyView({
     }).format(value);
   };
 
+  // Export team view to CSV
+  const exportTeamViewCSV = () => {
+    if (!salesReps || !accounts) {
+      toast({
+        title: 'Export Failed',
+        description: 'No data available to export.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const csvRows: string[] = [];
+    
+    // Header
+    csvRows.push([
+      'FLM',
+      'Rep Name',
+      'Rep Team',
+      'Rep Region',
+      'Account Name',
+      'Account Type',
+      'Is Parent',
+      'ARR',
+      'ATR',
+      'Location',
+      'Tier',
+      'CRE Status',
+      'Previous Owner',
+      'Current Owner',
+      'Has Reassignment'
+    ].join(','));
+
+    // Data rows
+    Object.entries(repsByFLM || {}).forEach(([flm, flmReps]) => {
+      flmReps.forEach((rep: any) => {
+        const repAccounts = getRepAccounts(rep.rep_id);
+        repAccounts.forEach((account) => {
+          const atr = atrByAccount?.get(account.sfdc_account_id) || getAccountATR(account);
+          csvRows.push([
+            `"${flm}"`,
+            `"${rep.name}"`,
+            `"${rep.team || ''}"`,
+            `"${rep.region || ''}"`,
+            `"${account.account_name}"`,
+            account.is_customer ? 'Customer' : 'Prospect',
+            account.is_parent ? 'Yes' : 'No',
+            getAccountARR(account),
+            atr,
+            `"${account.hq_country || account.sales_territory || account.geo || ''}"`,
+            `"${account.expansion_tier || ''}"`,
+            `"${account.cre_status || ''}"`,
+            `"${account.owner_name || ''}"`,
+            `"${account.new_owner_name || ''}"`,
+            hasReassignment(account.sfdc_account_id) ? 'Yes' : 'No'
+          ].join(','));
+        });
+      });
+    });
+
+    const csvContent = csvRows.join('\n');
+    const timestamp = new Date().toISOString().split('T')[0];
+    downloadFile(csvContent, `team-view-${managerName}-${timestamp}.csv`, 'text/csv');
+
+    toast({
+      title: 'Export Complete',
+      description: `Exported ${accounts.length} accounts to CSV.`,
+    });
+  };
+
   const filteredReps = salesReps?.filter(rep =>
     rep.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     rep.team?.toLowerCase().includes(searchTerm.toLowerCase())
@@ -401,8 +606,25 @@ export default function ManagerHierarchyView({
     };
   };
 
+  // Determine initial approval status based on user's role
+  const getInitialApprovalStatus = (): string => {
+    const role = effectiveProfile?.role;
+    if (role === 'REVOPS') return 'approved';      // RevOps auto-approves
+    if (role === 'SLM') return 'pending_revops';   // SLM skips SLM approval
+    return 'pending_slm';                           // FLM needs SLM approval first
+  };
+
+  const getApprovalSuccessMessage = (): string => {
+    const role = effectiveProfile?.role;
+    if (role === 'REVOPS') return 'Reassignment has been applied.';
+    if (role === 'SLM') return 'Your reassignment request has been submitted for RevOps approval.';
+    return 'Your reassignment request has been submitted for SLM approval.';
+  };
+
   const reassignAccountMutation = useMutation({
     mutationFn: async ({ accountId, newOwner }: { accountId: string; newOwner: any }) => {
+      const approvalStatus = getInitialApprovalStatus();
+      
       const { error } = await supabase
         .from('manager_reassignments')
         .insert({
@@ -415,19 +637,33 @@ export default function ManagerHierarchyView({
           proposed_owner_id: newOwner.rep_id,
           proposed_owner_name: newOwner.name,
           rationale: reassignmentRationale || 'Manager reassignment',
-          status: 'pending',
-          approval_status: 'pending_slm', // Start approval chain at SLM
+          approval_status: approvalStatus,
         });
 
       if (error) throw error;
+
+      // If RevOps, also update the account directly since it's auto-approved
+      if (approvalStatus === 'approved') {
+        const { error: updateError } = await supabase
+          .from('accounts')
+          .update({
+            new_owner_id: newOwner.rep_id,
+            new_owner_name: newOwner.name,
+          })
+          .eq('sfdc_account_id', accountId)
+          .eq('build_id', buildId);
+
+        if (updateError) throw updateError;
+      }
     },
     onSuccess: () => {
       toast({
         title: 'Reassignment Proposed',
-        description: 'Your reassignment request has been submitted for SLM approval.',
+        description: getApprovalSuccessMessage(),
       });
       queryClient.invalidateQueries({ queryKey: ['manager-accounts'] });
       queryClient.invalidateQueries({ queryKey: ['slm-pending-approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['manager-pending-approvals'] });
       setReassigningAccount(null);
       setNewOwnerId('');
       setReassignmentRationale('');
@@ -472,10 +708,21 @@ export default function ManagerHierarchyView({
     <>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <User className="w-5 h-5" />
-            Your Team Hierarchy
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <User className="w-5 h-5" />
+              Your Team Hierarchy
+            </CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportTeamViewCSV}
+              className="gap-2"
+            >
+              <Download className="w-4 h-4" />
+              Export CSV
+            </Button>
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -527,7 +774,7 @@ export default function ManagerHierarchyView({
                     {/* Reps under this FLM */}
                     {flmReps.map((rep) => {
                       const metrics = getRepMetrics(rep.rep_id);
-                      const repAccounts = getRepAccounts(rep.rep_id);
+                      const hierarchicalAccounts = getHierarchicalAccounts(rep.rep_id);
                       const isExpanded = expandedReps.has(rep.rep_id);
 
                       return (
@@ -605,7 +852,7 @@ export default function ManagerHierarchyView({
                                 <Table>
                                   <TableHeader>
                                     <TableRow>
-                                      <TableHead className="w-[250px]">Account Name</TableHead>
+                                      <TableHead className="w-[280px]">Account Name</TableHead>
                                       <TableHead>Type</TableHead>
                                       <TableHead>Status</TableHead>
                                       <TableHead className="text-right">ARR</TableHead>
@@ -615,19 +862,40 @@ export default function ManagerHierarchyView({
                                     </TableRow>
                                   </TableHeader>
                                   <TableBody>
-                                    {repAccounts.map((account) => {
+                                    {hierarchicalAccounts.map((account) => {
                                       const note = hasNotes(account.sfdc_account_id);
+                                      const hasChildren = account.children && account.children.length > 0;
+                                      const isParentExpanded = expandedParents.has(account.sfdc_account_id);
+
                                       return (
                                         <>
-                                          <TableRow key={account.sfdc_account_id}>
+                                          {/* Parent Account Row */}
+                                          <TableRow 
+                                            key={account.sfdc_account_id}
+                                            className={`${hasChildren ? 'cursor-pointer hover:bg-muted/50' : ''} ${account.isVirtualParent ? 'bg-muted/30 italic' : ''}`}
+                                            onClick={() => hasChildren && toggleParentExpansion(account.sfdc_account_id)}
+                                          >
                                             <TableCell>
                                               <div className="flex items-center gap-2">
-                                                <div className="font-medium">{account.account_name}</div>
-                                                {account.has_split_ownership && (
+                                                {hasChildren && (
+                                                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                                                    {isParentExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                                  </Button>
+                                                )}
+                                                {!hasChildren && <div className="w-6" />}
+                                                <div>
+                                                  <div className="font-medium">{account.account_name}</div>
+                                                  {hasChildren && (
+                                                    <div className="text-xs text-muted-foreground">
+                                                      {account.children!.length} child account{account.children!.length !== 1 ? 's' : ''}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                                {account.has_split_ownership && !account.isVirtualParent && (
                                                   <TooltipProvider>
                                                     <Tooltip>
                                                       <TooltipTrigger asChild>
-                                                        <Badge variant="warning" className="text-xs">
+                                                        <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-300">
                                                           <Split className="h-3 w-3 mr-1" />
                                                           Split
                                                         </Badge>
@@ -641,52 +909,64 @@ export default function ManagerHierarchyView({
                                               </div>
                                             </TableCell>
                                             <TableCell>
-                                              <Badge variant={account.is_customer ? "default" : "secondary"}>
-                                                {account.is_customer ? 'Customer' : 'Prospect'}
-                                              </Badge>
+                                              {!account.isVirtualParent && (
+                                                <Badge variant={account.is_customer ? "default" : "secondary"}>
+                                                  {account.is_customer ? 'Customer' : 'Prospect'}
+                                                </Badge>
+                                              )}
                                             </TableCell>
                                             <TableCell>
-                                              {hasReassignment(account.sfdc_account_id) && (
+                                              {!account.isVirtualParent && hasReassignment(account.sfdc_account_id) && (
                                                 <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300">
                                                   Reassigned
                                                 </Badge>
                                               )}
                                             </TableCell>
-                                            <TableCell className="text-right">{formatCurrency(getAccountARR(account))}</TableCell>
-                                            <TableCell className="text-right">{formatCurrency(atrByAccount?.get(account.sfdc_account_id) || getAccountATR(account))}</TableCell>
-                                            <TableCell>{account.hq_country || account.sales_territory || account.geo || 'N/A'}</TableCell>
+                                            <TableCell className="text-right">
+                                              {!account.isVirtualParent && formatCurrency(getAccountARR(account))}
+                                            </TableCell>
+                                            <TableCell className="text-right">
+                                              {!account.isVirtualParent && formatCurrency(atrByAccount?.get(account.sfdc_account_id) || getAccountATR(account))}
+                                            </TableCell>
                                             <TableCell>
-                                              <div className="flex gap-2">
-                                                <Button
-                                                  variant={note ? "default" : "outline"}
-                                                  size="sm"
-                                                  onClick={() => setSelectedAccount({ ...account, currentOwner: rep })}
-                                                  className="gap-2"
-                                                >
-                                                  {note ? (
-                                                    <>
-                                                      <Edit2 className="w-3 h-3" />
-                                                      View/Edit Note
-                                                    </>
-                                                  ) : (
-                                                    <>
-                                                      <MessageSquare className="w-3 h-3" />
-                                                      Add Note
-                                                    </>
-                                                  )}
-                                                </Button>
-                                                <Button
-                                                  variant="outline"
-                                                  size="sm"
-                                                  onClick={() => setReassigningAccount({ ...account, currentOwner: rep })}
-                                                  disabled={reviewStatus === 'accepted' || hasReassignment(account.sfdc_account_id)}
-                                                >
-                                                  Reassign
-                                                </Button>
-                                              </div>
+                                              {!account.isVirtualParent && (account.hq_country || account.sales_territory || account.geo || 'N/A')}
+                                            </TableCell>
+                                            <TableCell onClick={(e) => e.stopPropagation()}>
+                                              {!account.isVirtualParent && (
+                                                <div className="flex gap-2">
+                                                  <Button
+                                                    variant={note ? "default" : "outline"}
+                                                    size="sm"
+                                                    onClick={() => setSelectedAccount({ ...account, currentOwner: rep })}
+                                                    className="gap-2"
+                                                  >
+                                                    {note ? (
+                                                      <>
+                                                        <Edit2 className="w-3 h-3" />
+                                                        Note
+                                                      </>
+                                                    ) : (
+                                                      <>
+                                                        <MessageSquare className="w-3 h-3" />
+                                                        Note
+                                                      </>
+                                                    )}
+                                                  </Button>
+                                                  <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => setReassigningAccount({ ...account, currentOwner: rep })}
+                                                    disabled={reviewStatus === 'accepted' || hasReassignment(account.sfdc_account_id)}
+                                                  >
+                                                    Reassign
+                                                  </Button>
+                                                </div>
+                                              )}
                                             </TableCell>
                                           </TableRow>
-                                          {note && (
+
+                                          {/* Note Row for Parent */}
+                                          {note && !account.isVirtualParent && (
                                             <TableRow key={`${account.sfdc_account_id}-note`} className="bg-primary/5 border-l-4 border-l-primary">
                                               <TableCell colSpan={7}>
                                                 <div className="flex items-start gap-3 py-3 px-2">
@@ -715,10 +995,89 @@ export default function ManagerHierarchyView({
                                               </TableCell>
                                             </TableRow>
                                           )}
+
+                                          {/* Child Account Rows (when expanded) */}
+                                          {isParentExpanded && account.children?.map((child) => {
+                                            const childNote = hasNotes(child.sfdc_account_id);
+                                            return (
+                                              <>
+                                                <TableRow key={child.sfdc_account_id} className="bg-muted/20">
+                                                  <TableCell className="pl-12">
+                                                    <div className="flex items-center gap-2">
+                                                      <div className="w-2 h-2 bg-muted-foreground rounded-full"></div>
+                                                      <div className="font-medium text-sm">{child.account_name}</div>
+                                                    </div>
+                                                  </TableCell>
+                                                  <TableCell>
+                                                    <Badge variant={child.is_customer ? "default" : "secondary"} className="text-xs">
+                                                      {child.is_customer ? 'Customer' : 'Prospect'}
+                                                    </Badge>
+                                                  </TableCell>
+                                                  <TableCell>
+                                                    {hasReassignment(child.sfdc_account_id) && (
+                                                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs">
+                                                        Reassigned
+                                                      </Badge>
+                                                    )}
+                                                  </TableCell>
+                                                  <TableCell className="text-right text-sm">
+                                                    {formatCurrency(getAccountARR(child))}
+                                                  </TableCell>
+                                                  <TableCell className="text-right text-sm">
+                                                    {formatCurrency(atrByAccount?.get(child.sfdc_account_id) || getAccountATR(child))}
+                                                  </TableCell>
+                                                  <TableCell className="text-sm">
+                                                    {child.hq_country || child.sales_territory || child.geo || 'N/A'}
+                                                  </TableCell>
+                                                  <TableCell>
+                                                    <div className="flex gap-2">
+                                                      <Button
+                                                        variant={childNote ? "default" : "outline"}
+                                                        size="sm"
+                                                        onClick={() => setSelectedAccount({ ...child, currentOwner: rep })}
+                                                        className="gap-1 text-xs"
+                                                      >
+                                                        {childNote ? <Edit2 className="w-3 h-3" /> : <MessageSquare className="w-3 h-3" />}
+                                                        Note
+                                                      </Button>
+                                                      <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => setReassigningAccount({ ...child, currentOwner: rep })}
+                                                        disabled={reviewStatus === 'accepted' || hasReassignment(child.sfdc_account_id)}
+                                                        className="text-xs"
+                                                      >
+                                                        Reassign
+                                                      </Button>
+                                                    </div>
+                                                  </TableCell>
+                                                </TableRow>
+
+                                                {/* Note Row for Child */}
+                                                {childNote && (
+                                                  <TableRow key={`${child.sfdc_account_id}-note`} className="bg-primary/5 border-l-4 border-l-primary">
+                                                    <TableCell colSpan={7}>
+                                                      <div className="flex items-start gap-3 py-2 px-2 pl-12">
+                                                        <MessageSquare className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                                                        <div className="flex-1 min-w-0">
+                                                          <div className="text-sm text-foreground whitespace-pre-wrap break-words">
+                                                            {childNote.note_text}
+                                                          </div>
+                                                          <div className="text-xs text-muted-foreground mt-1">
+                                                            {new Date(childNote.created_at).toLocaleDateString()}
+                                                          </div>
+                                                        </div>
+                                                      </div>
+                                                    </TableCell>
+                                                  </TableRow>
+                                                )}
+                                              </>
+                                            );
+                                          })}
                                         </>
                                       );
                                     })}
-                                    {repAccounts.length === 0 && (
+                                    {hierarchicalAccounts.length === 0 && (
                                       <TableRow>
                                         <TableCell colSpan={7} className="text-center text-muted-foreground py-4">
                                           No accounts assigned

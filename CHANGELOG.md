@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-11-26] - Feature: Manager View Enhancements
+
+### Parent/Child Account Nesting
+- **Feature**: Added hierarchical account display in Manager Team View
+  - Parent accounts now show expandable rows with child accounts nested underneath
+  - Virtual parent nodes created for orphaned children (children whose parent isn't owned by this rep)
+  - Click chevron icon to expand/collapse child accounts
+  - Child accounts displayed with visual indentation and dot marker
+- **Files**: `ManagerHierarchyView.tsx`
+
+### CSV Export for Manager Views
+- **Feature**: Added "Export CSV" button to Team View (ManagerHierarchyView)
+  - Exports all accounts with FLM, rep, account details, ARR, ATR, location, tier, CRE status
+- **Feature**: Added "Export CSV" button to Before & After comparison view
+  - Exports rep-level comparison data with before/after metrics and change percentages
+- **Files**: `ManagerHierarchyView.tsx`, `ManagerBeforeAfterComparison.tsx`
+
+### Role-Aware Approval Status Routing
+- **Fix**: Reassignment approval_status now correctly set based on user role:
+  - FLM proposals → `pending_slm` (requires SLM approval first)
+  - SLM proposals → `pending_revops` (skips SLM, goes directly to RevOps)
+  - RevOps proposals → `approved` (auto-approved and applied immediately)
+- **Files**: `ManagerHierarchyView.tsx`
+
+### Role-Aware "My Proposals" Tab
+- **Feature**: "My Proposals" tab now shows role-appropriate status cards:
+  - FLM sees: Awaiting SLM, Awaiting RevOps, Approved, Rejected (4 cards)
+  - SLM sees: Awaiting RevOps, Approved, Rejected (3 cards - no "Awaiting SLM")
+  - RevOps sees: Applied, Rejected (2 cards - their changes are immediate)
+- **Files**: `ManagerPendingApprovals.tsx`, `ManagerDashboard.tsx`
+
 ## [2025-11-26] - UI: Manager Dashboard Layout - Dropdown Build Selector
 - **Change**: Replaced left sidebar build list with dropdown selector at top
   - Review area now uses full width instead of 9/12 columns

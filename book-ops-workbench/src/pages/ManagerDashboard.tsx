@@ -343,7 +343,10 @@ export default function ManagerDashboard() {
               </TabsContent>
 
               <TabsContent value="approvals" className="mt-6">
-                <ManagerPendingApprovals buildId={selectedReviewData.build_id} />
+                <ManagerPendingApprovals 
+                  buildId={selectedReviewData.build_id} 
+                  managerLevel={selectedReviewData.manager_level as 'FLM' | 'SLM'}
+                />
               </TabsContent>
 
               {effectiveProfile?.role === 'SLM' && (
