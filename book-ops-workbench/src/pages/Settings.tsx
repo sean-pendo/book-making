@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { RolePermissionsManager } from "@/components/RolePermissionsManager";
+import { Info } from "lucide-react";
 
 type UserRole = "SLM" | "FLM" | "REVOPS";
 
@@ -20,7 +21,6 @@ type Profile = {
   full_name: string;
   role: UserRole;
   region: string;
-  team: string;
 };
 
 const Settings = () => {
@@ -149,7 +149,6 @@ const Settings = () => {
                     <TableHead>Email</TableHead>
                     <TableHead>Role</TableHead>
                     <TableHead>Region</TableHead>
-                    <TableHead>Team</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -198,16 +197,6 @@ const Settings = () => {
                       </TableCell>
                       <TableCell>
                         {editingUser === user.id ? (
-                          <Input
-                            value={editForm.team || ""}
-                            onChange={(e) => setEditForm({ ...editForm, team: e.target.value })}
-                          />
-                        ) : (
-                          user.team
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {editingUser === user.id ? (
                           <div className="flex gap-2">
                             <Button size="sm" onClick={() => handleSave(user.id)}>
                               Save
@@ -230,6 +219,28 @@ const Settings = () => {
           </CardContent>
         </Card>
       )}
+
+      {/* App Version Info */}
+      <Card className="bg-muted/30">
+        <CardHeader className="pb-3">
+          <div className="flex items-center gap-2">
+            <Info className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-base">App Version</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-6 text-sm">
+            <div>
+              <span className="text-muted-foreground">Version: </span>
+              <Badge variant="outline" className="font-mono">v{__APP_VERSION__}</Badge>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Built: </span>
+              <span className="font-mono text-xs">{new Date(__BUILD_DATE__).toLocaleString()}</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };

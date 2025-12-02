@@ -43,11 +43,11 @@ interface Build {
   updated_at: string;
   owner_id: string | null;
   owner_name: string | null;
-  team: string;
+  region: string;
 }
 
-const TEAMS = ['AMER', 'EMEA', 'APAC'] as const;
-type Team = typeof TEAMS[number];
+const REGIONS = ['GLOBAL', 'AMER', 'EMEA', 'APAC'] as const;
+type Region = typeof REGIONS[number];
 
 interface RevOpsUser {
   id: string;
@@ -63,7 +63,7 @@ const Dashboard = () => {
   const [newBuildDescription, setNewBuildDescription] = useState('');
   const [newBuildTargetDate, setNewBuildTargetDate] = useState('');
   const [newBuildOwnerId, setNewBuildOwnerId] = useState('');
-  const [newBuildTeam, setNewBuildTeam] = useState<Team>('AMER');
+  const [newBuildRegion, setNewBuildRegion] = useState<Region>('AMER');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -151,7 +151,7 @@ const Dashboard = () => {
             description: newBuildDescription.trim() || null,
             target_date: newBuildTargetDate || null,
             owner_id: newBuildOwnerId,
-            team: newBuildTeam,
+            region: newBuildRegion,
             created_by: (await supabase.auth.getUser()).data.user?.id || '',
           },
         ])
@@ -166,7 +166,7 @@ const Dashboard = () => {
       const transformedBuild = {
         ...data,
         owner_name: data.owner?.full_name || null,
-        team: data.team || 'AMER'
+        region: data.region || 'AMER'
       };
 
       toast({
@@ -179,7 +179,7 @@ const Dashboard = () => {
       setNewBuildDescription('');
       setNewBuildTargetDate('');
       setNewBuildOwnerId('');
-      setNewBuildTeam('AMER');
+      setNewBuildRegion('AMER');
       setDialogOpen(false);
     } catch (error) {
       console.error('Error creating build:', error);
@@ -283,7 +283,7 @@ const Dashboard = () => {
     }
   };
 
-  const canCreateBuild = profile?.role === 'REVOPS' || profile?.role === 'FLM';
+  const canCreateBuild = profile?.role?.toUpperCase() === 'REVOPS' || profile?.role?.toUpperCase() === 'FLM';
 
   // Set default owner to current user if they have permission
   useEffect(() => {
@@ -441,20 +441,20 @@ const Dashboard = () => {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="build-team" className="text-sm font-medium">Team *</Label>
-                  <Select value={newBuildTeam} onValueChange={(v) => setNewBuildTeam(v as Team)}>
+                  <Label htmlFor="build-region" className="text-sm font-medium">Region *</Label>
+                  <Select value={newBuildRegion} onValueChange={(v) => setNewBuildRegion(v as Region)}>
                     <SelectTrigger className="transition-all duration-200 focus:ring-2 focus:ring-primary focus:border-primary">
-                      <SelectValue placeholder="Select team..." />
+                      <SelectValue placeholder="Select region..." />
                     </SelectTrigger>
                     <SelectContent>
-                      {TEAMS.map((team) => (
-                        <SelectItem key={team} value={team}>
-                          {team}
+                      {REGIONS.map((region) => (
+                        <SelectItem key={region} value={region}>
+                          {region}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">Builds are isolated by team workspace</p>
+                  <p className="text-xs text-muted-foreground">Builds are isolated by region workspace</p>
                 </div>
                 <div className="flex justify-end space-x-3 pt-4">
                   <Button
@@ -538,7 +538,7 @@ const Dashboard = () => {
                           {build.status.replace('_', ' ')}
                         </span>
                         <Badge variant="outline" className="text-xs">
-                          {build.team}
+                          {build.region}
                         </Badge>
                       </div>
                       {build.description && (

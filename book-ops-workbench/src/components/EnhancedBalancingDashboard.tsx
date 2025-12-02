@@ -64,13 +64,9 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
     if (!buildId) return;
     
     try {
-      // First recalculate account values to apply updated ATR logic
-      await recalculateAccountValuesAsync(buildId);
-      
-      // Then refetch the balancing data
+      // Refetch the balancing data directly from database
       await refetch();
-      
-      toast.success('Data refreshed successfully with updated ATR calculations');
+      toast.success('Data refreshed successfully');
     } catch (error) {
       console.error('Error refreshing data:', error);
       toast.error('Failed to refresh data. Please try again.');

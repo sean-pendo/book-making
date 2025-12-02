@@ -71,6 +71,45 @@ export default function SLMApprovalQueue({ buildId, slmName }: SLMApprovalQueueP
     enabled: !!buildId && !!slmName,
   });
 
+  // Fetch recently approved items (by RevOps directly) so SLMs can see
+  const { data: recentlyApproved } = useQuery({
+    queryKey: ['slm-recently-approved', buildId, slmName],
+    queryFn: async () => {
+      const { data: repsUnderSLM, error: repsError } = await supabase
+        .from('sales_reps')
+        .select('rep_id')
+        .eq('build_id', buildId)
+        .eq('slm', slmName);
+
+      if (repsError) throw repsError;
+      const repIdsUnderSLM = repsUnderSLM?.map(r => r.rep_id) || [];
+
+      if (repIdsUnderSLM.length === 0) return [];
+
+      // Get approved items where RevOps approved directly (has revops_approved_by but no slm_approved_by)
+      // OR items approved in the last 7 days
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const { data, error } = await supabase
+        .from('manager_reassignments')
+        .select(`
+          *,
+          proposer:profiles!manager_reassignments_manager_user_id_fkey(full_name, email)
+        `)
+        .eq('build_id', buildId)
+        .eq('approval_status', 'approved')
+        .in('current_owner_id', repIdsUnderSLM)
+        .gte('revops_approved_at', sevenDaysAgo.toISOString())
+        .order('revops_approved_at', { ascending: false })
+        .limit(10);
+
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!buildId && !!slmName,
+  });
+
   // Approve a single reassignment
   const approveMutation = useMutation({
     mutationFn: async (reassignmentId: string) => {
@@ -332,6 +371,68 @@ export default function SLMApprovalQueue({ buildId, slmName }: SLMApprovalQueueP
             )}
           </CardContent>
         </Card>
+
+        {/* Recently Approved Section */}
+        {recentlyApproved && recentlyApproved.length > 0 && (
+          <Card className="border-green-200 dark:border-green-800">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-green-700 dark:text-green-400">
+                <CheckCircle className="w-5 h-5" />
+                Recently Approved (Last 7 Days)
+              </CardTitle>
+              <CardDescription>
+                FLM proposals that have been approved - showing who approved each one
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Account</TableHead>
+                    <TableHead>Change</TableHead>
+                    <TableHead>Proposed By</TableHead>
+                    <TableHead>Approved By</TableHead>
+                    <TableHead>Date</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {recentlyApproved.map((reassignment: any) => (
+                    <TableRow key={reassignment.id} className="bg-green-50/50 dark:bg-green-950/20">
+                      <TableCell className="font-medium">{reassignment.account_name}</TableCell>
+                      <TableCell className="text-sm">
+                        {reassignment.current_owner_name} → {reassignment.proposed_owner_name}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">
+                          {reassignment.proposer?.full_name || 'FLM'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {reassignment.revops_approved_by && !reassignment.slm_approved_by ? (
+                          <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
+                            RevOps (Direct)
+                          </Badge>
+                        ) : reassignment.slm_approved_by ? (
+                          <Badge className="bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300">
+                            SLM → RevOps
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary">Unknown</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {reassignment.revops_approved_at 
+                          ? new Date(reassignment.revops_approved_at).toLocaleDateString()
+                          : '-'
+                        }
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Reject Dialog */}

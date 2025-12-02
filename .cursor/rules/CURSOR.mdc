@@ -55,9 +55,46 @@ We are currently in **QA Mode**. The codebase is unstable.
 *   **No Magic**: Do not assume deployment environments. Check env vars first.
 *   
 
-## 6. Git Suggestions
-This is a very important project when the time is approriate. Please let me know when I should push updates to GitHub
+## 6. Versioning & Releases
 
+### Version Display
+The app version is shown in **Settings** at the bottom. It pulls from `package.json` at build time.
 
-## 7. Learning Log
-Maintain a learning log so as we build this app I continune to understand what we are doing, and why
+### Release Workflow (AI-Assisted)
+When the user says "release", "push to GitHub", or "create a version", follow this process:
+
+1. **Bump version** in `book-ops-workbench/package.json`
+   - Patch (x.x.1): Bug fixes only
+   - Minor (x.1.0): New features
+   - Major (1.0.0): Breaking changes
+
+2. **Update CHANGELOG.md** with all changes since last release
+
+3. **Run these commands** (requires git_write permission):
+   ```bash
+   cd "/Users/sean.muse/code/book building v1.0 QA"
+   git add -A
+   git commit -m "Release vX.X.X - <summary>"
+   git tag vX.X.X
+   git push origin master --tags
+   ```
+
+4. **Deploy to Vercel** (if not already done)
+
+### Current Version
+Check `book-ops-workbench/package.json` for the current version number.
+
+## 7. Git & GitHub
+
+### When to Push
+Push to GitHub when:
+- A feature is complete and tested
+- User explicitly requests a release
+- Before ending a long session with significant changes
+
+### Commit Message Format
+`Release vX.X.X - Brief summary` for releases
+`Fix: description` or `Feature: description` for regular commits
+
+## 8. Learning Log
+Maintain a learning log so as we build this app I continue to understand what we are doing, and why

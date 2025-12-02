@@ -33,3 +33,4 @@ CREATE TRIGGER prevent_developer_self_update_trigger
   FOR EACH ROW
   EXECUTE FUNCTION prevent_developer_self_update();
 
+

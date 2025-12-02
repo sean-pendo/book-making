@@ -114,8 +114,8 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Enhanced User impersonation - only for RevOps */}
-        {effectiveProfile?.role === 'REVOPS' && !isCollapsed && (
+        {/* Enhanced User impersonation - only for users with developer=true */}
+        {effectiveProfile?.developer === true && !isCollapsed && (
           <div className="p-3 border-t border-sidebar-border/50 bg-gradient-subtle">
             <UserImpersonation
               currentUser={effectiveProfile}

@@ -343,8 +343,65 @@ export default function ManagerBeforeAfterComparison({
     );
   }
 
+  // Calculate grand totals across all FLMs
+  const grandTotals = comparisonData ? Object.values(flmTotals).reduce((acc, totals) => ({
+    beforeAccounts: acc.beforeAccounts + totals.beforeAccounts,
+    beforeARR: acc.beforeARR + totals.beforeARR,
+    afterAccounts: acc.afterAccounts + totals.afterAccounts,
+    afterARR: acc.afterARR + totals.afterARR,
+  }), { beforeAccounts: 0, beforeARR: 0, afterAccounts: 0, afterARR: 0 }) : null;
+
+  const netAccountChange = grandTotals ? grandTotals.afterAccounts - grandTotals.beforeAccounts : 0;
+  const netArrChange = grandTotals ? grandTotals.afterARR - grandTotals.beforeARR : 0;
+
   return (
     <div className="space-y-6">
+      {/* Grand Total Summary */}
+      {grandTotals && (grandTotals.beforeAccounts > 0 || grandTotals.afterAccounts > 0) && (
+        <Card className={`border-2 ${netArrChange >= 0 ? 'border-green-200 dark:border-green-900 bg-gradient-to-r from-green-50/50 to-emerald-50/50 dark:from-green-950/20 dark:to-emerald-950/20' : 'border-red-200 dark:border-red-900 bg-gradient-to-r from-red-50/50 to-orange-50/50 dark:from-red-950/20 dark:to-orange-950/20'}`}>
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {netArrChange >= 0 ? (
+                  <TrendingUp className="w-6 h-6 text-green-600" />
+                ) : (
+                  <TrendingDown className="w-6 h-6 text-red-600" />
+                )}
+                <div>
+                  <div className="text-xs text-muted-foreground uppercase tracking-wide">Total Book Change</div>
+                  <div className={`text-xl font-bold ${netArrChange >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                    {netArrChange >= 0 ? '+' : ''}{formatCurrency(netArrChange)}
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-8 text-sm">
+                <div>
+                  <div className="text-muted-foreground">Accounts</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">{grandTotals.beforeAccounts}</span>
+                    <span className="text-muted-foreground">→</span>
+                    <span className="font-semibold">{grandTotals.afterAccounts}</span>
+                    <Badge variant={netAccountChange >= 0 ? 'default' : 'destructive'} className="text-xs">
+                      {netAccountChange >= 0 ? '+' : ''}{netAccountChange}
+                    </Badge>
+                  </div>
+                </div>
+                
+                <div>
+                  <div className="text-muted-foreground">Total ARR</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">{formatCurrency(grandTotals.beforeARR)}</span>
+                    <span className="text-muted-foreground">→</span>
+                    <span className="font-semibold">{formatCurrency(grandTotals.afterARR)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Export Button */}
       {comparisonData && Object.keys(comparisonData).length > 0 && (
         <div className="flex justify-end">

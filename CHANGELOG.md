@@ -1,6 +1,235 @@
 # Changelog
 
+## [2025-12-02 11:55 AM CST] - Added App Version Display in Settings
+- Added version info card at bottom of Settings page
+- Shows current version (v1.1.0) and build timestamp
+- Version is pulled from package.json at build time
+- Helps align deployed version with GitHub releases
+
+## [2025-12-02 11:50 AM CST] - Removed Team Field from User Profiles
+- Removed "Team (Optional)" field from sign-up/onboarding form
+- Removed Team column from User Management table in Settings
+- Field was unused and caused confusion
+
+## [2025-12-02 11:45 AM CST] - Reassignment Dropdown UX Improvements
+- **Grouped reps by FLM** in the reassignment dropdown with section headers
+- **Current owner's FLM shown first** in the dropdown for easy same-team reassignments
+- **Added "Owner's FLM" badge** in the reassignment dialog to show which FLM the account currently belongs to
+- Fixed syntax error preventing deployment
+
 All notable changes to this project will be documented in this file.
+
+## [2025-12-02] - Feature: Out-of-Scope Account Flagging
+
+- **Feature**: New "Out-of-Scope Account" option in reassignment dropdown
+  - Allows managers to flag accounts that don't belong in their hierarchy
+  - Appears in red at top of dropdown with warning icon
+  - When selected, account is flagged for RevOps to assign elsewhere
+- **Feature**: Out-of-scope warnings in Review & Notes
+  - Red "Out of Scope" badge on flagged proposals
+  - Row highlighted in red with left border
+  - Warning message: "You must assign this account to someone outside their team or it will have no owner"
+- **Fix**: Dropdown shows rep's FLM name in parentheses for clarity
+
+## [2025-12-02] - Feature: Dual SLM/RevOps Approval Path
+
+- **Feature**: Both SLM and RevOps can now approve FLM proposals
+  - RevOps sees ALL pending items (including `pending_slm`) on Review & Notes page
+  - Either SLM or RevOps can approve first - whoever approves first wins
+  - No more waiting for SLM if RevOps wants to approve directly
+- **Feature**: Clear approval indicators showing who approved
+  - "Approved by RevOps" - RevOps approved directly
+  - "Approved by SLM" - SLM approved (then RevOps finalized)
+  - "SLM Approved • Awaiting RevOps" - SLM approved, waiting for RevOps final
+  - "Awaiting Review" - Neither has approved yet
+- **Feature**: SLMs can see "Recently Approved" section in FLM Approvals tab
+  - Shows items approved in last 7 days
+  - Indicates if approved by "RevOps (Direct)" or "SLM → RevOps" flow
+- **Feature**: Status column added to pending reviews in Review & Notes
+
+## [2025-12-02] - UX: Improved Send to Manager Dialog
+
+- **Feature**: Searchable manager dropdown with type-ahead search
+- **Feature**: Managers grouped by SLM hierarchy (SLMs first, then FLMs under each SLM)
+- **Fix**: Selecting a manager or user now auto-deselects "Send All" option
+- **Fix**: Dropdowns are no longer disabled when "Send All" is selected - interacting deselects it
+
+## [2025-12-02] - Feature: Accounts Gained/Lost Detail Modals
+
+- **Feature**: Added clickable "View Accounts" buttons to Book Impact Summary
+  - Click on "+X accounts" to see detailed list of accounts being added to your book
+  - Click on "-X accounts" to see detailed list of accounts leaving your book
+  - Shows account name, ARR value, and who the account is coming from / going to
+  - Managers can now see exactly which accounts they're gaining/losing and the destination
+
+## [2025-12-02] - Feature: Manager Approval Flow Overhaul
+
+### Role Case Sensitivity Fix
+- **Fix**: Role checks now case-insensitive (`'slm'` works same as `'SLM'`)
+  - Updated ManagerDashboard, ManagerHierarchyView, ReviewNotes, AppSidebar, Dashboard, Layout
+  - SLM users can now see their "FLM Approvals" tab properly
+
+### Updated Approval Flow
+- **Feature**: SLMs can now submit their review without approving all FLM proposals
+  - Warning shown in submit dialog if there are pending FLM proposals
+  - FLM proposals stay at `pending_slm` status and can be reviewed later
+- **Feature**: Late submission detection for FLM proposals
+  - If FLM proposes after SLM already submitted review, flagged as `is_late_submission`
+  - Helps RevOps identify proposals that SLM may not have seen
+
+### Sharing Scope Restrictions
+- **Feature**: Hierarchy-based recipient filtering when sharing builds
+  - FLM book can only be shared with: that FLM or the SLM above them
+  - SLM book can only be shared with: that SLM or FLMs under them
+  - RevOps users excluded from recipient list
+- **Feature**: Scoped visibility for FLMs viewing SLM books
+  - If SLM book shared with FLM, FLM only sees their portion (`shared_scope = 'flm_only'`)
+  - `visible_flms` array tracks which FLMs are visible
+
+### Book Impact Summary
+- **Feature**: New `BookImpactSummary` component showing net changes
+  - Displays accounts gained/lost, ARR gained/lost, net change
+  - Color-coded: green for positive, red for negative
+- **Feature**: Grand totals added to Before & After comparison view
+  - Summary card at top showing total book change across all FLMs
+- **New utility**: `bookImpactCalculations.ts` with `calculateBookImpact()` function
+
+### Conflict Detection for RevOps
+- **Feature**: Warning badges in ReviewNotes for conflict detection
+  - "Conflict" badge when multiple managers proposed changes to same account
+  - "Late" badge for proposals submitted after SLM review
+- **Feature**: Detailed warnings in review dialog explaining each warning type
+
+### Database Migration
+- New migration: `20251202000001_manager_flow_updates.sql`
+  - Added `shared_scope` column to `manager_reviews` (full/flm_only)
+  - Added `visible_flms` text array to `manager_reviews`
+  - Added `is_late_submission` boolean to `manager_reassignments`
+
+### Files Changed
+- `ManagerDashboard.tsx` - Role fixes, added BookImpactSummary
+- `ManagerHierarchyView.tsx` - Role fixes, scope filtering, late submission detection
+- `ReviewNotes.tsx` - Role fixes, conflict detection UI
+- `SendToManagerDialog.tsx` - Hierarchy-based recipient filtering
+- `ManagerBeforeAfterComparison.tsx` - Grand totals summary
+- `BookImpactSummary.tsx` - New component
+- `bookImpactCalculations.ts` - New utility
+- `ManagerPendingApprovals.tsx`, `AppSidebar.tsx`, `Dashboard.tsx`, `Layout.tsx` - Role fixes
+
+## [2025-11-26] - Fix: Send to Manager Dialog Now Requires Manager Selection
+
+- **Fix**: Send to Manager dialog now requires selecting which manager's book to share
+  - When clicking header "Send to Manager" button, a dropdown now appears to select which FLM/SLM's book to share
+  - Prevents accidentally sharing with `manager_name = 'General'` which caused empty data
+  - Shows all available FLMs and SLMs from the build's sales_reps data
+- **Fix**: Added RLS policies for `manager_reviews` table to allow delete operations
+- **Files**: `SendToManagerDialog.tsx`, new migration `20251126200001_add_manager_reviews_policies.sql`
+
+## [2025-11-26] - Feature: Delete Shared Review from Manager Dashboard
+
+- **Feature**: Added ability to delete shared reviews from Manager Dashboard
+  - Trash icon button appears next to the build dropdown when a review is selected
+  - Confirmation dialog shows build name and manager info before deletion
+  - Deleting a review removes it from your list but doesn't affect the build itself
+- **Use case**: Delete incorrectly shared reviews (e.g., shared with wrong manager level)
+- **Files**: `ManagerDashboard.tsx`
+
+## [2025-11-26] - Fix: Assignment Apply Flow & Balancing Dashboard Refresh
+
+- **Feature**: Added "Apply Proposals" button to Assignment Engine header
+  - Appears in top-right when there are pending generated proposals
+  - Shows count (e.g., "Apply 6380 Proposals")
+  - No need to scroll through Preview dialog to apply
+- **Feature**: "Unsaved Changes" warning when leaving Assignments tab
+  - If you try to switch tabs with pending proposals, shows confirmation dialog
+  - Options: "Stay & Review" or "Leave Without Saving"
+  - Prevents accidental loss of generated proposals
+- **Fix**: Balancing Dashboard staying locked after assignments applied
+  - Root cause: `useEnhancedBalancing` used local React state, not React Query
+  - Query invalidation (`queryClient.invalidateQueries`) had no effect on local state
+  - Converted hook to use React Query with proper query key `['enhanced-balancing', buildId]`
+  - Now responds correctly to cache invalidation after assignments are applied
+- **Fix**: Refresh button on Balancing page causing edge function error
+  - Removed call to `recalculateAccountValuesAsync` which invoked failing edge function
+  - Refresh now simply refetches data from Supabase directly
+- **Files**: `AssignmentEngine.tsx`, `EnhancedBalancingDashboard.tsx`, `useEnhancedBalancing.ts`
+
+## [2025-11-26] - Fix: Build Creation 400 Error (team → region)
+
+- **Fix**: Build creation failing with 400 error
+  - Root cause: Migration `20251126110001_remove_team_use_region.sql` removed `team` column from `builds` table
+  - Dashboard.tsx was still trying to insert with `team` field which no longer exists
+  - Database expects `region` column instead
+- **Solution**: Updated Dashboard.tsx to use `region` instead of `team`
+  - Renamed `newBuildTeam` state to `newBuildRegion`
+  - Updated insert query to use `region: newBuildRegion`
+  - Updated UI labels from "Team" to "Region"
+  - Added 'GLOBAL' to region options (GLOBAL, AMER, EMEA, APAC)
+- **Files**: `Dashboard.tsx`
+
+## [2025-11-26] - Feature: RevOps Admin Mode for Manager Dashboard
+
+- **Feature**: RevOps users can now view any manager's dashboard in Admin Mode
+  - Admin Mode banner with manager selector dropdown appears for REVOPS users
+  - Select any FLM or SLM to see their assigned builds and review status
+  - "View Only" badge shows when RevOps is viewing as another manager
+  - Action buttons (Accept/Decline/Approve) are hidden in Admin Mode to prevent accidental changes
+  - Manager name displayed instead of "Your role" when viewing another manager's dashboard
+- **UX**: Clear empty states guide RevOps to select a manager first
+- **Files**: `ManagerDashboard.tsx`
+
+## [2025-11-26] - Feature: Manager Review Submission Flow
+
+- **Feature**: "Submit for Review" button with confirmation dialog
+  - Shows warning: "Once submitted, you won't be able to edit assignments"
+  - Confirms notes can still be added after submission
+  - Sends to RevOps for final approval
+- **Feature**: "Accept All Original" button for discarding reassignments
+  - Only appears when manager has pending reassignments
+  - Shows warning with count of reassignments to be discarded
+  - Preserves all notes
+  - Does NOT auto-submit (manager must still click Submit)
+- **UI**: Button layout improvements
+  - Pending status: "Review & Edit" + "Accept All & Submit"
+  - In Review status: "Accept All Original" + "Submit for Review"
+  - SLM "Approve FLM Proposals" moved to secondary style
+- **Files**: `ManagerDashboard.tsx`
+
+## [2025-11-26] - UI: Hide Empty "Approve FLM Proposals" Button
+
+- **Fix**: "Approve FLM Proposals" button now hidden when there are no pending proposals
+  - Previously showed error "No pending FLM proposals found" when clicked with 0 proposals
+  - Now only appears when `pending_slm` count > 0
+  - Shows count in button text: "Approve FLM Proposals (3)"
+- **Files**: `ManagerDashboard.tsx`
+
+## [2025-11-26] - Feature: Enhanced FLM Book Approval UX
+
+- **Feature**: Approve Team button for SLMs on FLM rows
+  - SLMs can now approve an entire FLM's team with one click
+  - Creates approval note with `flm-team-{encodedName}` pattern
+  - URL encoding handles special characters in FLM names
+- **Feature**: Visual approval state feedback
+  - Approved rep books show green checkmark icon next to rep name
+  - Approved FLM teams show green checkmark in header
+  - Cards get green tint when approved (rep cards and FLM header)
+  - Buttons change to "Approved" state with checkmark when clicked
+  - Smooth animations on approval state change
+- **Feature**: Enhanced reassignment status badges
+  - Badges now show approval stage: "Awaiting SLM" or "Awaiting RevOps"
+  - Hover tooltip shows proposed new owner name
+  - Applies to both parent and child account rows
+- **Technical**: Approval state derived from existing notes query
+  - Parses `rep-book-*` and `flm-team-*` prefixed account IDs from `manager_notes`
+  - No new database tables needed - reuses existing infrastructure
+- **Files**: `ManagerHierarchyView.tsx`
+
+## [2025-11-26] - Deploy: Confirm AI Assistant Removal
+
+- **Deploy**: Redeployed to Vercel to ensure ManagerAIAssistant chatbot removal is live
+  - AI Assistant was previously removed in commits `8d4dfb0` and `d8187ec`
+  - User reported chatbot still visible - likely stale cached deployment
+- **Files**: No code changes - production deployment only
 
 ## [2025-11-26] - Fix: Approve Book Button, Note Counts, Layout & RLS
 

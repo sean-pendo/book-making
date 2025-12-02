@@ -15,7 +15,6 @@ const Auth = () => {
   const [fullName, setFullName] = useState('');
   const [role, setRole] = useState<'REVOPS' | 'SLM' | 'FLM'>('SLM');
   const [region, setRegion] = useState<'AMER' | 'EMEA' | 'GLOBAL'>('GLOBAL');
-  const [team, setTeam] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   // Redirect if already authenticated
@@ -41,7 +40,6 @@ const Auth = () => {
         full_name: fullName,
         role,
         region,
-        team: team || null,
       });
     } finally {
       setIsLoading(false);
@@ -169,16 +167,6 @@ const Auth = () => {
                       <SelectItem value="GLOBAL">Global</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="team">Team (Optional)</Label>
-                  <Input
-                    id="team"
-                    type="text"
-                    placeholder="Enter your team name"
-                    value={team}
-                    onChange={(e) => setTeam(e.target.value)}
-                  />
                 </div>
                 <Button 
                   type="submit" 

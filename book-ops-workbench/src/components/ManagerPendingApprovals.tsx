@@ -13,7 +13,7 @@ interface ManagerPendingApprovalsProps {
 
 export default function ManagerPendingApprovals({ buildId, managerLevel }: ManagerPendingApprovalsProps) {
   const { user, effectiveProfile } = useAuth();
-  const userRole = effectiveProfile?.role || 'FLM';
+  const userRole = effectiveProfile?.role?.toUpperCase() || 'FLM';
 
   const { data: reassignments, isLoading } = useQuery({
     queryKey: ['manager-pending-approvals', buildId, user?.id],

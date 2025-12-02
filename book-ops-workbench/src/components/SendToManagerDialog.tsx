@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -11,12 +11,27 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
-import { Loader2, Send, Users, Copy, Check } from 'lucide-react';
+import { Loader2, Send, Users, Copy, Check, AlertCircle, ChevronsUpDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from '@/components/ui/command';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import { cn } from '@/lib/utils';
 
 interface SendToManagerDialogProps {
   open: boolean;
@@ -35,13 +50,16 @@ export default function SendToManagerDialog({
 }: SendToManagerDialogProps) {
   const { user } = useAuth();
   const [selectedUserId, setSelectedUserId] = useState<string>('');
+  const [selectedManager, setSelectedManager] = useState<string>(''); // For when no managerName provided
   const [sendToAllSLMs, setSendToAllSLMs] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [shareableLink, setShareableLink] = useState<string>('');
   const [copied, setCopied] = useState(false);
+  const [managerSearchOpen, setManagerSearchOpen] = useState(false);
+  const [userSearchOpen, setUserSearchOpen] = useState(false);
   const queryClient = useQueryClient();
 
-  // Fetch ALL users (any role can receive manager books)
+  // Fetch ALL users (but we'll filter based on hierarchy rules)
   const { data: availableUsers, isLoading: usersLoading } = useQuery({
     queryKey: ['all-users'],
     queryFn: async () => {
@@ -55,7 +73,37 @@ export default function SendToManagerDialog({
     },
   });
 
-  // Get unique SLM names if sending to all SLMs
+  // Fetch FLM → SLM mapping from sales_reps
+  const { data: managerHierarchy } = useQuery({
+    queryKey: ['manager-hierarchy', buildId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('sales_reps')
+        .select('flm, slm')
+        .eq('build_id', buildId);
+
+      if (error) throw error;
+      
+      // Build FLM → SLM mapping and SLM → FLMs mapping
+      const flmToSlm = new Map<string, string>();
+      const slmToFlms = new Map<string, Set<string>>();
+      
+      data?.forEach(rep => {
+        if (rep.flm && rep.slm) {
+          flmToSlm.set(rep.flm, rep.slm);
+          if (!slmToFlms.has(rep.slm)) {
+            slmToFlms.set(rep.slm, new Set());
+          }
+          slmToFlms.get(rep.slm)!.add(rep.flm);
+        }
+      });
+      
+      return { flmToSlm, slmToFlms };
+    },
+    enabled: open,
+  });
+
+  // Get unique SLM names
   const { data: slmNames } = useQuery({
     queryKey: ['slm-names', buildId],
     queryFn: async () => {
@@ -65,12 +113,119 @@ export default function SendToManagerDialog({
         .eq('build_id', buildId);
 
       if (error) throw error;
-      return [...new Set(data?.map(r => r.slm).filter(Boolean) as string[])];
+      return [...new Set(data?.map(r => r.slm).filter(Boolean) as string[])].sort();
     },
     enabled: open,
   });
 
-  // Fetch existing reviews to check for duplicates (user + manager name combo)
+  // Get unique FLM names for selection
+  const { data: flmNames } = useQuery({
+    queryKey: ['flm-names', buildId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('sales_reps')
+        .select('flm')
+        .eq('build_id', buildId);
+
+      if (error) throw error;
+      return [...new Set(data?.map(r => r.flm).filter(Boolean) as string[])].sort();
+    },
+    enabled: open && !managerName,
+  });
+
+  // Group managers by SLM hierarchy
+  const groupedManagers = useMemo(() => {
+    if (!managerHierarchy || !slmNames || !flmNames) return null;
+    
+    const { slmToFlms } = managerHierarchy;
+    const groups: Array<{ slm: string; flms: string[] }> = [];
+    
+    // Sort SLMs and add their FLMs
+    slmNames.forEach(slm => {
+      const flms = slmToFlms.get(slm);
+      groups.push({
+        slm,
+        flms: flms ? Array.from(flms).sort() : [],
+      });
+    });
+    
+    return groups;
+  }, [managerHierarchy, slmNames, flmNames]);
+
+  // Combined list of managers for dropdown (flat list for searching)
+  const allManagers = useMemo(() => {
+    const managers = [
+      ...(slmNames || []).map(name => ({ name, level: 'SLM' as const })),
+      ...(flmNames || []).map(name => ({ name, level: 'FLM' as const })),
+    ].filter((m, i, arr) => arr.findIndex(x => x.name === m.name) === i);
+    return managers;
+  }, [slmNames, flmNames]);
+
+  // Get the selected manager details (from prop or dropdown)
+  const targetManager = useMemo(() => {
+    if (managerName && managerLevel) {
+      return { name: managerName, level: managerLevel };
+    }
+    if (selectedManager) {
+      const selected = allManagers.find(m => `${m.level}:${m.name}` === selectedManager);
+      return selected || null;
+    }
+    return null;
+  }, [managerName, managerLevel, selectedManager, allManagers]);
+
+  // Filter users based on hierarchy rules
+  const filteredUsers = useMemo(() => {
+    if (!availableUsers || !targetManager || !managerHierarchy) {
+      return availableUsers || [];
+    }
+
+    const { flmToSlm, slmToFlms } = managerHierarchy;
+    
+    // Get valid manager names for this share
+    const validManagerNames = new Set<string>();
+    
+    if (targetManager.level === 'FLM') {
+      // Sharing FLM book: can share with this FLM or the SLM above
+      validManagerNames.add(targetManager.name);
+      const slmAbove = flmToSlm.get(targetManager.name);
+      if (slmAbove) {
+        validManagerNames.add(slmAbove);
+      }
+    } else if (targetManager.level === 'SLM') {
+      // Sharing SLM book: can share with this SLM or any FLM under them
+      validManagerNames.add(targetManager.name);
+      const flmsUnder = slmToFlms.get(targetManager.name);
+      if (flmsUnder) {
+        flmsUnder.forEach(flm => validManagerNames.add(flm));
+      }
+    }
+
+    // Filter users: exclude RevOps and only show users whose name matches valid managers
+    return availableUsers.filter(u => {
+      const role = u.role?.toUpperCase();
+      if (role === 'REVOPS') return false;
+      return validManagerNames.has(u.full_name || '');
+    });
+  }, [availableUsers, targetManager, managerHierarchy]);
+
+  // Show hint about valid recipients
+  const recipientHint = useMemo(() => {
+    if (!targetManager || !managerHierarchy) return null;
+    
+    const { flmToSlm, slmToFlms } = managerHierarchy;
+    
+    if (targetManager.level === 'FLM') {
+      const slmAbove = flmToSlm.get(targetManager.name);
+      return `Can be shared with: ${targetManager.name} (FLM)${slmAbove ? ` or ${slmAbove} (SLM)` : ''}`;
+    } else if (targetManager.level === 'SLM') {
+      const flmsUnder = slmToFlms.get(targetManager.name);
+      const flmList = flmsUnder ? Array.from(flmsUnder).join(', ') : 'none';
+      return `Can be shared with: ${targetManager.name} (SLM) or FLMs: ${flmList}`;
+    }
+    return null;
+  }, [targetManager, managerHierarchy]);
+
+  // Fetch existing reviews to check for duplicates
   const { data: existingReviews } = useQuery({
     queryKey: ['existing-reviews', buildId, managerName],
     queryFn: async () => {
@@ -93,11 +248,12 @@ export default function SendToManagerDialog({
   const sendToManagerMutation = useMutation({
     mutationFn: async () => {
       if (sendToAllSLMs && slmNames) {
-        // Send all SLM books to all users - upsert to allow duplicate sends
+        // Send all SLM books to all non-RevOps users
         const upserts: any[] = [];
+        const nonRevOpsUsers = availableUsers?.filter(u => u.role?.toUpperCase() !== 'REVOPS') || [];
         
         for (const slmName of slmNames) {
-          for (const userProfile of availableUsers || []) {
+          for (const userProfile of nonRevOpsUsers) {
             upserts.push({
               build_id: buildId,
               manager_user_id: userProfile.id,
@@ -105,6 +261,7 @@ export default function SendToManagerDialog({
               manager_level: 'SLM',
               sent_by: user!.id,
               sent_at: new Date().toISOString(),
+              shared_scope: 'full',
             });
           }
         }
@@ -124,19 +281,44 @@ export default function SendToManagerDialog({
           throw new Error('Please select a user.');
         }
 
-        const targetManagerName = managerName || 'General';
-        const targetManagerLevel = managerLevel || 'FLM';
+        if (!targetManager) {
+          throw new Error('Please select which manager\'s book to share.');
+        }
+
+        // Determine shared_scope and visible_flms
+        const selectedUser = availableUsers?.find(u => u.id === selectedUserId);
+        const selectedUserRole = selectedUser?.role?.toUpperCase();
+        const selectedUserName = selectedUser?.full_name;
+        
+        let sharedScope = 'full';
+        let visibleFlms: string[] | null = null;
+        
+        // If sharing SLM book with an FLM, scope to only their FLM portion
+        if (targetManager.level === 'SLM' && selectedUserRole === 'FLM') {
+          const flmsUnder = managerHierarchy?.slmToFlms.get(targetManager.name);
+          if (flmsUnder && selectedUserName && flmsUnder.has(selectedUserName)) {
+            sharedScope = 'flm_only';
+            visibleFlms = [selectedUserName];
+          }
+        }
+
+        const reviewData: any = {
+          build_id: buildId,
+          manager_user_id: selectedUserId,
+          manager_name: targetManager.name,
+          manager_level: targetManager.level,
+          sent_by: user!.id,
+          sent_at: new Date().toISOString(),
+          shared_scope: sharedScope,
+        };
+        
+        if (visibleFlms) {
+          reviewData.visible_flms = visibleFlms;
+        }
 
         const { error } = await supabase
           .from('manager_reviews')
-          .upsert({
-            build_id: buildId,
-            manager_user_id: selectedUserId,
-            manager_name: targetManagerName,
-            manager_level: targetManagerLevel,
-            sent_by: user!.id,
-            sent_at: new Date().toISOString(),
-          }, {
+          .upsert(reviewData, {
             onConflict: 'build_id,manager_user_id,manager_name',
             ignoreDuplicates: false,
           });
@@ -145,7 +327,7 @@ export default function SendToManagerDialog({
         return 1;
       }
     },
-    onSuccess: (count, variables) => {
+    onSuccess: (count) => {
       queryClient.invalidateQueries({ queryKey: ['existing-reviews'] });
       queryClient.invalidateQueries({ queryKey: ['manager-reviews'] });
       
@@ -154,13 +336,10 @@ export default function SendToManagerDialog({
       let link = '';
       
       if (sendToAllSLMs && slmNames && slmNames.length > 0) {
-        // For "send all SLMs", generate link with buildId only (manager dashboard will show all)
         link = `${baseUrl}/manager-dashboard?buildId=${buildId}`;
-      } else if (managerName && selectedUserId) {
-        // For specific manager, include managerName in query params
-        link = `${baseUrl}/manager-dashboard?buildId=${buildId}&managerName=${encodeURIComponent(managerName)}`;
+      } else if (targetManager && selectedUserId) {
+        link = `${baseUrl}/manager-dashboard?buildId=${buildId}&managerName=${encodeURIComponent(targetManager.name)}`;
       } else {
-        // Fallback to just buildId
         link = `${baseUrl}/manager-dashboard?buildId=${buildId}`;
       }
       
@@ -202,6 +381,23 @@ export default function SendToManagerDialog({
     setCopied(false);
     onClose();
   };
+
+  // Get display name for selected manager
+  const selectedManagerDisplay = useMemo(() => {
+    if (!selectedManager) return null;
+    const manager = allManagers.find(m => `${m.level}:${m.name}` === selectedManager);
+    return manager ? `${manager.name} (${manager.level})` : null;
+  }, [selectedManager, allManagers]);
+
+  // Get display name for selected user
+  const selectedUserDisplay = useMemo(() => {
+    if (!selectedUserId) return null;
+    const user = availableUsers?.find(u => u.id === selectedUserId);
+    return user ? `${user.full_name || user.email} (${user.role})` : null;
+  }, [selectedUserId, availableUsers]);
+
+  // Show all users if no filtering (for bulk send or no target selected)
+  const usersToShow = targetManager ? filteredUsers : (availableUsers?.filter(u => u.role?.toUpperCase() !== 'REVOPS') || []);
 
   return (
     <>
@@ -279,7 +475,7 @@ export default function SendToManagerDialog({
             </p>
           ) : (
             <>
-              {managerName && (
+              {managerName ? (
                 <div className="bg-primary/10 border border-primary/20 p-4 rounded-lg space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Manager</span>
@@ -290,32 +486,151 @@ export default function SendToManagerDialog({
                     <Badge variant="outline">{managerLevel}</Badge>
                   </div>
                 </div>
+              ) : (
+                <div className="space-y-2">
+                  <Label>Select Manager's Book to Share</Label>
+                  <Popover open={managerSearchOpen} onOpenChange={setManagerSearchOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={managerSearchOpen}
+                        className={cn(
+                          "w-full justify-between font-normal h-10",
+                          !selectedManager && "text-muted-foreground"
+                        )}
+                        onClick={() => {
+                          // If "All" was selected, deselect it
+                          if (sendToAllSLMs) {
+                            setSendToAllSLMs(false);
+                          }
+                        }}
+                      >
+                        {selectedManagerDisplay || "Choose a manager..."}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[350px] p-0 max-h-[400px]" align="start">
+                      <Command className="border-0">
+                        <CommandInput placeholder="Type to filter..." className="border-0" />
+                        <CommandList className="max-h-[350px]">
+                          <CommandEmpty>No manager found.</CommandEmpty>
+                          
+                          {/* SLMs Group */}
+                          <CommandGroup heading="SLMs (Second Line Managers)">
+                            {(slmNames || []).map((slm) => (
+                              <CommandItem
+                                key={`SLM:${slm}`}
+                                value={slm}
+                                onSelect={() => {
+                                  setSelectedManager(`SLM:${slm}`);
+                                  setSendToAllSLMs(false);
+                                  setManagerSearchOpen(false);
+                                }}
+                                className="flex items-center justify-between"
+                              >
+                                <span>{slm}</span>
+                                <Badge variant="secondary" className="ml-2">SLM</Badge>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                          
+                          <CommandSeparator />
+                          
+                          {/* FLMs grouped by SLM */}
+                          {groupedManagers?.map((group) => (
+                            <CommandGroup key={group.slm} heading={`FLMs under ${group.slm}`}>
+                              {group.flms.map((flm) => (
+                                <CommandItem
+                                  key={`FLM:${flm}`}
+                                  value={flm}
+                                  onSelect={() => {
+                                    setSelectedManager(`FLM:${flm}`);
+                                    setSendToAllSLMs(false);
+                                    setManagerSearchOpen(false);
+                                  }}
+                                  className="flex items-center justify-between pl-4"
+                                >
+                                  <span>{flm}</span>
+                                  <Badge variant="outline" className="ml-2">FLM</Badge>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          ))}
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                  <p className="text-xs text-muted-foreground">
+                    Select which FLM or SLM's book of business to share
+                  </p>
+                </div>
+              )}
+
+              {/* Recipient hint */}
+              {recipientHint && (
+                <Alert className="bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
+                  <AlertCircle className="h-4 w-4 text-blue-600" />
+                  <AlertDescription className="text-blue-700 dark:text-blue-300 text-sm">
+                    {recipientHint}
+                  </AlertDescription>
+                </Alert>
               )}
 
               <div className="space-y-2">
                 <Label>Assign to User</Label>
-                <Select 
-                  value={selectedUserId} 
-                  onValueChange={(value) => {
-                    setSelectedUserId(value);
-                    setSendToAllSLMs(false);
-                  }}
-                  disabled={sendToAllSLMs}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choose a user..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableUsers.map((user) => (
-                      <SelectItem key={user.id} value={user.id}>
-                        {user.full_name || user.email}
-                        <Badge variant="outline" className="ml-2">
-                          {user.role}
-                        </Badge>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Popover open={userSearchOpen} onOpenChange={setUserSearchOpen}>
+                  <PopoverTrigger asChild>
+                      <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={userSearchOpen}
+                      className={cn(
+                        "w-full justify-between font-normal h-10",
+                        !selectedUserId && "text-muted-foreground"
+                      )}
+                      onClick={() => {
+                        // If "All" was selected, deselect it
+                        if (sendToAllSLMs) {
+                          setSendToAllSLMs(false);
+                        }
+                      }}
+                    >
+                      {selectedUserDisplay || "Choose a user..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[350px] p-0 max-h-[400px]" align="start">
+                    <Command className="border-0">
+                      <CommandInput placeholder="Type to filter..." className="border-0" />
+                      <CommandList className="max-h-[350px]">
+                        <CommandEmpty>No user found.</CommandEmpty>
+                        <CommandGroup>
+                          {usersToShow.map((u) => (
+                            <CommandItem
+                              key={u.id}
+                              value={u.full_name || u.email || u.id}
+                              onSelect={() => {
+                                setSelectedUserId(u.id);
+                                setSendToAllSLMs(false);
+                                setUserSearchOpen(false);
+                              }}
+                              className="flex items-center justify-between"
+                            >
+                              <span>{u.full_name || u.email}</span>
+                              <Badge variant="outline" className="ml-2">{u.role}</Badge>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                {targetManager && usersToShow.length === 0 && (
+                  <p className="text-xs text-amber-600">
+                    No users match the valid recipients. Users need full_name matching a manager name.
+                  </p>
+                )}
               </div>
 
               {!managerName && (
@@ -334,11 +649,15 @@ export default function SendToManagerDialog({
                     className="w-full gap-2"
                     onClick={() => {
                       setSendToAllSLMs(!sendToAllSLMs);
-                      setSelectedUserId('');
+                      if (!sendToAllSLMs) {
+                        // If turning ON "All", clear selections
+                        setSelectedUserId('');
+                        setSelectedManager('');
+                      }
                     }}
                   >
                     <Users className="w-4 h-4" />
-                    Send All SLM Books to All Users
+                    {sendToAllSLMs ? '✓ Sending All SLM Books' : 'Send All SLM Books to All Managers'}
                   </Button>
                 </>
               )}
@@ -353,7 +672,7 @@ export default function SendToManagerDialog({
           <Button
             onClick={() => sendToManagerMutation.mutate()}
             disabled={
-              (!selectedUserId && !sendToAllSLMs) ||
+              ((!selectedUserId || !targetManager) && !sendToAllSLMs) ||
               sendToManagerMutation.isPending ||
               !availableUsers ||
               availableUsers.length === 0

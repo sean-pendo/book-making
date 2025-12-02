@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { EnhancedAssignmentService } from '@/services/enhancedAssignmentService';
 import { toast } from '@/hooks/use-toast';
@@ -75,16 +76,11 @@ interface EnhancedBalancingData {
 }
 
 export const useEnhancedBalancing = (buildId?: string) => {
-  const [data, setData] = useState<EnhancedBalancingData | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const [rebalancingLoading, setRebalancingLoading] = useState(false);
 
-  const fetchBalancingData = async () => {
-    if (!buildId) return;
-
-    setIsLoading(true);
-    setError(null);
-
+  // Main data fetching function - returns data instead of setting state
+  const fetchBalancingData = async (buildId: string): Promise<EnhancedBalancingData> => {
     try {
       console.log('[useEnhancedBalancing] Fetching enhanced balancing data for build:', buildId);
 
@@ -419,7 +415,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
       // Calculate total assigned accounts (those with new_owner_id set)
       const totalAssignedAccounts = assignedCustomers.length + assignedProspects.length;
 
-      setData({
+      return {
         customerMetrics: {
           totalARR: totalCustomerARR,
           totalAccounts: customers.length,
@@ -442,26 +438,26 @@ export const useEnhancedBalancing = (buildId?: string) => {
         repMetrics: repMetricsData.sort((a, b) => b.customerARR - a.customerARR),
         repAccountDetails,
         assignedAccountsCount: totalAssignedAccounts
-      });
-
+      };
     } catch (err) {
       console.error('[useEnhancedBalancing] Error fetching data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch balancing data');
-      toast({
-        title: "Error",
-        description: "Failed to load enhanced balancing data",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
+      throw err;
     }
   };
+
+  // Use React Query for data fetching - responds to cache invalidation
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['enhanced-balancing', buildId],
+    queryFn: () => fetchBalancingData(buildId!),
+    enabled: !!buildId,
+    staleTime: 30000, // Consider data fresh for 30 seconds
+  });
 
   const generateRebalancingPlan = async () => {
     if (!buildId) return;
 
     try {
-      setIsLoading(true);
+      setRebalancingLoading(true);
       console.log('[useEnhancedBalancing] Generating rebalancing plan...');
 
       // First sync any missing assignment records
@@ -485,8 +481,8 @@ export const useEnhancedBalancing = (buildId?: string) => {
         description: `Generated ${result.assignedAccounts} balanced assignments`,
       });
 
-      // Refresh data after generating plan
-      await fetchBalancingData();
+      // Invalidate cache to refresh data
+      queryClient.invalidateQueries({ queryKey: ['enhanced-balancing', buildId] });
 
     } catch (err) {
       console.error('[useEnhancedBalancing] Error generating rebalancing plan:', err);
@@ -496,21 +492,15 @@ export const useEnhancedBalancing = (buildId?: string) => {
         variant: "destructive",
       });
     } finally {
-      setIsLoading(false);
+      setRebalancingLoading(false);
     }
   };
 
-  useEffect(() => {
-    if (buildId) {
-      fetchBalancingData();
-    }
-  }, [buildId]);
-
   return {
-    data,
-    isLoading,
-    error,
-    refetch: fetchBalancingData,
+    data: data ?? null,
+    isLoading: isLoading || rebalancingLoading,
+    error: error instanceof Error ? error.message : error ? String(error) : null,
+    refetch,
     generateRebalancingPlan
   };
 };

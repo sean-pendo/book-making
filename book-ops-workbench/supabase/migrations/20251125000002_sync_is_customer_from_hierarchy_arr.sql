@@ -21,3 +21,4 @@ BEGIN
   RAISE NOTICE 'Updated is_customer: % customers, % prospects', customer_count, prospect_count;
 END $$;
 
+

@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Check } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -55,13 +56,17 @@ interface ManagerHierarchyViewProps {
   managerLevel: 'FLM' | 'SLM';
   managerName: string;
   reviewStatus: string;
+  sharedScope?: 'full' | 'flm_only'; // Optional: scope of visibility
+  visibleFlms?: string[]; // Optional: specific FLMs visible when scope is 'flm_only'
 }
 
 export default function ManagerHierarchyView({ 
   buildId, 
   managerLevel, 
   managerName,
-  reviewStatus 
+  reviewStatus,
+  sharedScope = 'full',
+  visibleFlms 
 }: ManagerHierarchyViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedReps, setExpandedReps] = useState<Set<string>>(new Set());
@@ -86,20 +91,52 @@ export default function ManagerHierarchyView({
 
   // Fetch sales reps in this manager's hierarchy
   const { data: salesReps, isLoading: repsLoading } = useQuery({
-    queryKey: ['manager-sales-reps', buildId, managerLevel, managerName],
+    queryKey: ['manager-sales-reps', buildId, managerLevel, managerName, sharedScope, visibleFlms],
     queryFn: async () => {
+      console.log('[ManagerHierarchyView] Fetching sales reps with:', {
+        buildId,
+        managerLevel,
+        managerName,
+        sharedScope,
+        visibleFlms
+      });
+
       let query = supabase
         .from('sales_reps')
         .select('*')
         .eq('build_id', buildId);
 
-      if (managerLevel === 'FLM') {
+      // If scope is 'flm_only', only show reps from specific FLMs (even if manager is SLM)
+      if (sharedScope === 'flm_only' && visibleFlms && visibleFlms.length > 0) {
+        query = query.in('flm', visibleFlms);
+      } else if (managerLevel === 'FLM') {
         query = query.eq('flm', managerName);
       } else if (managerLevel === 'SLM') {
         query = query.eq('slm', managerName);
       }
 
       const { data, error } = await query;
+      
+      console.log('[ManagerHierarchyView] Query result:', {
+        count: data?.length || 0,
+        error: error?.message,
+        data: data?.slice(0, 3) // First 3 for debugging
+      });
+
+      // Also fetch unique FLM/SLM names to help debug
+      const { data: allReps } = await supabase
+        .from('sales_reps')
+        .select('flm, slm')
+        .eq('build_id', buildId);
+      
+      const uniqueFlms = [...new Set(allReps?.map(r => r.flm).filter(Boolean))];
+      const uniqueSlms = [...new Set(allReps?.map(r => r.slm).filter(Boolean))];
+      
+      console.log('[ManagerHierarchyView] Available managers in this build:', {
+        flms: uniqueFlms,
+        slms: uniqueSlms
+      });
+
       if (error) throw error;
       return data;
     },
@@ -227,6 +264,30 @@ export default function ManagerHierarchyView({
     enabled: !!buildId,
   });
 
+  // Derive approval state from notes - track approved rep books and FLM teams
+  const { approvedRepBooks, approvedFLMTeams } = useMemo(() => {
+    const repBooks = new Set<string>();
+    const flmTeams = new Set<string>();
+    
+    if (accountNotes) {
+      Object.keys(accountNotes).forEach(accountId => {
+        // Check for rep book approvals (rep-book-{repId})
+        if (accountId.startsWith('rep-book-')) {
+          const repId = accountId.replace('rep-book-', '');
+          repBooks.add(repId);
+        }
+        // Check for FLM team approvals (flm-team-{encodedName})
+        if (accountId.startsWith('flm-team-')) {
+          const encodedName = accountId.replace('flm-team-', '');
+          const flmName = decodeURIComponent(encodedName);
+          flmTeams.add(flmName);
+        }
+      });
+    }
+    
+    return { approvedRepBooks: repBooks, approvedFLMTeams: flmTeams };
+  }, [accountNotes]);
+
   const toggleRep = (repId: string) => {
     const newExpanded = new Set(expandedReps);
     if (newExpanded.has(repId)) {
@@ -237,13 +298,13 @@ export default function ManagerHierarchyView({
     setExpandedReps(newExpanded);
   };
 
-  // Fetch reassignments for accounts
+  // Fetch reassignments for accounts (including proposed owner for inline display)
   const { data: accountReassignments } = useQuery({
     queryKey: ['manager-all-reassignments', buildId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('manager_reassignments')
-        .select('sfdc_account_id, approval_status')
+        .select('sfdc_account_id, approval_status, proposed_owner_name')
         .eq('build_id', buildId)
         .in('approval_status', ['pending_slm', 'pending_revops']);
 
@@ -454,8 +515,21 @@ export default function ManagerHierarchyView({
     return accountNotes?.[accountId]?.count || 0;
   };
 
+  const getReassignment = (accountId: string) => {
+    return accountReassignments?.find(r => r.sfdc_account_id === accountId);
+  };
+
   const hasReassignment = (accountId: string) => {
-    return accountReassignments?.some(r => r.sfdc_account_id === accountId);
+    return !!getReassignment(accountId);
+  };
+
+  // Get approval status label for badge display
+  const getApprovalStatusLabel = (status: string): string => {
+    switch (status) {
+      case 'pending_slm': return 'Awaiting SLM';
+      case 'pending_revops': return 'Awaiting RevOps';
+      default: return 'Pending';
+    }
   };
 
   const formatCurrency = (value: number) => {
@@ -617,22 +691,70 @@ export default function ManagerHierarchyView({
 
   // Determine initial approval status based on user's role
   const getInitialApprovalStatus = (): string => {
-    const role = effectiveProfile?.role;
+    const role = effectiveProfile?.role?.toUpperCase();
     if (role === 'REVOPS') return 'approved';      // RevOps auto-approves
     if (role === 'SLM') return 'pending_revops';   // SLM skips SLM approval
     return 'pending_slm';                           // FLM needs SLM approval first
   };
 
   const getApprovalSuccessMessage = (): string => {
-    const role = effectiveProfile?.role;
+    const role = effectiveProfile?.role?.toUpperCase();
     if (role === 'REVOPS') return 'Reassignment has been applied.';
     if (role === 'SLM') return 'Your reassignment request has been submitted for RevOps approval.';
     return 'Your reassignment request has been submitted for SLM approval.';
   };
 
   const reassignAccountMutation = useMutation({
-    mutationFn: async ({ accountId, newOwner }: { accountId: string; newOwner: any }) => {
+    mutationFn: async ({ accountId, newOwner, isOutOfScope }: { accountId: string; newOwner: any; isOutOfScope?: boolean }) => {
       const approvalStatus = getInitialApprovalStatus();
+      const role = effectiveProfile?.role?.toUpperCase();
+      
+      // Check if this is a late submission (FLM proposing after SLM already submitted)
+      let isLateSubmission = false;
+      if (role === 'FLM' && approvalStatus === 'pending_slm') {
+        // Find the SLM for the current rep (the one who owns the account being reassigned)
+        const currentOwnerRep = salesReps?.find(r => r.rep_id === reassigningAccount.new_owner_id);
+        const slmName = currentOwnerRep?.slm;
+        
+        if (slmName) {
+          // Check if the SLM has already submitted their review
+          const { data: slmReview } = await supabase
+            .from('manager_reviews')
+            .select('status, reviewed_at')
+            .eq('build_id', buildId)
+            .eq('manager_name', slmName)
+            .eq('manager_level', 'SLM')
+            .eq('status', 'accepted')
+            .maybeSingle();
+          
+          if (slmReview?.status === 'accepted') {
+            isLateSubmission = true;
+          }
+        }
+      }
+      
+      // Handle out-of-scope case
+      if (isOutOfScope) {
+        const { error } = await supabase
+          .from('manager_reassignments')
+          .insert({
+            build_id: buildId,
+            manager_user_id: user!.id,
+            sfdc_account_id: accountId,
+            account_name: reassigningAccount.account_name,
+            current_owner_id: reassigningAccount.new_owner_id,
+            current_owner_name: reassigningAccount.new_owner_name,
+            proposed_owner_id: null, // No owner - out of scope
+            proposed_owner_name: '[OUT OF SCOPE]',
+            rationale: reassignmentRationale || 'Account flagged as out-of-scope - needs reassignment outside this hierarchy',
+            approval_status: approvalStatus,
+            is_late_submission: isLateSubmission,
+            status: 'pending', // Always pending so RevOps must handle it
+          });
+
+        if (error) throw error;
+        return; // Don't update account directly for out-of-scope
+      }
       
       const { error } = await supabase
         .from('manager_reassignments')
@@ -647,6 +769,7 @@ export default function ManagerHierarchyView({
           proposed_owner_name: newOwner.name,
           rationale: reassignmentRationale || 'Manager reassignment',
           approval_status: approvalStatus,
+          is_late_submission: isLateSubmission,
         });
 
       if (error) throw error;
@@ -687,6 +810,16 @@ export default function ManagerHierarchyView({
   });
 
   const handleReassign = () => {
+    // Handle "Out-of-Scope" selection
+    if (newOwnerId === 'OUT_OF_SCOPE') {
+      reassignAccountMutation.mutate({
+        accountId: reassigningAccount.sfdc_account_id,
+        newOwner: null, // null indicates out-of-scope
+        isOutOfScope: true,
+      });
+      return;
+    }
+
     const newOwner = salesReps?.find(rep => rep.rep_id === newOwnerId);
     if (!newOwner) {
       toast({
@@ -700,6 +833,7 @@ export default function ManagerHierarchyView({
     reassignAccountMutation.mutate({
       accountId: reassigningAccount.sfdc_account_id,
       newOwner,
+      isOutOfScope: false,
     });
   };
 
@@ -728,6 +862,43 @@ export default function ManagerHierarchyView({
       toast({
         title: 'Book Approved',
         description: 'The rep\'s book has been approved.',
+      });
+      queryClient.invalidateQueries({ queryKey: ['manager-all-notes'] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  // Approve an entire FLM team
+  const approveFLMTeamMutation = useMutation({
+    mutationFn: async (flmName: string) => {
+      // URL encode the FLM name to handle special characters
+      const encodedFLMName = encodeURIComponent(flmName);
+
+      // Create an approval note for this FLM's entire team
+      const { error } = await supabase
+        .from('manager_notes')
+        .insert({
+          build_id: buildId,
+          sfdc_account_id: `flm-team-${encodedFLMName}`, // Special ID for FLM-level approvals
+          manager_user_id: user!.id,
+          note_text: `Team approved by ${effectiveProfile?.full_name || 'Manager'}`,
+          category: 'approval',
+          status: 'resolved',
+          tags: ['team-approval', flmName],
+        });
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast({
+        title: 'Team Approved',
+        description: 'The FLM\'s entire team has been approved.',
       });
       queryClient.invalidateQueries({ queryKey: ['manager-all-notes'] });
     },
@@ -790,12 +961,19 @@ export default function ManagerHierarchyView({
                 return (
                   <div key={flm} className="space-y-2">
                     {/* FLM Summary Header */}
-                    <Card className="bg-primary/5 border-primary/20">
+                    <Card className={`border-primary/20 ${approvedFLMTeams.has(flm) ? 'bg-green-50 dark:bg-green-950/30 border-green-300' : 'bg-primary/5'}`}>
                       <div className="p-4">
                         <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-semibold text-lg">{flm}</div>
-                            <div className="text-sm text-muted-foreground">{flmMetrics.totalReps} reps</div>
+                          <div className="flex items-center gap-3">
+                            {approvedFLMTeams.has(flm) && (
+                              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-green-500 text-white animate-in zoom-in-50 duration-300">
+                                <Check className="w-5 h-5" />
+                              </div>
+                            )}
+                            <div>
+                              <div className="font-semibold text-lg">{flm}</div>
+                              <div className="text-sm text-muted-foreground">{flmMetrics.totalReps} reps</div>
+                            </div>
                           </div>
                           <div className="flex items-center gap-6">
                             <div className="text-right">
@@ -812,6 +990,27 @@ export default function ManagerHierarchyView({
                               <div className="text-sm font-medium">{formatCurrency(flmMetrics.totalATR)}</div>
                               <div className="text-xs text-muted-foreground">ATR</div>
                             </div>
+                            {/* Approve Team button - only visible to SLM viewing FLMs */}
+                            {managerLevel === 'SLM' && (
+                              <Button 
+                                variant={approvedFLMTeams.has(flm) ? "outline" : "default"}
+                                size="sm"
+                                onClick={() => approveFLMTeamMutation.mutate(flm)}
+                                disabled={reviewStatus === 'accepted' || approvedFLMTeams.has(flm) || approveFLMTeamMutation.isPending}
+                                className={`min-w-[130px] ${approvedFLMTeams.has(flm) ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-100' : ''}`}
+                              >
+                                {approveFLMTeamMutation.isPending ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : approvedFLMTeams.has(flm) ? (
+                                  <>
+                                    <Check className="w-4 h-4 mr-1" />
+                                    Approved
+                                  </>
+                                ) : (
+                                  'Approve Team'
+                                )}
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -825,7 +1024,7 @@ export default function ManagerHierarchyView({
 
                       return (
                         <Collapsible key={rep.rep_id} open={isExpanded} onOpenChange={() => toggleRep(rep.rep_id)}>
-                          <Card className="hover:bg-accent/5 transition-colors">
+                          <Card className={`transition-all duration-300 ${approvedRepBooks.has(rep.rep_id) ? 'bg-green-50/50 dark:bg-green-950/20 border-green-200' : 'hover:bg-accent/5'}`}>
                             <div className="p-4">
                               <div className="flex items-center justify-between mb-2">
                                 <CollapsibleTrigger asChild>
@@ -833,11 +1032,18 @@ export default function ManagerHierarchyView({
                                     <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
                                       {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                                     </Button>
-                                    <div>
-                                      <div className="font-medium">{rep.name}</div>
-                                      <div className="text-sm text-muted-foreground">
-                                        {rep.team && <span>{rep.team}</span>}
-                                        {rep.region && <span className="ml-2">• {rep.region}</span>}
+                                    <div className="flex items-center gap-2">
+                                      {approvedRepBooks.has(rep.rep_id) && (
+                                        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-green-500 text-white animate-in zoom-in-50 duration-300">
+                                          <Check className="w-3 h-3" />
+                                        </div>
+                                      )}
+                                      <div>
+                                        <div className="font-medium">{rep.name}</div>
+                                        <div className="text-sm text-muted-foreground">
+                                          {rep.team && <span>{rep.team}</span>}
+                                          {rep.region && <span className="ml-2">• {rep.region}</span>}
+                                        </div>
                                       </div>
                                     </div>
                                   </div>
@@ -884,14 +1090,19 @@ export default function ManagerHierarchyView({
                                     </div>
                                   </div>
                                   <Button 
-                                    variant="default"
+                                    variant={approvedRepBooks.has(rep.rep_id) ? "outline" : "default"}
                                     size="sm"
                                     onClick={() => approveRepBookMutation.mutate(rep.rep_id)}
-                                    disabled={reviewStatus === 'accepted' || approveRepBookMutation.isPending}
-                                    className="min-w-[120px]"
+                                    disabled={reviewStatus === 'accepted' || approvedRepBooks.has(rep.rep_id) || approveRepBookMutation.isPending}
+                                    className={`min-w-[120px] transition-all duration-300 ${approvedRepBooks.has(rep.rep_id) ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-100' : ''}`}
                                   >
                                     {approveRepBookMutation.isPending ? (
                                       <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : approvedRepBooks.has(rep.rep_id) ? (
+                                      <>
+                                        <Check className="w-4 h-4 mr-1" />
+                                        Approved
+                                      </>
                                     ) : (
                                       'Approve Book'
                                     )}
@@ -968,11 +1179,24 @@ export default function ManagerHierarchyView({
                                               )}
                                             </TableCell>
                                             <TableCell>
-                                              {!account.isVirtualParent && hasReassignment(account.sfdc_account_id) && (
-                                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300">
-                                                  Reassigned
-                                                </Badge>
-                                              )}
+                                              {!account.isVirtualParent && (() => {
+                                                const reassignment = getReassignment(account.sfdc_account_id);
+                                                if (!reassignment) return null;
+                                                return (
+                                                  <TooltipProvider>
+                                                    <Tooltip>
+                                                      <TooltipTrigger asChild>
+                                                        <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 cursor-help">
+                                                          {getApprovalStatusLabel(reassignment.approval_status)}
+                                                        </Badge>
+                                                      </TooltipTrigger>
+                                                      <TooltipContent>
+                                                        <p>Proposed: {reassignment.proposed_owner_name || 'Unknown'}</p>
+                                                      </TooltipContent>
+                                                    </Tooltip>
+                                                  </TooltipProvider>
+                                                );
+                                              })()}
                                             </TableCell>
                                             <TableCell className="text-right">
                                               {!account.isVirtualParent && formatCurrency(getAccountARR(account))}
@@ -1065,11 +1289,24 @@ export default function ManagerHierarchyView({
                                                     </Badge>
                                                   </TableCell>
                                                   <TableCell>
-                                                    {hasReassignment(child.sfdc_account_id) && (
-                                                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs">
-                                                        Reassigned
-                                                      </Badge>
-                                                    )}
+                                                    {(() => {
+                                                      const reassignment = getReassignment(child.sfdc_account_id);
+                                                      if (!reassignment) return null;
+                                                      return (
+                                                        <TooltipProvider>
+                                                          <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs cursor-help">
+                                                                {getApprovalStatusLabel(reassignment.approval_status)}
+                                                              </Badge>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent>
+                                                              <p>Proposed: {reassignment.proposed_owner_name || 'Unknown'}</p>
+                                                            </TooltipContent>
+                                                          </Tooltip>
+                                                        </TooltipProvider>
+                                                      );
+                                                    })()}
                                                   </TableCell>
                                                   <TableCell className="text-right text-sm">
                                                     {formatCurrency(getAccountARR(child))}
@@ -1181,43 +1418,91 @@ export default function ManagerHierarchyView({
             </DialogHeader>
 
             <div className="space-y-4">
-              <div className="bg-muted/50 p-4 rounded-lg space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">Account</span>
-                  <span className="font-medium">{reassigningAccount.account_name}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">Current Owner</span>
-                  <span className="font-medium">{reassigningAccount.new_owner_name}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">ARR</span>
-                  <span className="font-medium">{formatCurrency(getAccountARR(reassigningAccount))}</span>
-                </div>
-              </div>
+              {(() => {
+                // Find current owner's FLM
+                const currentOwnerRep = salesReps?.find(r => r.rep_id === reassigningAccount.new_owner_id);
+                const currentOwnerFLM = currentOwnerRep?.flm || 'Unknown';
+                
+                // Group reps by FLM for the dropdown
+                const repsByFLM = new Map<string, typeof salesReps>();
+                salesReps?.filter(rep => rep.rep_id !== reassigningAccount.new_owner_id)
+                  .forEach(rep => {
+                    const flm = rep.flm || 'Other';
+                    if (!repsByFLM.has(flm)) {
+                      repsByFLM.set(flm, []);
+                    }
+                    repsByFLM.get(flm)!.push(rep);
+                  });
+                
+                // Sort FLMs - put current owner's FLM first
+                const sortedFLMs = Array.from(repsByFLM.keys()).sort((a, b) => {
+                  if (a === currentOwnerFLM) return -1;
+                  if (b === currentOwnerFLM) return 1;
+                  return a.localeCompare(b);
+                });
 
-              <div className="space-y-2">
-                <Label>New Owner (Same Team Only)</Label>
-                <Select value={newOwnerId} onValueChange={setNewOwnerId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a rep..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {salesReps
-                      ?.filter(rep => 
-                        // Exclude current owner from options
-                        rep.rep_id !== reassigningAccount.new_owner_id
-                        // Allow reassignment to any rep in the manager's hierarchy
-                        // (salesReps is already filtered to only include reps under this manager)
-                      )
-                      .map((rep) => (
-                        <SelectItem key={rep.rep_id} value={rep.rep_id}>
-                          {rep.name} {rep.team && `(${rep.team})`}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                return (
+                  <>
+                    <div className="bg-muted/50 p-4 rounded-lg space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-sm text-muted-foreground">Account</span>
+                        <span className="font-medium">{reassigningAccount.account_name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-muted-foreground">Current Owner</span>
+                        <span className="font-medium">{reassigningAccount.new_owner_name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-muted-foreground">Owner's FLM</span>
+                        <Badge variant="outline" className="font-medium">{currentOwnerFLM}</Badge>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-muted-foreground">ARR</span>
+                        <span className="font-medium">{formatCurrency(getAccountARR(reassigningAccount))}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>New Owner (Your Hierarchy Only)</Label>
+                      <Select value={newOwnerId} onValueChange={setNewOwnerId}>
+                        <SelectTrigger className={newOwnerId === 'OUT_OF_SCOPE' ? 'border-destructive text-destructive' : ''}>
+                          <SelectValue placeholder="Select a rep..." />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-[300px]">
+                          {/* Out-of-Scope Option */}
+                          <SelectItem 
+                            value="OUT_OF_SCOPE" 
+                            className="text-destructive font-medium"
+                          >
+                            ⚠️ Out-of-Scope Account (Needs RevOps)
+                          </SelectItem>
+                          
+                          <div className="h-px bg-border my-2" />
+                          
+                          {/* Reps grouped by FLM */}
+                          {sortedFLMs.map((flm) => (
+                            <div key={flm}>
+                              <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 sticky top-0">
+                                {flm === currentOwnerFLM ? `${flm} (Current FLM)` : flm}
+                              </div>
+                              {repsByFLM.get(flm)?.map((rep) => (
+                                <SelectItem key={rep.rep_id} value={rep.rep_id} className="pl-4">
+                                  {rep.name}
+                                </SelectItem>
+                              ))}
+                            </div>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {newOwnerId === 'OUT_OF_SCOPE' && (
+                        <p className="text-xs text-destructive mt-1">
+                          ⚠️ This account will be flagged for RevOps to assign to someone outside your hierarchy.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
 
               <div className="space-y-2">
                 <Label>Reassignment Rationale (Optional)</Label>

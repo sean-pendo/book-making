@@ -40,7 +40,7 @@ export const Layout = ({ children }: LayoutProps) => {
             <div className="flex-1">
               <div className="flex items-center gap-4">
                 <h1 className="text-xl font-bold text-gradient">Book Builder</h1>
-                {effectiveProfile?.role === 'REVOPS' && (
+                {effectiveProfile?.role?.toUpperCase() === 'REVOPS' && (
                   <Badge variant="outline" className="status-info font-medium">
                     RevOps Admin Access
                   </Badge>

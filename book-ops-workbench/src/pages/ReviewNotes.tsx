@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { MessageSquare, Search, CheckCircle, XCircle, Clock, Loader2, Edit2 } from 'lucide-react';
+import { MessageSquare, Search, CheckCircle, XCircle, Clock, Loader2, Edit2, AlertTriangle } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
@@ -53,10 +53,12 @@ export default function ReviewNotes() {
         .eq('build_id', selectedBuildId);
 
       // Role-based filtering and approval_status filtering
-      if (effectiveProfile?.role === 'REVOPS') {
-        // REVOPS sees items awaiting their final approval (pending_revops)
-        query = query.eq('approval_status', 'pending_revops');
-      } else if (effectiveProfile?.role === 'SLM' || effectiveProfile?.role === 'FLM') {
+      const role = effectiveProfile?.role?.toUpperCase();
+      if (role === 'REVOPS') {
+        // REVOPS sees ALL pending items (both pending_slm AND pending_revops)
+        // This allows RevOps to approve FLM requests directly without waiting for SLM
+        query = query.in('approval_status', ['pending_slm', 'pending_revops', 'approved', 'rejected']);
+      } else if (role === 'SLM' || role === 'FLM') {
         // Get the manager's name from sales_reps to determine if they're FLM or SLM
         const managerName = effectiveProfile.full_name;
         
@@ -140,6 +142,57 @@ export default function ReviewNotes() {
     },
     enabled: !!selectedBuildId,
   });
+
+  // Detect conflicts: multiple proposals for the same account
+  const conflictMap = useMemo(() => {
+    if (!reassignments) return new Map<string, number>();
+    
+    const accountCounts = new Map<string, number>();
+    reassignments.forEach(r => {
+      const count = accountCounts.get(r.sfdc_account_id) || 0;
+      accountCounts.set(r.sfdc_account_id, count + 1);
+    });
+    
+    // Only keep accounts with more than 1 proposal
+    const conflicts = new Map<string, number>();
+    accountCounts.forEach((count, accountId) => {
+      if (count > 1) conflicts.set(accountId, count);
+    });
+    
+    return conflicts;
+  }, [reassignments]);
+
+  // Get warning info for a reassignment
+  const getWarnings = (reassignment: any) => {
+    const warnings: Array<{ type: 'conflict' | 'late' | 'out_of_scope'; message: string }> = [];
+    
+    // Check for out-of-scope (no proposed owner)
+    if (reassignment.proposed_owner_name === '[OUT OF SCOPE]' || !reassignment.proposed_owner_id) {
+      warnings.push({
+        type: 'out_of_scope',
+        message: 'Account needs assignment outside the manager\'s hierarchy',
+      });
+    }
+    
+    // Check for conflict (multiple proposals for same account)
+    const conflictCount = conflictMap.get(reassignment.sfdc_account_id);
+    if (conflictCount && conflictCount > 1) {
+      warnings.push({
+        type: 'conflict',
+        message: `${conflictCount} proposals for this account`,
+      });
+    }
+    
+    // Check for late submission
+    if (reassignment.is_late_submission) {
+      warnings.push({
+        type: 'late',
+        message: 'Submitted after SLM review',
+      });
+    }
+    
+    return warnings;
+  };
 
   // RevOps final approval - applies the change to the account
   const approveMutation = useMutation({
@@ -236,20 +289,27 @@ export default function ReviewNotes() {
     },
   });
 
-  const getStatusBadge = (status: string, approvalStatus?: string) => {
+  const getStatusBadge = (status: string, approvalStatus?: string, reassignment?: any) => {
     // Use approval_status if available, otherwise fall back to status
     const effectiveStatus = approvalStatus || status;
     
     switch (effectiveStatus) {
       case 'approved':
+        // Show who approved it
+        if (reassignment?.revops_approved_by) {
+          return <Badge className="bg-success/10 text-success hover:bg-success/20"><CheckCircle className="w-3 h-3 mr-1" />Approved by RevOps</Badge>;
+        } else if (reassignment?.slm_approved_by && !reassignment?.revops_approved_by) {
+          return <Badge className="bg-success/10 text-success hover:bg-success/20"><CheckCircle className="w-3 h-3 mr-1" />Approved by SLM</Badge>;
+        }
         return <Badge className="bg-success/10 text-success hover:bg-success/20"><CheckCircle className="w-3 h-3 mr-1" />Approved</Badge>;
       case 'rejected':
         return <Badge variant="destructive"><XCircle className="w-3 h-3 mr-1" />Rejected</Badge>;
       case 'pending':
       case 'pending_slm':
-        return <Badge variant="outline" className="bg-amber-50 text-amber-700"><Clock className="w-3 h-3 mr-1" />Awaiting SLM</Badge>;
+        return <Badge variant="outline" className="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><Clock className="w-3 h-3 mr-1" />Awaiting Review</Badge>;
       case 'pending_revops':
-        return <Badge variant="outline" className="bg-blue-50 text-blue-700"><Clock className="w-3 h-3 mr-1" />Awaiting RevOps</Badge>;
+        // SLM already approved, now waiting for RevOps
+        return <Badge variant="outline" className="bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><Clock className="w-3 h-3 mr-1" />SLM Approved • Awaiting RevOps</Badge>;
       default:
         return <Badge variant="secondary">{effectiveStatus}</Badge>;
     }
@@ -273,14 +333,14 @@ export default function ReviewNotes() {
     const matchesTeam = teamFilter === 'all' || true; // TODO: Add team lookup
 
     const matchesTab =
-      (activeTab === 'pending' && r.approval_status === 'pending_revops') ||
+      (activeTab === 'pending' && (r.approval_status === 'pending_revops' || r.approval_status === 'pending_slm')) ||
       (activeTab === 'approved' && r.approval_status === 'approved') ||
       (activeTab === 'rejected' && r.approval_status === 'rejected');
 
     return matchesSearch && matchesTeam && matchesTab;
   });
 
-  const pendingCount = reassignments?.filter(r => r.approval_status === 'pending_revops').length || 0;
+  const pendingCount = reassignments?.filter(r => r.approval_status === 'pending_revops' || r.approval_status === 'pending_slm').length || 0;
   const approvedCount = reassignments?.filter(r => r.approval_status === 'approved').length || 0;
   const rejectedCount = reassignments?.filter(r => r.approval_status === 'rejected').length || 0;
 
@@ -376,41 +436,72 @@ export default function ReviewNotes() {
                       <TableHead>Account</TableHead>
                       <TableHead>Current Owner</TableHead>
                       <TableHead>Proposed Owner</TableHead>
-                      <TableHead>Requested By</TableHead>
+                      <TableHead>Status</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Rationale</TableHead>
+                      <TableHead>Warnings</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredReassignments.map((reassignment) => (
-                      <TableRow key={reassignment.id}>
-                        <TableCell className="font-medium">{reassignment.account_name}</TableCell>
-                        <TableCell>{reassignment.current_owner_name}</TableCell>
-                        <TableCell>
-                          <div className="font-medium text-primary">{reassignment.proposed_owner_name}</div>
-                        </TableCell>
-                        <TableCell className="text-sm">Manager</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {new Date(reassignment.created_at).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell className="max-w-xs">
-                          <div className="text-sm text-muted-foreground truncate" title={reassignment.rationale}>
-                            {reassignment.rationale || 'No rationale provided'}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              onClick={() => setSelectedReassignment(reassignment)}
-                            >
-                              Review
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {filteredReassignments.map((reassignment) => {
+                      const warnings = getWarnings(reassignment);
+                      const isOutOfScope = warnings.some(w => w.type === 'out_of_scope');
+                      return (
+                        <TableRow key={reassignment.id} className={isOutOfScope ? 'bg-red-50/50 dark:bg-red-950/20 border-l-4 border-l-red-500' : warnings.length > 0 ? 'bg-amber-50/50 dark:bg-amber-950/20' : ''}>
+                          <TableCell className="font-medium">{reassignment.account_name}</TableCell>
+                          <TableCell>{reassignment.current_owner_name}</TableCell>
+                          <TableCell>
+                            <div className="font-medium text-primary">{reassignment.proposed_owner_name}</div>
+                          </TableCell>
+                          <TableCell>
+                            {getStatusBadge(reassignment.status, reassignment.approval_status, reassignment)}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {new Date(reassignment.created_at).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell className="max-w-xs">
+                            <div className="text-sm text-muted-foreground truncate" title={reassignment.rationale}>
+                              {reassignment.rationale || 'No rationale provided'}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {warnings.length > 0 ? (
+                              <div className="flex flex-col gap-1">
+                                {warnings.map((warning, idx) => (
+                                  <Badge 
+                                    key={idx} 
+                                    variant="outline" 
+                                    className={`text-xs gap-1 ${
+                                      warning.type === 'out_of_scope'
+                                        ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700'
+                                        : warning.type === 'conflict' 
+                                          ? 'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700'
+                                          : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700'
+                                    }`}
+                                  >
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {warning.type === 'out_of_scope' ? 'Out of Scope' : warning.type === 'conflict' ? 'Conflict' : 'Late'}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                onClick={() => setSelectedReassignment(reassignment)}
+                              >
+                                Review
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}
@@ -460,7 +551,7 @@ export default function ReviewNotes() {
                         <TableCell className="text-sm text-muted-foreground">
                           {reassignment.approved_at ? new Date(reassignment.approved_at).toLocaleDateString() : '-'}
                         </TableCell>
-                        <TableCell>{getStatusBadge(reassignment.status)}</TableCell>
+                        <TableCell>{getStatusBadge(reassignment.status, reassignment.approval_status, reassignment)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -512,7 +603,7 @@ export default function ReviewNotes() {
                         <TableCell className="text-sm text-muted-foreground">
                           {reassignment.approved_at ? new Date(reassignment.approved_at).toLocaleDateString() : '-'}
                         </TableCell>
-                        <TableCell>{getStatusBadge(reassignment.status)}</TableCell>
+                        <TableCell>{getStatusBadge(reassignment.status, reassignment.approval_status, reassignment)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -586,6 +677,40 @@ export default function ReviewNotes() {
             </DialogHeader>
 
             <div className="space-y-4">
+              {/* Warnings Banner */}
+              {getWarnings(selectedReassignment).length > 0 && (
+                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <div className="font-medium text-amber-800 dark:text-amber-200">Review Warnings</div>
+                      {getWarnings(selectedReassignment).map((warning, idx) => (
+                        <p key={idx} className="text-sm text-amber-700 dark:text-amber-300">
+                          {warning.type === 'out_of_scope' && (
+                            <>
+                              <strong className="text-red-700 dark:text-red-400">⚠️ Out of Scope:</strong> The manager flagged this account as not belonging to their hierarchy. 
+                              <strong> You must assign this account to someone outside their team or it will have no owner.</strong>
+                            </>
+                          )}
+                          {warning.type === 'conflict' && (
+                            <>
+                              <strong>Conflict:</strong> There are {conflictMap.get(selectedReassignment.sfdc_account_id)} proposals for this account. 
+                              Review carefully to avoid duplicate changes.
+                            </>
+                          )}
+                          {warning.type === 'late' && (
+                            <>
+                              <strong>Late Submission:</strong> This proposal was created after the SLM already submitted their review. 
+                              The SLM may not have seen this request.
+                            </>
+                          )}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-muted/50 p-4 rounded-lg space-y-2">
                 <div className="grid grid-cols-2 gap-4">
                   <div>

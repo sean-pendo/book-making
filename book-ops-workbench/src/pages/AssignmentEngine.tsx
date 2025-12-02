@@ -87,9 +87,10 @@ interface Owner {
 
 interface AssignmentEngineProps {
   buildId?: string;
+  onPendingProposalsChange?: (hasPending: boolean, count: number) => void;
 }
 
-export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) => {
+export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onPendingProposalsChange }) => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('customers');
@@ -177,6 +178,13 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
     handleImbalanceConfirm,
     handleImbalanceDismiss
   } = useAssignmentEngine(buildId);
+
+  // Notify parent when pending proposals change
+  useEffect(() => {
+    const hasPending = !!(assignmentResult && assignmentResult.proposals.length > 0);
+    const count = assignmentResult?.proposals.length || 0;
+    onPendingProposalsChange?.(hasPending, count);
+  }, [assignmentResult, onPendingProposalsChange]);
 
   // Fetch opportunities for Net ARR calculation
   const { data: opportunities = [] } = useQuery({
@@ -1620,6 +1628,21 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId }) =
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Global Apply Proposals Button - shows only when there are pending proposals */}
+          {assignmentResult && assignmentResult.proposals.length > 0 && (
+            <Button
+              onClick={handleExecuteAssignments}
+              disabled={isExecuting || isLoading}
+              className="flex items-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+            >
+              {isExecuting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle className="h-4 w-4" />
+              )}
+              Apply {assignmentResult.proposals.length} Proposals
+            </Button>
+          )}
           <QuickResetButton 
             buildId={buildId} 
             onComplete={() => handleRefresh()}

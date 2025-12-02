@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { AssignmentEngine } from './AssignmentEngine';
 import TerritoryBalancingDashboard from './TerritoryBalancingDashboard';
 import { AccountsTable } from '@/components/data-tables/AccountsTable';
@@ -43,6 +44,16 @@ export const BuildDetail = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabFromUrl = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(tabFromUrl || 'overview');
+  
+  // Track pending proposals from AssignmentEngine
+  const [pendingProposals, setPendingProposals] = useState({ hasPending: false, count: 0 });
+  const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+  const [pendingTabChange, setPendingTabChange] = useState<string | null>(null);
+
+  // Callback for AssignmentEngine to notify about pending proposals
+  const handlePendingProposalsChange = useCallback((hasPending: boolean, count: number) => {
+    setPendingProposals({ hasPending, count });
+  }, []);
 
   // Sync tab state with URL query parameter
   useEffect(() => {
@@ -51,14 +62,36 @@ export const BuildDetail = () => {
     }
   }, [tabFromUrl]);
 
-  // Update URL when tab changes (optional - keeps URL in sync)
+  // Update URL when tab changes - with unsaved changes check
   const handleTabChange = (newTab: string) => {
+    // Check if leaving assignments tab with pending proposals
+    if (activeTab === 'assignments' && pendingProposals.hasPending && newTab !== 'assignments') {
+      setPendingTabChange(newTab);
+      setShowUnsavedDialog(true);
+      return;
+    }
+    
     setActiveTab(newTab);
     // Clear the query param after navigation to keep URL clean
     if (searchParams.has('tab')) {
       searchParams.delete('tab');
       setSearchParams(searchParams, { replace: true });
     }
+  };
+
+  // Handle confirmation to leave without saving
+  const handleConfirmLeave = () => {
+    if (pendingTabChange) {
+      setActiveTab(pendingTabChange);
+      setPendingTabChange(null);
+    }
+    setShowUnsavedDialog(false);
+  };
+
+  // Handle cancel - stay on assignments tab
+  const handleCancelLeave = () => {
+    setPendingTabChange(null);
+    setShowUnsavedDialog(false);
   };
 
   // Fetch build details
@@ -465,7 +498,10 @@ export const BuildDetail = () => {
         </TabsContent>
 
         <TabsContent value="assignments">
-          <AssignmentEngine buildId={id!} />
+          <AssignmentEngine 
+            buildId={id!} 
+            onPendingProposalsChange={handlePendingProposalsChange}
+          />
         </TabsContent>
 
         <TabsContent value="balancing">
@@ -501,5 +537,30 @@ export const BuildDetail = () => {
           <ComprehensiveReview buildId={id!} />
         </TabsContent>
       </Tabs>
+
+      {/* Unsaved Changes Dialog */}
+      <Dialog open={showUnsavedDialog} onOpenChange={setShowUnsavedDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Unsaved Assignment Proposals</DialogTitle>
+            <DialogDescription className="space-y-3 pt-2">
+              <p>
+                You have <strong>{pendingProposals.count} pending proposals</strong> that haven't been applied yet.
+              </p>
+              <p>
+                If you leave now, these proposals will be lost. Click <strong>Apply Proposals</strong> first to save them to the database.
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={handleCancelLeave}>
+              Stay & Review
+            </Button>
+            <Button variant="destructive" onClick={handleConfirmLeave}>
+              Leave Without Saving
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>;
 };
