@@ -121,12 +121,18 @@ Push to GitHub when:
 - **Edge Functions**: `send-slack-notification`, `gemini-territory-mapping`, etc.
 
 ### Vercel Deployment
-- **Account**: `seanxmuses-projects`
+- **Account**: `seanxmuses-projects` (personal Vercel - CLI deployments only)
 - **Project**: `book-ops-workbench`
-- **Production URL**: `https://book-ops-workbench.vercel.app`
-- **GitHub Repo**: `https://github.com/sean-pendo/book-making`
+- **Production URL**: `https://book-ops-workbench-eosin.vercel.app`
 - **Deploy Command**: `vercel --prod` (from `book-ops-workbench` directory)
 - **Environment Variables**: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+
+### GitHub (Separate from Vercel)
+- **Repo**: `https://github.com/sean-pendo/book-making` (work GitHub)
+- **Purpose**: Version control only - NOT connected to Vercel
+- **Push Command**: `git push origin master`
+
+**Important**: GitHub and Vercel are intentionally separate. Push to GitHub for version control, use `vercel --prod` CLI for deployments.
 
 ## 9. Learning Log
 Maintain a learning log so as we build this app I continue to understand what we are doing, and why

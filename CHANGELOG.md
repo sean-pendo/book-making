@@ -1,5 +1,26 @@
 # Changelog
 
+## [2025-12-04] - Ops: Separated GitHub and Vercel Deployments
+
+### Overview
+Reconfigured deployment workflow to separate GitHub (work account) from Vercel (personal account). GitHub is now version control only; Vercel CLI is used for deployments.
+
+### Configuration
+- **Personal Vercel Account**: `seanxmuses-projects`
+- **Vercel Project**: `book-ops-workbench`
+- **Production URL**: `https://book-ops-workbench-eosin.vercel.app`
+- **Work GitHub Repo**: `https://github.com/sean-pendo/book-making` (not connected to Vercel)
+
+### Deployment Workflow
+1. Push code to GitHub: `git push origin master` (version control)
+2. Deploy to Vercel: `vercel --prod` (from `book-ops-workbench` directory)
+
+### Environment Variables (Vercel)
+- `VITE_SUPABASE_URL`: `https://lolnbotrdamhukdrrsmh.supabase.co`
+- `VITE_SUPABASE_ANON_KEY`: Configured in Vercel project
+
+---
+
 ## [2025-12-04] - Docs: New Vercel Deployment Configuration
 
 ### Overview
