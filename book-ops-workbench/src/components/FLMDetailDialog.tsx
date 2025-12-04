@@ -152,13 +152,13 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
           const prospectAccounts = parentAccounts.filter(acc => !acc.is_customer);
           
           const totalARR = parentAccounts.reduce((sum, acc) => {
-            const arr = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
+            const arr = acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0;
             return sum + arr;
           }, 0);
           // Calculate ATR from opportunities (more accurate than calculated_atr field)
           const totalATR = parentAccounts.reduce((sum, acc) => {
             const atrFromOpps = atrByAccount?.get(acc.sfdc_account_id) || 0;
-            const atrFromAccount = parseFloat(acc.calculated_atr) || parseFloat(acc.atr) || 0;
+            const atrFromAccount = acc.calculated_atr || acc.atr || 0;
             return sum + (atrFromOpps || atrFromAccount);
           }, 0);
           const riskCount = parentAccounts.filter(acc => acc.cre_status !== null || (acc.cre_count && acc.cre_count > 0)).length;
@@ -347,8 +347,8 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
 
     // Sort by ARR descending
     return accounts.sort((a, b) => {
-      const aArr = parseFloat(a.hierarchy_bookings_arr_converted) || parseFloat(a.calculated_arr) || parseFloat(a.arr) || 0;
-      const bArr = parseFloat(b.hierarchy_bookings_arr_converted) || parseFloat(b.calculated_arr) || parseFloat(b.arr) || 0;
+      const aArr = a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr || 0;
+      const bArr = b.hierarchy_bookings_arr_converted || b.calculated_arr || b.arr || 0;
       return bArr - aArr;
     });
   }, [flmAccountsData?.accounts, accountTypeFilter, searchTerm]);
@@ -360,23 +360,25 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
     const customers = flmAccountsData.accounts.filter(a => a.is_customer);
     const prospects = flmAccountsData.accounts.filter(a => !a.is_customer);
     
-    const totalARR = flmAccountsData.accounts.reduce((sum, a) => {
-      return sum + (parseFloat(a.hierarchy_bookings_arr_converted) || parseFloat(a.calculated_arr) || parseFloat(a.arr) || 0);
-    }, 0);
+    let totalARR = 0;
+    flmAccountsData.accounts.forEach(a => {
+      totalARR += a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr || 0;
+    });
     
     // Calculate ATR from opportunities (more accurate)
-    const totalATR = flmAccountsData.accounts.reduce((sum, a) => {
+    let totalATR = 0;
+    flmAccountsData.accounts.forEach(a => {
       const atrFromOpps = atrByAccount?.get(a.sfdc_account_id) || 0;
-      const atrFromAccount = parseFloat(a.calculated_atr) || parseFloat(a.atr) || 0;
-      return sum + (atrFromOpps || atrFromAccount);
-    }, 0);
+      const atrFromAccount = a.calculated_atr || a.atr || 0;
+      totalATR += atrFromOpps || atrFromAccount;
+    });
 
     return { 
       customers: customers.length, 
       prospects: prospects.length, 
       totalARR, 
       totalATR,
-      customerARR: customers.reduce((sum, a) => sum + (parseFloat(a.hierarchy_bookings_arr_converted) || parseFloat(a.calculated_arr) || parseFloat(a.arr) || 0), 0),
+      customerARR: customers.reduce((sum, a) => sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr || 0), 0),
       prospectCount: prospects.length
     };
   }, [flmAccountsData?.accounts, atrByAccount]);
