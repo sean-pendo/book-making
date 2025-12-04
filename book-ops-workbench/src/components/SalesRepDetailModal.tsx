@@ -57,6 +57,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
 
 interface SalesRepDetailModalProps {
   open: boolean;
@@ -92,6 +93,9 @@ export const SalesRepDetailModal = ({
     prospectAccounts: number;
     customerARR: number;
   } | null>(null);
+
+  // Fetch prospect opportunity data (Net ARR and Close Date)
+  const { getNetARR, getCloseDate, getNetARRColorClass } = useProspectOpportunities(buildId);
 
 interface ExtendedAccountDetail extends AccountDetail {
   employees?: number;
@@ -671,8 +675,24 @@ interface ExtendedAccountDetail extends AccountDetail {
                         </TableHead>
                         <TableHead>Account Name</TableHead>
                         <TableHead>Type</TableHead>
-                        <TableHead className="text-right">ARR</TableHead>
-                        <TableHead className="text-right">ATR</TableHead>
+                        <TableHead className="text-right">
+                          <Tooltip>
+                            <TooltipTrigger className="cursor-help">ARR / Net ARR</TooltipTrigger>
+                            <TooltipContent>
+                              <p><strong>Customers:</strong> ARR</p>
+                              <p><strong>Prospects:</strong> Net ARR from opps</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TableHead>
+                        <TableHead className="text-right">
+                          <Tooltip>
+                            <TooltipTrigger className="cursor-help">ATR / Close</TooltipTrigger>
+                            <TooltipContent>
+                              <p><strong>Customers:</strong> ATR</p>
+                              <p><strong>Prospects:</strong> Earliest Close Date</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TableHead>
                         <TableHead className="text-center">CRE</TableHead>
                         <TableHead>Tier</TableHead>
                         <TableHead>Geo</TableHead>
@@ -747,10 +767,20 @@ interface ExtendedAccountDetail extends AccountDetail {
                                     </Badge>
                                   </TableCell>
                                   <TableCell className="text-right">
-                                    ${getAccountARR(account).toLocaleString()}
+                                    {account.is_customer ? (
+                                      `$${getAccountARR(account).toLocaleString()}`
+                                    ) : (
+                                      <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
+                                        {formatNetARR(getNetARR(account.sfdc_account_id))}
+                                      </span>
+                                    )}
                                   </TableCell>
                                   <TableCell className="text-right">
-                                    ${(account.atr || 0).toLocaleString()}
+                                    {account.is_customer ? (
+                                      `$${(account.atr || 0).toLocaleString()}`
+                                    ) : (
+                                      formatCloseDate(getCloseDate(account.sfdc_account_id))
+                                    )}
                                   </TableCell>
                                   <TableCell className="text-center">{extAccount.cre_count || 0}</TableCell>
                                   <TableCell>
@@ -839,10 +869,20 @@ interface ExtendedAccountDetail extends AccountDetail {
                                         )}
                                       </TableCell>
                                       <TableCell className="text-right text-sm">
-                                        ${(child.arr || 0).toLocaleString()}
+                                        {child.is_customer ? (
+                                          `$${(child.arr || 0).toLocaleString()}`
+                                        ) : (
+                                          <span className={getNetARRColorClass(getNetARR(child.sfdc_account_id))}>
+                                            {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                          </span>
+                                        )}
                                       </TableCell>
                                       <TableCell className="text-right text-sm">
-                                        ${(child.atr || 0).toLocaleString()}
+                                        {child.is_customer ? (
+                                          `$${(child.atr || 0).toLocaleString()}`
+                                        ) : (
+                                          formatCloseDate(getCloseDate(child.sfdc_account_id))
+                                        )}
                                       </TableCell>
                                       <TableCell className="text-center text-sm">{extChild.cre_count || 0}</TableCell>
                                       <TableCell>

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { calculateSalesRepMetrics, getAccountCustomerStatus } from '@/utils/salesRepCalculations';
 import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
+import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -60,6 +61,9 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<FilterValues>({});
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+
+  // Fetch prospect opportunity data (Net ARR and Close Date)
+  const { getNetARR, getCloseDate, getNetARRColorClass } = useProspectOpportunities(buildId);
 
   const filterConfigs: FilterConfig[] = [
     {
@@ -626,8 +630,8 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                           <TableHead style={{ width: '140px' }}>Industry</TableHead>
                           <TableHead style={{ width: '120px' }}>Region</TableHead>
                           <TableHead style={{ width: '80px' }}>Tier</TableHead>
-                          <TableHead style={{ width: '120px' }}>ARR</TableHead>
-                          <TableHead style={{ width: '120px' }}>ATR</TableHead>
+                          <TableHead style={{ width: '120px' }}>ARR / Net ARR</TableHead>
+                          <TableHead style={{ width: '120px' }}>ATR / Close</TableHead>
                           <TableHead style={{ width: '100px' }}>CRE Risk</TableHead>
                         </TableRow>
                     </TableHeader>
@@ -689,17 +693,40 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                               <TableCell>
                                 {getTierBadge(account.expansion_tier || account.initial_sale_tier)}
                               </TableCell>
-                              <TableCell className="text-sm font-medium text-green-600">
-                                {formatCurrency(getAccountARR(account))}
-                              </TableCell>
-                              <TableCell className="text-sm font-medium text-red-600">
+                              <TableCell className="text-sm font-medium">
                                 {(() => {
-                                  // Calculate ATR from RENEWAL opportunities only for this account
-                                  const accountATR = repDetail?.hierarchyOpportunities?.filter(o => 
-                                    o.sfdc_account_id === account.sfdc_account_id &&
-                                    o.opportunity_type && o.opportunity_type.toLowerCase().trim() === 'renewals'
-                                  ).reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0) || 0;
-                                  return formatCurrency(accountATR);
+                                  // Use hierarchy-based customer/prospect logic
+                                  const parentId = account.ultimate_parent_id || account.sfdc_account_id;
+                                  const hierarchyAccounts = repDetail?.accountsByParent?.get(parentId) || [];
+                                  const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
+                                  const isCustomer = hierarchyARR > 0;
+                                  
+                                  if (isCustomer) {
+                                    return <span className="text-green-600">{formatCurrency(getAccountARR(account))}</span>;
+                                  } else {
+                                    const netARR = getNetARR(account.sfdc_account_id);
+                                    return <span className={getNetARRColorClass(netARR)}>{formatNetARR(netARR)}</span>;
+                                  }
+                                })()}
+                              </TableCell>
+                              <TableCell className="text-sm font-medium">
+                                {(() => {
+                                  // Use hierarchy-based customer/prospect logic
+                                  const parentId = account.ultimate_parent_id || account.sfdc_account_id;
+                                  const hierarchyAccounts = repDetail?.accountsByParent?.get(parentId) || [];
+                                  const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
+                                  const isCustomer = hierarchyARR > 0;
+                                  
+                                  if (isCustomer) {
+                                    // Calculate ATR from RENEWAL opportunities only for this account
+                                    const accountATR = repDetail?.hierarchyOpportunities?.filter(o => 
+                                      o.sfdc_account_id === account.sfdc_account_id &&
+                                      o.opportunity_type && o.opportunity_type.toLowerCase().trim() === 'renewals'
+                                    ).reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0) || 0;
+                                    return <span className="text-red-600">{formatCurrency(accountATR)}</span>;
+                                  } else {
+                                    return formatCloseDate(getCloseDate(account.sfdc_account_id));
+                                  }
                                 })()}
                               </TableCell>
                               <TableCell>
@@ -755,17 +782,40 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                 <TableCell>
                                   {getTierBadge(child.expansion_tier || child.initial_sale_tier)}
                                 </TableCell>
-                                <TableCell className="text-sm font-medium text-green-600">
-                                  {formatCurrency(getAccountARR(child))}
+                                <TableCell className="text-sm font-medium">
+                                  {(() => {
+                                    // Use hierarchy-based customer/prospect logic
+                                    const parentId = child.ultimate_parent_id || child.sfdc_account_id;
+                                    const hierarchyAccounts = repDetail?.accountsByParent?.get(parentId) || [];
+                                    const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
+                                    const isCustomer = hierarchyARR > 0;
+                                    
+                                    if (isCustomer) {
+                                      return <span className="text-green-600">{formatCurrency(getAccountARR(child))}</span>;
+                                    } else {
+                                      const netARR = getNetARR(child.sfdc_account_id);
+                                      return <span className={getNetARRColorClass(netARR)}>{formatNetARR(netARR)}</span>;
+                                    }
+                                  })()}
                                 </TableCell>
-                                  <TableCell className="text-sm font-medium text-red-600">
+                                  <TableCell className="text-sm font-medium">
                                     {(() => {
-                                      // Calculate ATR from RENEWAL opportunities only for child account
-                                      const childATR = repDetail?.hierarchyOpportunities?.filter(o => 
-                                        o.sfdc_account_id === child.sfdc_account_id &&
-                                        o.opportunity_type && o.opportunity_type.toLowerCase().trim() === 'renewals'
-                                      ).reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0) || 0;
-                                      return formatCurrency(childATR);
+                                      // Use hierarchy-based customer/prospect logic
+                                      const parentId = child.ultimate_parent_id || child.sfdc_account_id;
+                                      const hierarchyAccounts = repDetail?.accountsByParent?.get(parentId) || [];
+                                      const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
+                                      const isCustomer = hierarchyARR > 0;
+                                      
+                                      if (isCustomer) {
+                                        // Calculate ATR from RENEWAL opportunities only for child account
+                                        const childATR = repDetail?.hierarchyOpportunities?.filter(o => 
+                                          o.sfdc_account_id === child.sfdc_account_id &&
+                                          o.opportunity_type && o.opportunity_type.toLowerCase().trim() === 'renewals'
+                                        ).reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0) || 0;
+                                        return <span className="text-red-600">{formatCurrency(childATR)}</span>;
+                                      } else {
+                                        return formatCloseDate(getCloseDate(child.sfdc_account_id));
+                                      }
                                     })()}
                                   </TableCell>
                                  <TableCell>

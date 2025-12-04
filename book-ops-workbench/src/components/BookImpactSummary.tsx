@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useProspectOpportunities, formatNetARR } from '@/hooks/useProspectOpportunities';
 
 interface BookImpactSummaryProps {
   buildId: string;
@@ -37,6 +38,9 @@ export default function BookImpactSummary({
 }: BookImpactSummaryProps) {
   const [showGainedModal, setShowGainedModal] = useState(false);
   const [showLostModal, setShowLostModal] = useState(false);
+
+  // Fetch prospect opportunity data (Net ARR and Close Date)
+  const { getNetARR, getNetARRColorClass } = useProspectOpportunities(buildId);
 
   const { data: impact, isLoading, error } = useQuery<BookImpact>({
     queryKey: ['book-impact', buildId, managerName, managerLevel, visibleFlms],
@@ -270,7 +274,7 @@ export default function BookImpactSummary({
                   <TableRow>
                     <TableHead>Account Name</TableHead>
                     <TableHead>Type</TableHead>
-                    <TableHead className="text-right">ARR</TableHead>
+                    <TableHead className="text-right">ARR / Net ARR</TableHead>
                     <TableHead>Coming From</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -283,8 +287,14 @@ export default function BookImpactSummary({
                           {account.is_customer ? 'Customer' : 'Prospect'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right font-semibold text-green-600">
-                        {formatImpactCurrency(account.arr)}
+                      <TableCell className="text-right font-semibold">
+                        {account.is_customer ? (
+                          <span className="text-green-600">{formatImpactCurrency(account.arr)}</span>
+                        ) : (
+                          <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
+                            {formatNetARR(getNetARR(account.sfdc_account_id))}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {account.from_owner_name || 'Unassigned'}
@@ -320,7 +330,7 @@ export default function BookImpactSummary({
                   <TableRow>
                     <TableHead>Account Name</TableHead>
                     <TableHead>Type</TableHead>
-                    <TableHead className="text-right">ARR</TableHead>
+                    <TableHead className="text-right">ARR / Net ARR</TableHead>
                     <TableHead>Going To</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -333,8 +343,14 @@ export default function BookImpactSummary({
                           {account.is_customer ? 'Customer' : 'Prospect'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right font-semibold text-red-600">
-                        {formatImpactCurrency(account.arr)}
+                      <TableCell className="text-right font-semibold">
+                        {account.is_customer ? (
+                          <span className="text-red-600">{formatImpactCurrency(account.arr)}</span>
+                        ) : (
+                          <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
+                            {formatNetARR(getNetARR(account.sfdc_account_id))}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-xs">

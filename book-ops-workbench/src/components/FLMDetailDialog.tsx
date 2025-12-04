@@ -13,6 +13,7 @@ import { SalesRepDetailDialog } from '@/components/data-tables/SalesRepDetailDia
 import { formatCurrency } from '@/utils/accountCalculations';
 import { AccountDetailDialog } from '@/components/AccountDetailDialog';
 import SendToManagerDialog from './SendToManagerDialog';
+import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
 
 interface FLMDetailDialogProps {
   open: boolean;
@@ -66,6 +67,9 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
   const [isAccountDialogOpen, setIsAccountDialogOpen] = useState(false);
+
+  // Fetch prospect opportunity data (Net ARR and Close Date)
+  const { getNetARR, getCloseDate, getNetARRColorClass } = useProspectOpportunities(buildId);
 
   // Fetch opportunities for ATR calculation (ATR comes from renewal opportunities)
   const { data: atrByAccount } = useQuery({
@@ -716,8 +720,8 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                             <TableHead>Owner</TableHead>
                             <TableHead>Location</TableHead>
                             <TableHead>Tier</TableHead>
-                            <TableHead className="text-right">ARR</TableHead>
-                            <TableHead className="text-right">ATR</TableHead>
+                            <TableHead className="text-right">ARR / Net ARR</TableHead>
+                            <TableHead className="text-right">ATR / Close</TableHead>
                             <TableHead>Risk</TableHead>
                           </TableRow>
                         </TableHeader>
@@ -772,11 +776,21 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                                       {account.expansion_tier || account.initial_sale_tier || '-'}
                                     </Badge>
                                   </TableCell>
-                                  <TableCell className="text-right font-medium text-green-600">
-                                    {formatCurrency(getARR(account))}
+                                  <TableCell className="text-right font-medium">
+                                    {account.is_customer ? (
+                                      <span className="text-green-600">{formatCurrency(getARR(account))}</span>
+                                    ) : (
+                                      <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
+                                        {formatNetARR(getNetARR(account.sfdc_account_id))}
+                                      </span>
+                                    )}
                                   </TableCell>
-                                  <TableCell className="text-right font-medium text-amber-600">
-                                    {formatCurrency(getATR(account))}
+                                  <TableCell className="text-right font-medium">
+                                    {account.is_customer ? (
+                                      <span className="text-amber-600">{formatCurrency(getATR(account))}</span>
+                                    ) : (
+                                      formatCloseDate(getCloseDate(account.sfdc_account_id))
+                                    )}
                                   </TableCell>
                                   <TableCell>
                                     {account.cre_status ? (
@@ -820,11 +834,21 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                                         {child.expansion_tier || child.initial_sale_tier || '-'}
                                       </Badge>
                                     </TableCell>
-                                    <TableCell className="text-right text-sm text-green-600">
-                                      {formatCurrency(getARR(child))}
+                                    <TableCell className="text-right text-sm">
+                                      {child.is_customer ? (
+                                        <span className="text-green-600">{formatCurrency(getARR(child))}</span>
+                                      ) : (
+                                        <span className={getNetARRColorClass(getNetARR(child.sfdc_account_id))}>
+                                          {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                        </span>
+                                      )}
                                     </TableCell>
-                                    <TableCell className="text-right text-sm text-amber-600">
-                                      {formatCurrency(getATR(child))}
+                                    <TableCell className="text-right text-sm">
+                                      {child.is_customer ? (
+                                        <span className="text-amber-600">{formatCurrency(getATR(child))}</span>
+                                      ) : (
+                                        formatCloseDate(getCloseDate(child.sfdc_account_id))
+                                      )}
                                     </TableCell>
                                     <TableCell>
                                       {child.cre_status ? (

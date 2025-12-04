@@ -22,6 +22,8 @@ import { Search, UserPlus, AlertCircle, Wand2, Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { generateSimplifiedAssignments } from '@/services/simplifiedAssignmentEngine';
+import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
+import { formatCurrency } from '@/utils/accountCalculations';
 
 interface UnassignedAccount {
   sfdc_account_id: string;
@@ -48,6 +50,8 @@ export const UnassignedAccountsModal = ({
   availableReps,
   onDataRefresh
 }: UnassignedAccountsModalProps) => {
+  // Fetch prospect opportunity data (Net ARR and Close Date)
+  const { getNetARR, getCloseDate, getNetARRColorClass } = useProspectOpportunities(buildId);
   const [accounts, setAccounts] = useState<UnassignedAccount[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -406,7 +410,7 @@ export const UnassignedAccountsModal = ({
                   </TableHead>
                   <TableHead>Account Name</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead className="text-right">ARR</TableHead>
+                  <TableHead className="text-right">ARR / Net ARR</TableHead>
                   <TableHead>Territory</TableHead>
                   <TableHead>Previous Owner</TableHead>
                 </TableRow>
@@ -442,7 +446,13 @@ export const UnassignedAccountsModal = ({
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        {formatCurrency(account.calculated_arr || 0)}
+                        {account.is_customer ? (
+                          formatCurrency(account.calculated_arr || 0)
+                        ) : (
+                          <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
+                            {formatNetARR(getNetARR(account.sfdc_account_id))}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell>{account.sales_territory || 'N/A'}</TableCell>
                       <TableCell className="text-muted-foreground">

@@ -1,5 +1,58 @@
 # Changelog
 
+## [2025-12-04 10:30 AM CST] - Feature: Net ARR + Close Date Display for Prospects
+
+### Overview
+Prospects now show meaningful data instead of $0/$0. Net ARR (from opportunities) and Close Date replace ARR/ATR for prospect accounts across all views.
+
+### Changes
+
+**New Hook: `useProspectOpportunities.ts`**
+- Fetches and aggregates opportunity data per account
+- Returns Net ARR (sum of `net_arr` from opportunities) and Close Date (earliest `close_date`)
+- Includes parent/child rollup logic (sum Net ARR, earliest close date across children)
+- Provides color class helper for green (positive) / red (negative) Net ARR styling
+
+**Updated Components (7 total):**
+| Component | Change |
+|-----------|--------|
+| `ManagerHierarchyView.tsx` | Net ARR in rep/FLM summaries, prospect rows show Net ARR + Close Date |
+| `SalesRepDetailModal.tsx` | Prospect accounts show Net ARR + Close Date |
+| `FLMDetailDialog.tsx` | Prospect rows show Net ARR + Close Date |
+| `data-tables/SalesRepDetailDialog.tsx` | Prospect rows show Net ARR + Close Date |
+| `UnassignedAccountsModal.tsx` | Prospects show Net ARR instead of $0 |
+| `ParentChildRelationshipDialog.tsx` | Prospect info shows Net ARR |
+| `BookImpactSummary.tsx` | Gained/Lost accounts show Net ARR for prospects |
+
+**Color Coding:**
+- Positive Net ARR: Green (expansion / new business)
+- Zero Net ARR: Gray (no pipeline)
+- Negative Net ARR: Red (contraction / churn)
+
+**Column Headers:**
+- Updated headers with tooltips explaining difference:
+  - Customers: ARR / ATR
+  - Prospects: Net ARR / Close Date
+
+**Files**: `useProspectOpportunities.ts` (new), `ManagerHierarchyView.tsx`, `SalesRepDetailModal.tsx`, `FLMDetailDialog.tsx`, `SalesRepDetailDialog.tsx`, `UnassignedAccountsModal.tsx`, `ParentChildRelationshipDialog.tsx`, `BookImpactSummary.tsx`
+
+---
+
+## [2025-12-05 1:00 AM CST] - Fix: Previous Notes not loading in Manager Notes dialog
+
+### Root Cause
+- The `manager_notes` table had `manager_user_id` as a FK to `auth.users`, not `profiles`
+- The PostgREST embedded query `.select('*, profiles:manager_user_id(full_name, email)')` requires a FK relationship to work
+- Without the FK, the query silently failed causing infinite loading spinner
+
+### Fix
+- Added FK constraint: `manager_notes.manager_user_id` → `profiles.id`
+- This enables PostgREST to perform the embedded join correctly
+
+**Migration**: `20251205010000_add_manager_notes_profiles_fk.sql`
+
+---
+
 ## [2025-12-04 8:30 PM CST] - Fix: Re-applied RPC functions for Auto-Calculate Targets
 
 ### Changes

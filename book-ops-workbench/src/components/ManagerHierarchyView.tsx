@@ -22,6 +22,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
 import { downloadFile } from '@/utils/exportUtils';
 import { notifyProposalRejected } from '@/services/slackNotificationService';
+import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
 
 // Interface for hierarchical account display
 interface AccountWithHierarchy {
@@ -270,6 +271,9 @@ export default function ManagerHierarchyView({
     },
     enabled: !!buildId,
   });
+
+  // Fetch prospect opportunity data (Net ARR and Close Date)
+  const { getNetARR, getCloseDate, getRolledUpNetARR, getRolledUpCloseDate, getNetARRColorClass } = useProspectOpportunities(buildId);
 
   // Interface for approval info stored in notes
   interface ApprovalInfo {
@@ -619,10 +623,21 @@ export default function ManagerHierarchyView({
       rep?.region && (acc.geo === rep.region || acc.sales_territory === rep.region)
     ).length;
 
+    // Calculate total Net ARR for prospects (from opportunities)
+    const totalNetARR = prospectAccounts.reduce((sum, acc) => {
+      // For parent accounts with children, use rolled-up Net ARR
+      const childIds = acc.children?.map(c => c.sfdc_account_id) || [];
+      if (childIds.length > 0) {
+        return sum + getRolledUpNetARR(acc.sfdc_account_id, childIds);
+      }
+      return sum + getNetARR(acc.sfdc_account_id);
+    }, 0);
+
     return {
       totalAccounts: parentAccounts.length,
       totalARR,
       totalATR,
+      totalNetARR,
       customers: customerCount,
       prospects: prospectAccounts.length,
       // Combined tier %s based on CUSTOMER count only (tiers don't apply to prospects)
@@ -878,13 +893,18 @@ export default function ManagerHierarchyView({
       parentAccounts.reduce((sum, acc) => sum + getFLMATRForAccount(acc), 0) + 
       splitOwnershipChildrenATR;
     
+    // Calculate total Net ARR for prospects (from opportunities)
+    const prospectAccounts = parentAccounts.filter(acc => !acc.is_customer);
+    const totalNetARR = prospectAccounts.reduce((sum, acc) => sum + getNetARR(acc.sfdc_account_id), 0);
+    
     return {
       totalReps: flmReps.length,
       totalAccounts: parentAccounts.length,
       totalARR,
       totalATR,
+      totalNetARR,
       customers: parentAccounts.filter(acc => acc.is_customer).length,
-      prospects: parentAccounts.filter(acc => !acc.is_customer).length,
+      prospects: prospectAccounts.length,
     };
   };
 
@@ -1361,6 +1381,12 @@ export default function ManagerHierarchyView({
                               <div className="text-sm font-medium">{formatCurrency(flmMetrics.totalATR)}</div>
                               <div className="text-xs text-muted-foreground">ATR</div>
                             </div>
+                            <div className="text-right">
+                              <div className={`text-sm font-medium ${getNetARRColorClass(flmMetrics.totalNetARR)}`}>
+                                {formatNetARR(flmMetrics.totalNetARR)}
+                              </div>
+                              <div className="text-xs text-muted-foreground">Net ARR</div>
+                            </div>
                             {/* Approve Team button - only visible to SLM viewing FLMs */}
                             {managerLevel === 'SLM' && (
                               <>
@@ -1545,6 +1571,12 @@ export default function ManagerHierarchyView({
                                     <div className="text-sm font-medium">{formatCurrency(metrics.totalATR)}</div>
                                     <div className="text-xs text-muted-foreground">ATR</div>
                                   </div>
+                                  <div className="text-right min-w-[90px]">
+                                    <div className={`text-sm font-medium ${getNetARRColorClass(metrics.totalNetARR)}`}>
+                                      {formatNetARR(metrics.totalNetARR)}
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">Net ARR</div>
+                                  </div>
                                   <div className="text-right min-w-[140px]">
                                     <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-xs">
                                       <div className="text-right">
@@ -1634,8 +1666,28 @@ export default function ManagerHierarchyView({
                                       <TableHead className="w-[280px]">Account Name</TableHead>
                                       <TableHead>Type</TableHead>
                                       <TableHead>Status</TableHead>
-                                      <TableHead className="text-right">ARR</TableHead>
-                                      <TableHead className="text-right">ATR</TableHead>
+                                      <TableHead className="text-right">
+                                        <Tooltip>
+                                          <TooltipTrigger className="cursor-help">
+                                            ARR / Net ARR
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p><strong>Customers:</strong> ARR (Annual Recurring Revenue)</p>
+                                            <p><strong>Prospects:</strong> Net ARR from opportunities</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TableHead>
+                                      <TableHead className="text-right">
+                                        <Tooltip>
+                                          <TooltipTrigger className="cursor-help">
+                                            ATR / Close
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p><strong>Customers:</strong> ATR (Available to Renew)</p>
+                                            <p><strong>Prospects:</strong> Earliest Close Date</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TableHead>
                                       <TableHead>Location</TableHead>
                                       <TableHead className="w-[150px]">Actions</TableHead>
                                     </TableRow>
@@ -1732,10 +1784,36 @@ export default function ManagerHierarchyView({
                                               })()}
                                             </TableCell>
                                             <TableCell className="text-right">
-                                              {!account.isVirtualParent && formatCurrency(getAccountARR(account))}
+                                              {!account.isVirtualParent && (
+                                                account.is_customer ? (
+                                                  formatCurrency(getAccountARR(account))
+                                                ) : (
+                                                  <span className={getNetARRColorClass(
+                                                    account.children?.length 
+                                                      ? getRolledUpNetARR(account.sfdc_account_id, account.children.map(c => c.sfdc_account_id))
+                                                      : getNetARR(account.sfdc_account_id)
+                                                  )}>
+                                                    {formatNetARR(
+                                                      account.children?.length 
+                                                        ? getRolledUpNetARR(account.sfdc_account_id, account.children.map(c => c.sfdc_account_id))
+                                                        : getNetARR(account.sfdc_account_id)
+                                                    )}
+                                                  </span>
+                                                )
+                                              )}
                                             </TableCell>
                                             <TableCell className="text-right">
-                                              {!account.isVirtualParent && formatCurrency(atrByAccount?.get(account.sfdc_account_id) || getAccountATR(account))}
+                                              {!account.isVirtualParent && (
+                                                account.is_customer ? (
+                                                  formatCurrency(atrByAccount?.get(account.sfdc_account_id) || getAccountATR(account))
+                                                ) : (
+                                                  formatCloseDate(
+                                                    account.children?.length 
+                                                      ? getRolledUpCloseDate(account.sfdc_account_id, account.children.map(c => c.sfdc_account_id))
+                                                      : getCloseDate(account.sfdc_account_id)
+                                                  )
+                                                )
+                                              )}
                                             </TableCell>
                                             <TableCell>
                                               {!account.isVirtualParent && (account.hq_country || account.sales_territory || account.geo || 'N/A')}
@@ -1861,10 +1939,20 @@ export default function ManagerHierarchyView({
                                                     })()}
                                                   </TableCell>
                                                   <TableCell className="text-right text-sm">
-                                                    {formatCurrency(getAccountARR(child))}
+                                                    {child.is_customer ? (
+                                                      formatCurrency(getAccountARR(child))
+                                                    ) : (
+                                                      <span className={getNetARRColorClass(getNetARR(child.sfdc_account_id))}>
+                                                        {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                                      </span>
+                                                    )}
                                                   </TableCell>
                                                   <TableCell className="text-right text-sm">
-                                                    {formatCurrency(atrByAccount?.get(child.sfdc_account_id) || getAccountATR(child))}
+                                                    {child.is_customer ? (
+                                                      formatCurrency(atrByAccount?.get(child.sfdc_account_id) || getAccountATR(child))
+                                                    ) : (
+                                                      formatCloseDate(getCloseDate(child.sfdc_account_id))
+                                                    )}
                                                   </TableCell>
                                                   <TableCell className="text-sm">
                                                     {child.hq_country || child.sales_territory || child.geo || 'N/A'}

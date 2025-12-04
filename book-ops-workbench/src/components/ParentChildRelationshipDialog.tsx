@@ -27,6 +27,8 @@ import { AlertTriangle, Link, Unlink, Search } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { AccountDetail } from '@/hooks/useEnhancedBalancing';
+import { useProspectOpportunities, formatNetARR } from '@/hooks/useProspectOpportunities';
+import { formatCurrency } from '@/utils/accountCalculations';
 
 interface ParentChildRelationshipDialogProps {
   open: boolean;
@@ -45,6 +47,9 @@ export const ParentChildRelationshipDialog = ({
   action,
   onSuccess
 }: ParentChildRelationshipDialogProps) => {
+  // Fetch prospect opportunity data (Net ARR and Close Date)
+  const { getNetARR, getNetARRColorClass } = useProspectOpportunities(buildId);
+
   const [rationale, setRationale] = useState('');
   const [newParentId, setNewParentId] = useState('');
   const [newParentName, setNewParentName] = useState('');
@@ -309,7 +314,11 @@ export const ParentChildRelationshipDialog = ({
                   <p className="text-sm font-medium">Child Account</p>
                   <p className="text-lg font-semibold">{childAccount.account_name}</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    ARR: {formatCurrency(childAccount.arr || 0)}
+                    {childAccount.is_customer ? (
+                      <>ARR: {formatCurrency(childAccount.arr || 0)}</>
+                    ) : (
+                      <>Net ARR: <span className={getNetARRColorClass(getNetARR(childAccount.sfdc_account_id))}>{formatNetARR(getNetARR(childAccount.sfdc_account_id))}</span></>
+                    )}
                   </p>
                 </div>
                 <Badge variant={childAccount.is_customer ? "default" : "outline"}>
