@@ -545,19 +545,20 @@ export const validateOpportunityData = (opportunities: any[]): string[] => {
 };
 
 // Generate sample CSV content for testing
+// Headers match the field aliases in autoMappingUtils.ts for reliable auto-mapping
 export const generateSampleAccountsCSV = (): string => {
   const headers = [
-    'AccountId', 'Account Name', 'Ultimate Parent Id', 'Ultimate Parent Name', 
-    'Owner Full Name', 'Owner ID', 'Sales Manager Name', 'Billing Country (HQ Country)', 
+    'Account ID (18)', 'Account Name', 'Ultimate Parent Id', 'Ultimate Parent Name', 
+    'Owner Full Name', 'Owner ID', 'Billing Country (HQ Country)', 
     'Sales Territory', 'GEO', 'Employee Count (Account)', 'Employee Count (Ultimate Parent)', 
-    'Is Customer (Y/N)', 'ARR (current)', 'Owner Name', 'Expansion Tier', 'Initial Sale Tier', 'Type'
+    'Is Customer (Y/N)', 'ARR (current)', 'Expansion Tier', 'Initial Sale Tier', 'Type', 'Industry'
   ];
   const sampleData = [
-    ['ACC001', 'Global Enterprise Corp', 'ACC001', 'Global Enterprise Corp', 'John Smith', 'USR001', 'Manager Smith', 'United States', 'Enterprise AMER', 'AMER', '5000', '5000', 'true', '850000', 'John Smith', 'Tier1', 'Enterprise', 'Customer'],
-    ['ACC002', 'Tech Solutions Ltd', 'ACC001', 'Global Enterprise Corp', 'Sarah Johnson', 'USR002', 'Manager Johnson', 'United Kingdom', 'UKI', 'EMEA', '1200', '5000', 'true', '420000', 'Sarah Johnson', 'Tier2', 'Commercial', 'Customer'],
-    ['ACC003', 'Startup Innovations', 'ACC003', 'Startup Innovations', 'Mike Wilson', 'USR003', 'Manager Wilson', 'Canada', 'DAC', 'AMER', '150', '150', 'false', '65000', 'Mike Wilson', 'Tier3', 'Commercial', 'Prospect'],
-    ['ACC004', 'Manufacturing Co', 'ACC004', 'Manufacturing Co', 'Emma Davis', 'USR004', 'Manager Davis', 'Germany', 'France', 'EMEA', '800', '800', 'true', '180000', 'Emma Davis', 'Tier2', 'Commercial', 'Customer'],
-    ['ACC005', 'Regional Branch', 'ACC001', 'Global Enterprise Corp', 'Sarah Johnson', 'USR002', 'Manager Johnson', 'France', 'France', 'EMEA', '300', '5000', 'true', '125000', 'Sarah Johnson', 'Tier1', 'Enterprise', 'Customer']
+    ['ACC001', 'Global Enterprise Corp', 'ACC001', 'Global Enterprise Corp', 'John Smith', 'USR001', 'United States', 'Enterprise AMER', 'AMER', '5000', '5000', 'true', '850000', 'Tier1', 'Enterprise', 'Customer', 'Technology'],
+    ['ACC002', 'Tech Solutions Ltd', 'ACC001', 'Global Enterprise Corp', 'Sarah Johnson', 'USR002', 'United Kingdom', 'UKI', 'EMEA', '1200', '5000', 'true', '420000', 'Tier2', 'Commercial', 'Customer', 'Software'],
+    ['ACC003', 'Startup Innovations', 'ACC003', 'Startup Innovations', 'Mike Wilson', 'USR003', 'Canada', 'DAC', 'AMER', '150', '150', 'false', '65000', 'Tier3', 'Commercial', 'Prospect', 'SaaS'],
+    ['ACC004', 'Manufacturing Co', 'ACC004', 'Manufacturing Co', 'Emma Davis', 'USR004', 'Germany', 'France', 'EMEA', '800', '800', 'true', '180000', 'Tier2', 'Commercial', 'Customer', 'Manufacturing'],
+    ['ACC005', 'Regional Branch', 'ACC001', 'Global Enterprise Corp', 'Sarah Johnson', 'USR002', 'France', 'France', 'EMEA', '300', '5000', 'true', '125000', 'Tier1', 'Enterprise', 'Customer', 'Technology']
   ];
   
   return [headers.join(','), ...sampleData.map(row => row.join(','))].join('\n');

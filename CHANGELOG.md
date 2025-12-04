@@ -1,5 +1,19 @@
 # Changelog
 
+## [2025-12-04] - Fix: Sample CSV Headers Match Field Mappings
+
+### Overview
+Fixed sample CSV templates to properly align with auto-mapping field aliases.
+
+### Changes
+- **Accounts CSV**: Removed duplicate `Owner Name` field (conflicted with `Owner Full Name`)
+- **Accounts CSV**: Removed `Sales Manager Name` (not a database field)
+- **Accounts CSV**: Changed `AccountId` to `Account ID (18)` for better auto-mapping
+- **Accounts CSV**: Added `Industry` field
+- All sample headers now match aliases in `autoMappingUtils.ts`
+
+---
+
 ## [2025-12-04] - Ops: Separated GitHub and Vercel Deployments
 
 ### Overview
