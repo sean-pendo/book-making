@@ -1,5 +1,25 @@
 # Changelog
 
+## [2025-12-04] - Docs: New Vercel Deployment Configuration
+
+### Overview
+Switched to a new Vercel account for deployments. Updated project documentation to reflect the new deployment configuration.
+
+### Changes
+- **New Vercel Account**: `seanxmuses-projects`
+- **Project Name**: `book-ops-workbench`
+- **Production URL**: `https://book-ops-workbench.vercel.app`
+- **GitHub Repo**: `https://github.com/sean-pendo/book-making`
+
+### Updated Files
+- `.cursor/rules/CURSOR.mdc`: Added Vercel deployment section with account, project, URL, and deploy command details
+
+### Environment Variables Required
+- `VITE_SUPABASE_URL`: `https://lolnbotrdamhukdrrsmh.supabase.co`
+- `VITE_SUPABASE_ANON_KEY`: (from Supabase dashboard)
+
+---
+
 ## [2025-12-04 10:30 AM CST] - Feature: Net ARR + Close Date Display for Prospects
 
 ### Overview
