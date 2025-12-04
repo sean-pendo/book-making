@@ -157,13 +157,17 @@ export const validateMappedData = (
     csvHeaders: data.length > 0 ? Object.keys(data[0]) : []
   });
   
-  // Check if required fields are mapped before processing
+  // Check if ESSENTIAL fields are mapped before processing
+  // Only block on truly essential fields - high-priority fields generate warnings but don't block
   let requiredFieldsForType: string[] = [];
   if (fileType === 'sales_reps') {
+    // Only essential fields required for mapping
     requiredFieldsForType = ['rep_id', 'name'];
   } else if (fileType === 'accounts') {
+    // Only essential fields required for mapping
     requiredFieldsForType = ['sfdc_account_id', 'account_name'];
   } else if (fileType === 'opportunities') {
+    // Only essential fields required for mapping
     requiredFieldsForType = ['sfdc_opportunity_id', 'sfdc_account_id'];
   }
   
@@ -222,13 +226,13 @@ export const validateMappedData = (
            rawValue === 'null' || 
            rawValue === 'undefined' || 
            (typeof rawValue === 'string' && rawValue.trim() === '')) {
-         mappedRow[schemaField] = null;
-         
-         // Debug empty values for critical fields
-         if (schemaField === 'rep_id' || schemaField === 'name' || schemaField === 'ultimate_parent_id') {
-           console.log(`⚠️ Empty value for ${schemaField} in row ${rowNum}:`, { rawValue, valueType: typeof rawValue });
-         }
-         return;
+        mappedRow[schemaField] = null;
+        
+        // Debug empty values only for truly essential fields (not ultimate_parent_id - empty is valid for parent accounts)
+        if (schemaField === 'rep_id' || schemaField === 'name' || schemaField === 'sfdc_account_id') {
+          console.log(`⚠️ Empty value for ${schemaField} in row ${rowNum}:`, { rawValue, valueType: typeof rawValue });
+        }
+        return;
        }
       
       // Enhanced type conversion based on schema field name
@@ -293,16 +297,35 @@ export const validateMappedData = (
     });
     
     // Now validate required fields using the transformed database field names
+    // All essential + high-priority fields must have data
     if (fileType === 'accounts') {
-      const requiredFields = ['sfdc_account_id', 'account_name'];
-      const missingCriticalFields = requiredFields.filter(field => {
+      // Essential fields - absolutely required, block row if missing
+      const essentialFields = ['sfdc_account_id', 'account_name'];
+      const missingEssential = essentialFields.filter(field => {
         const value = mappedRow[field];
         return !value || value === null || value === '' || value === 'undefined';
       });
 
-      if (missingCriticalFields.length > 0) {
-        criticalErrors.push(`Row ${rowNum}: Missing critical fields: ${missingCriticalFields.join(', ')}`);
+      if (missingEssential.length > 0) {
+        criticalErrors.push(`Row ${rowNum}: Missing essential fields: ${missingEssential.join(', ')}`);
         hasCriticalErrors = true;
+      }
+
+      // High priority fields - generate warnings but don't block import
+      // Note: ultimate_parent_id is legitimately empty for parent accounts
+      // Note: Many fields may be empty for prospects or child accounts
+      const highPriorityFields = [
+        'owner_id', 'owner_name', 'sales_territory'
+      ];
+      const missingHighPriority = highPriorityFields.filter(field => {
+        const value = mappedRow[field];
+        return !value || value === null || value === '' || value === 'undefined';
+      });
+
+      if (missingHighPriority.length > 0) {
+        // Generate warning instead of critical error - these fields are helpful but not blocking
+        warnings.push(`Row ${rowNum}: Missing high-priority fields: ${missingHighPriority.join(', ')}`);
+        // DON'T set hasCriticalErrors = true - allow import to proceed
       }
 
       // Automatically calculate is_parent based on ultimate_parent_id
@@ -328,25 +351,37 @@ export const validateMappedData = (
           is_parent: mappedRow['is_parent']
         });
       }
-
-      // Optional fields - generate warnings but don't block import
-      if (!mappedRow['owner_id']) {
-        warnings.push(`Row ${rowNum}: Missing owner_id - record will be imported but may need manual assignment`);
-      }
       
     } else if (fileType === 'opportunities') {
-      const requiredFields = ['sfdc_opportunity_id', 'sfdc_account_id'];
-      const missingCriticalFields = requiredFields.filter(field => {
+      // Essential fields
+      const essentialFields = ['sfdc_opportunity_id', 'sfdc_account_id'];
+      const missingEssential = essentialFields.filter(field => {
         const value = mappedRow[field];
         return !value || value === null || value === '' || value === 'undefined';
       });
       
-      if (missingCriticalFields.length > 0) {
-        criticalErrors.push(`Row ${rowNum}: Missing critical fields: ${missingCriticalFields.join(', ')}`);
+      if (missingEssential.length > 0) {
+        criticalErrors.push(`Row ${rowNum}: Missing essential fields: ${missingEssential.join(', ')}`);
         hasCriticalErrors = true;
       }
+
+      // High priority fields - generate warnings but don't block import
+      // Many of these fields may be empty for certain opportunity types
+      const highPriorityFields = [
+        'opportunity_name', 'opportunity_type'
+      ];
+      const missingHighPriority = highPriorityFields.filter(field => {
+        const value = mappedRow[field];
+        return !value || value === null || value === '' || value === 'undefined';
+      });
+
+      if (missingHighPriority.length > 0) {
+        // Generate warning instead of critical error
+        warnings.push(`Row ${rowNum}: Missing high-priority fields: ${missingHighPriority.join(', ')}`);
+        // DON'T block import - allow it to proceed
+      }
       
-      // Generate warnings for missing fields - no defaults applied
+      // Generate warnings for potentially problematic values
       if (!mappedRow['stage'] || mappedRow['stage'] === null) {
         warnings.push(`Row ${rowNum}: Missing stage`);
         // No default - keep it blank/null
@@ -364,8 +399,9 @@ export const validateMappedData = (
       }
       
     } else if (fileType === 'sales_reps') {
-      const requiredFields = ['rep_id', 'name'];
-      const missingCriticalFields = requiredFields.filter(field => {
+      // Essential fields
+      const essentialFields = ['rep_id', 'name'];
+      const missingEssential = essentialFields.filter(field => {
         const value = mappedRow[field];
         const isEmpty = !value || value === null || value === '' || value === 'undefined' || 
                        (typeof value === 'string' && value.trim() === '');
@@ -383,17 +419,34 @@ export const validateMappedData = (
         return isEmpty;
       });
       
-      if (missingCriticalFields.length > 0) {
-        const errorMsg = `Row ${rowNum}: Missing critical fields: ${missingCriticalFields.join(', ')}. Row data: ${JSON.stringify(mappedRow)}`;
+      if (missingEssential.length > 0) {
+        const errorMsg = `Row ${rowNum}: Missing essential fields: ${missingEssential.join(', ')}`;
         criticalErrors.push(errorMsg);
-        console.error('❌ Critical fields missing:', {
+        console.error('❌ Essential fields missing:', {
           rowNum,
-          missingFields: missingCriticalFields,
+          missingFields: missingEssential,
           mappedRow,
           rawRow: row
         });
         hasCriticalErrors = true;
-      } else if (index < 3) {
+      }
+
+      // High priority fields - generate warnings but don't block import
+      // Some reps may not have all hierarchy info filled in yet
+      const highPriorityFields = ['team', 'manager', 'region'];
+      const missingHighPriority = highPriorityFields.filter(field => {
+        const value = mappedRow[field];
+        return !value || value === null || value === '' || value === 'undefined' || 
+               (typeof value === 'string' && value.trim() === '');
+      });
+
+      if (missingHighPriority.length > 0) {
+        // Generate warning instead of critical error
+        warnings.push(`Row ${rowNum}: Missing high-priority fields: ${missingHighPriority.join(', ')}`);
+        // DON'T block import
+      }
+      
+      if (index < 3) {
         console.log(`✅ Sales rep row ${rowNum} passed validation:`, mappedRow);
       }
     }

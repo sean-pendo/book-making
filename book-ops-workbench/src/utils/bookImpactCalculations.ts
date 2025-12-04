@@ -1,7 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 
 export interface BookImpact {
-  // Accounts
+  // Accounts (parent accounts only)
   accountsBefore: number;
   accountsAfter: number;
   accountsGained: number;
@@ -15,18 +15,36 @@ export interface BookImpact {
   arrLost: number;
   netArrChange: number;
   
+  // Customer breakdown (parent accounts only)
+  customersBefore: number;
+  customersAfter: number;
+  customersGained: number;
+  customersLost: number;
+  customerArrBefore: number;
+  customerArrAfter: number;
+  
+  // Prospect breakdown (parent accounts only)
+  prospectsBefore: number;
+  prospectsAfter: number;
+  prospectsGained: number;
+  prospectsLost: number;
+  prospectArrBefore: number;
+  prospectArrAfter: number;
+  
   // Details for display
   gainedAccounts: Array<{
     sfdc_account_id: string;
     account_name: string;
     arr: number;
     from_owner_name: string | null;
+    is_customer: boolean;
   }>;
   lostAccounts: Array<{
     sfdc_account_id: string;
     account_name: string;
     arr: number;
     to_owner_name: string | null;
+    is_customer: boolean;
   }>;
 }
 
@@ -73,6 +91,18 @@ export async function calculateBookImpact(
       arrGained: 0,
       arrLost: 0,
       netArrChange: 0,
+      customersBefore: 0,
+      customersAfter: 0,
+      customersGained: 0,
+      customersLost: 0,
+      customerArrBefore: 0,
+      customerArrAfter: 0,
+      prospectsBefore: 0,
+      prospectsAfter: 0,
+      prospectsGained: 0,
+      prospectsLost: 0,
+      prospectArrBefore: 0,
+      prospectArrAfter: 0,
       gainedAccounts: [],
       lostAccounts: [],
     };
@@ -86,7 +116,7 @@ export async function calculateBookImpact(
   const accountsPromises = repIdsArray.map(repId =>
     supabase
       .from('accounts')
-      .select('sfdc_account_id, account_name, is_parent, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, hierarchy_bookings_arr_converted, arr')
+      .select('sfdc_account_id, account_name, is_parent, is_customer, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, hierarchy_bookings_arr_converted, arr')
       .eq('build_id', buildId)
       .eq('is_parent', true)
       .or(`owner_id.eq.${repId},new_owner_id.eq.${repId}`)
@@ -135,6 +165,7 @@ export async function calculateBookImpact(
       account_name: acc.account_name,
       arr: getARR(acc),
       from_owner_name: acc.owner_name,
+      is_customer: acc.is_customer || false,
     }));
 
   // Lost: in before but not in after
@@ -145,10 +176,26 @@ export async function calculateBookImpact(
       account_name: acc.account_name,
       arr: getARR(acc),
       to_owner_name: acc.new_owner_name,
+      is_customer: acc.is_customer || false,
     }));
 
   const arrGained = gainedAccounts.reduce((sum, acc) => sum + acc.arr, 0);
   const arrLost = lostAccounts.reduce((sum, acc) => sum + acc.arr, 0);
+
+  // 5. Calculate customer/prospect breakdown
+  const customersBefore = beforeAccounts.filter(a => a.is_customer).length;
+  const customersAfter = afterAccounts.filter(a => a.is_customer).length;
+  const customersGained = gainedAccounts.filter(a => a.is_customer).length;
+  const customersLost = lostAccounts.filter(a => a.is_customer).length;
+  const customerArrBefore = beforeAccounts.filter(a => a.is_customer).reduce((sum, acc) => sum + getARR(acc), 0);
+  const customerArrAfter = afterAccounts.filter(a => a.is_customer).reduce((sum, acc) => sum + getARR(acc), 0);
+  
+  const prospectsBefore = beforeAccounts.filter(a => !a.is_customer).length;
+  const prospectsAfter = afterAccounts.filter(a => !a.is_customer).length;
+  const prospectsGained = gainedAccounts.filter(a => !a.is_customer).length;
+  const prospectsLost = lostAccounts.filter(a => !a.is_customer).length;
+  const prospectArrBefore = beforeAccounts.filter(a => !a.is_customer).reduce((sum, acc) => sum + getARR(acc), 0);
+  const prospectArrAfter = afterAccounts.filter(a => !a.is_customer).reduce((sum, acc) => sum + getARR(acc), 0);
 
   return {
     accountsBefore: beforeAccounts.length,
@@ -161,6 +208,18 @@ export async function calculateBookImpact(
     arrGained,
     arrLost,
     netArrChange: arrAfter - arrBefore,
+    customersBefore,
+    customersAfter,
+    customersGained,
+    customersLost,
+    customerArrBefore,
+    customerArrAfter,
+    prospectsBefore,
+    prospectsAfter,
+    prospectsGained,
+    prospectsLost,
+    prospectArrBefore,
+    prospectArrAfter,
     gainedAccounts: gainedAccounts.sort((a, b) => b.arr - a.arr),
     lostAccounts: lostAccounts.sort((a, b) => b.arr - a.arr),
   };

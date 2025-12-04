@@ -1,5 +1,694 @@
 # Changelog
 
+## [2025-12-04 8:30 PM CST] - Fix: Re-applied RPC functions for Auto-Calculate Targets
+
+### Changes
+- **Applied**: `get_customer_arr_total` and `get_prospect_pipeline_total` RPC functions were re-applied to the database
+- **Verified**: Database now contains the functions required for the "Auto-Calculate Targets" button to work
+- **Note**: Migration file `20251204200000_fix_rpc_calculations.sql` was present but not active in the database
+
+**Files**: Supabase Migrations
+
+---
+
+## [2025-12-04 8:10 PM CST] - UI: Move collapse button to sidebar, refine favicon
+
+### Changes
+- **Moved**: Collapse button from header to top of sidebar (where favicon was)
+- **Removed**: Favicon from sidebar
+- **Styled**: Header favicon now uses `rounded-lg` instead of `rounded-xl` for subtler corners
+
+**Files**: `Layout.tsx`, `AppSidebar.tsx`
+
+---
+
+## [2025-12-04 8:00 PM CST] - Fix: Use RPC functions to bypass Supabase row limits
+
+### Changes
+- **Created**: `get_prospect_pipeline_total` RPC function - calculates pipeline server-side
+- **Created**: `get_customer_arr_total` RPC function - calculates ARR server-side
+- **Fixed**: Totals now calculated via SQL aggregation, not JS (bypasses 1000 row limit)
+- **Simplified**: Accounts query now only fetches territories, not all fields
+
+**Files**: `FullAssignmentConfig.tsx`, Supabase migrations
+
+---
+
+## [2025-12-04 7:55 PM CST] - UI: Add logo back to sidebar, round favicon corners
+
+### Changes
+- **Added**: Favicon logo back to sidebar above the Builds nav item (icon only, no text)
+- **Styled**: Added `rounded-xl` to favicon in both header and sidebar for smoother corners
+
+**Files**: `Layout.tsx`, `AppSidebar.tsx`
+
+---
+
+## [2025-12-04 7:50 PM CST] - Refactor: Move favicon to header, clean up sidebar
+
+### Changes
+- **Moved**: Favicon icon now displays in the header next to "Book Builder" title
+- **Removed**: Logo/icon from sidebar - sidebar now contains only navigation menu items
+- **Cleaned up**: Removed unused imports (FileBarChart, SidebarGroupLabel, etc.)
+
+**Files**: `Layout.tsx`, `AppSidebar.tsx`
+
+---
+
+## [2025-12-04 7:35 PM CST] - Fix: Supabase 1000 row limit causing missing data
+
+### Changes
+- **Fixed**: Added `.limit(50000)` to accounts queries (Supabase default is 1000 rows)
+- **Fixed**: Added `.limit(10000)` to opportunities queries
+- **Root cause**: Only 213 of 5970 prospect accounts were being loaded due to default limit
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 7:30 PM CST] - Feature: Parent/Child account badges in tables
+
+### Changes
+- **Added**: Visual badges showing "Parent" or "Child" status next to account names in Assignment Engine
+- **Parent accounts**: Blue badge with building icon
+- **Child accounts**: Gray badge with branch icon, plus shows parent name when applicable
+- **Applied**: Consistent styling across VirtualizedAccountTable and AccountsTable
+
+**Files**: `VirtualizedAccountTable.tsx`, `AccountsTable.tsx`
+
+---
+
+## [2025-12-04 7:20 PM CST] - Fix: Button text + Debug logging for pipeline
+
+### Changes
+- **Renamed**: Button now says "Auto-Calculate Targets" instead of "Calculate Targets"
+- **Added**: Console debug logging to trace pipeline calculation issue
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 7:15 PM CST] - Fix: Tooltip hover/dismiss behavior
+
+### Changes
+- **Fixed**: Tooltips now properly appear on hover and dismiss when mouse leaves
+- **Root cause**: Redundant `<TooltipProvider>` wrappers inside components conflicted with the global provider in `App.tsx`
+- **Solution**: Removed 40+ nested `TooltipProvider` wrappers across all components
+- **Enhanced**: Global provider now has `delayDuration={200}` and `skipDelayDuration={100}` for responsive feel
+
+**Files**: `App.tsx`, `InteractiveKPICard.tsx`, `BookImpactSummary.tsx`, `ManagerHierarchyView.tsx`, `SalesRepDetailModal.tsx`, `DataVisualizationCard.tsx`, `VirtualizedAccountTable.tsx`, `AccountsTable.tsx`, `TerritoryBalancingTabbedView.tsx`, `FullAssignmentConfig.tsx`, `AssignmentEngine.tsx`, `BuildDetail.tsx`, `DataImport.tsx`, `ComprehensiveReview.tsx`
+
+---
+
+## [2025-12-04 5:30 PM CST] - Fix: Pipeline/ARR calculations + Territory styling
+
+### Changes
+- **Fixed**: ARR and Pipeline values now calculate correctly (Supabase returns numerics as strings, added `Number()` conversion)
+- **Fixed**: Prospect Pipeline was showing $0.1M instead of actual $3.8M due to string concatenation bug
+- **Fixed**: Customer ARR calculation had same string-vs-number bug
+- **Styled**: Territory Mapping section now borderless/seamless (removed blue border and background)
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 5:15 PM CST] - Simplify: Removed Capacity Variance (redundant with Max)
+
+### Changes
+- **Removed**: Capacity Variance slider from config UI (was redundant with Max ARR setting)
+- **Config**: Now just has Target + Max for both customers and prospects - simpler mental model
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 5:05 PM CST] - Feature: Calculate Targets includes prospects + simplified capacity
+
+### Changes
+- **Enhanced**: "Calculate Targets" now calculates both Customer ARR and Prospect Pipeline targets
+- **Simplified**: Capacity Management reduced to single inline row (was a full card with explanation box)
+- **Cleaned**: Removed unused `calculateCapacityLimit` function
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 4:55 PM CST] - Fix: Config dialog footer + Prospect terminology
+
+### Changes
+- **Fixed**: Save/Cancel buttons now stick to true bottom of config dialog (content scrolls independently)
+- **Renamed**: "Prospect Account Targets" → "Prospect Pipeline Targets" (prospects don't have ARR)
+- **Clarified**: Labels now say "Pipeline" instead of "Net ARR" to avoid confusion
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 4:45 PM CST] - Fix: Builds sidebar stays active when inside a build
+
+### Changes
+- **Fixed**: "Builds" sidebar item now stays highlighted when working inside `/build/:id`
+- **Added**: `matchPaths` property to navigation items for flexible route matching
+
+**Files**: `AppSidebar.tsx`
+
+---
+
+## [2025-12-04 3:15 PM CST] - Fix: Loading message text
+
+### Changes
+- Changed initial loading text from "Analyzing Data" to "Loading Data" on BuildDetail page
+
+**Files**: `BuildDetail.tsx`
+
+---
+
+## [2025-12-04 3:25 PM CST] - Fix: Calculate Targets now uses correct ARR fields
+
+### Changes
+- **Fixed**: Calculate Targets was returning $0 because `calculated_arr` wasn't populated
+- **Now uses fallback**: `calculated_arr` → `hierarchy_bookings_arr_converted` → `arr`
+- **Added**: Console logging to debug total ARR calculation
+- **Added**: Error toast if no ARR data found
+- **Removed**: "How It Works" section from config dialog (redundant)
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 3:15 PM CST] - Fix: Calculate Thresholds moved to top & now updates values
+
+### Changes
+- **Moved**: "Calculate Targets" button now at the top of configuration with prominent styling
+- **Added**: Tooltip explaining what the calculation does
+- **Fixed**: Button now actually updates the ARR target values when clicked
+- **Shows**: Last calculated timestamp, total ARR ÷ reps badge
+- **Removed**: Redundant `BalanceThresholdConfig` component at bottom (was duplicative)
+- **Simplified**: "How It Works" section to be more concise
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 3:00 PM CST] - Fix: Configure buttons now open popup instead of old page
+
+### Changes
+- **Fixed**: "Configure Settings" and "Configure Now" buttons in WaterfallLogicExplainer now open the config popup
+- **Updated**: `WaterfallLogicExplainer` accepts `onConfigureClick` callback prop
+- **Updated**: AssignmentEngine passes callback to close "How It Works" dialog and open config dialog
+
+**Files**: `WaterfallLogicExplainer.tsx`, `AssignmentEngine.tsx`
+
+---
+
+## [2025-12-04 2:45 PM CST] - Fix: Restore original Assignment Configuration flow
+
+### Changes
+- **Restored**: Full assignment configuration flow that was lost during popup conversion
+- **Fixed**: `FullAssignmentConfig` component now uses the proven flow from `SimplifiedAssignmentConfig`
+- **Includes all original sections in one scrollable view**:
+  - "How It Works" waterfall logic explanation
+  - Capacity Management with variance slider
+  - Customer ARR Targets (target + max)
+  - Prospect ARR Targets with Net ARR display
+  - Territory & Geography Mapping with AI Auto-Map
+  - Balance Threshold Configuration
+- **AI Auto-Map**: Uses Gemini AI to intelligently match territories to regions with confidence scores
+- **Territory Mapping**: Shows progress, highlights mapped/unmapped territories, supports "Not Applicable" for international territories
+
+**Files**: `FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-04 1:15 PM CST] - Fix: Data refresh now properly awaited
+
+### Changes
+- **Fixed**: All data change callbacks (`onImportComplete`, `onDataChange`) now properly `await` async operations
+- Created dedicated `handleDataChange` callback in BuildDetail instead of inline function
+- Updated DataImport prop types to accept `Promise<void>` returns
+- This ensures animations and UI updates trigger correctly after import/delete without manual refresh
+
+**Files**: `BuildDetail.tsx`, `DataImport.tsx`
+
+---
+
+## [2025-12-04 1:05 PM CST] - Fix: Unlock animation now triggers immediately + more prominent
+
+### Animation Fixes
+- **Fixed**: Unlock now triggers immediately after import (no navigation required)
+  - Changed from `invalidateQueries` to `refetchQueries` for immediate data refresh
+- **Enhanced**: Unlock animation is now much more prominent:
+  - Entire tab turns bright green with gradient background
+  - Pulsing glow effect (box-shadow animation)
+  - All text/icons inside tab turn white
+  - Green border appears
+  - Tab slightly scales up during animation
+  - Animation lasts 2.5 seconds with smooth fade
+
+**Files**: `useBuildData.ts`, `BuildDetail.tsx`, `index.css`
+
+---
+
+## [2025-12-04 12:50 PM CST] - Fix: Data deletion properly re-locks tabs
+
+### Changes
+- **Removed**: Hard Refresh button from header (dev tool, not for end users)
+- **Removed**: "Limited Data Detected" debug warning alert
+- **Fixed**: Deleting data (reps/accounts/assignments) now properly re-locks downstream tabs
+  - Deleting Sales Reps or Accounts → Assignments tab re-locks
+  - Assignments deleted → Balancing/Clashes/Review tabs re-lock
+- **Fixed**: DataVerification component now refreshes when data is deleted (uses key-based remount)
+
+**Files**: `BuildDetail.tsx`, `DataImport.tsx`
+
+---
+
+## [2025-12-04 12:30 PM CST] - Fix: Sidebar progress stepper centering and fill
+
+### Fix: Centered progress line with dots
+- Vertical line now properly centered with navigation dots (2px wide at 10px left)
+- Line starts/ends at 20px from edges for clean alignment with dots
+
+### Feature: Progress fill on completed steps
+- Progress line now fills with primary color up to current step
+- Completed steps stay highlighted with `bg-primary/70` dots
+- Text for completed items stays semi-highlighted (`text-primary/70`)
+- Active dot has glow effect with `shadow-[0_0_8px_rgba(...)]`
+- Smooth 300ms transition on progress fill for nice UX
+
+**File**: `AppSidebar.tsx`
+
+---
+
+## [2025-12-04 12:10 AM CST] - Fix: Smart Import Validation
+
+### Summary
+Refined import validation to use contextual, tiered approach instead of blanket "all required" or "all optional".
+
+### Validation Tiers
+
+| Tier | Behavior | Account Fields | Opportunity Fields | Sales Rep Fields |
+|------|----------|----------------|-------------------|------------------|
+| Essential | Block if missing | `sfdc_account_id`, `account_name` | `sfdc_opportunity_id`, `sfdc_account_id` | `rep_id`, `name` |
+| High-Priority | Warn, allow import | `owner_id`, `owner_name`, `sales_territory`, etc. | `opportunity_name`, `opportunity_type`, etc. | `team`, `manager`, `region` |
+
+### Key Change
+- `ultimate_parent_id` empty is now VALID (identifies parent accounts)
+- Removed console spam for empty `ultimate_parent_id`
+- High-priority fields generate warnings but don't block import
+
+---
+
+## [2025-12-03 11:58 PM CST] - Fix: Import validation was blocking all rows
+
+### Problem
+- Import was showing "27,255 critical errors found. 0/27,255 rows can be imported"
+- Console showed "Empty value for ultimate_parent_id in row X" for thousands of rows
+- All rows were being rejected even though fields were properly mapped
+
+### Root Cause
+- Validation logic had **hardcoded list of "required" fields** that didn't match field mappings
+- `ultimate_parent_id` was required but it's **legitimately empty for parent accounts**
+- Many other fields (arr, employees, etc.) were required but are empty for prospects/child accounts
+
+### Fix Applied
+- **DataImport.tsx**: Changed all "high priority" fields from `required: true` to `required: false`
+- **importUtils.ts**: Changed validation to generate **warnings** instead of **blocking errors** for high-priority fields
+- Only truly essential fields now block import: `sfdc_account_id` + `account_name` for accounts
+
+### Impact
+- Imports with empty `ultimate_parent_id` (parent accounts) now work correctly
+- Imports with empty ARR/employees (prospects) now work correctly
+- System still shows warnings but allows import to proceed
+
+---
+
+## [2025-12-03] - Feature: All high-priority import fields now required (REVERTED)
+
+### Breaking Change: Field mapping validation is now strict
+- **Changed**: All "high priority" fields for Accounts, Opportunities, and Sales Reps are now **required**
+- Import cannot proceed to validation step until all required fields are mapped
+- Validation now blocks rows missing required field data
+
+### Why this change?
+Previously, fields like `ultimate_parent_id`, `arr`, `owner_id`, etc. were marked optional, but the system would silently produce bad results without them:
+- Without `ultimate_parent_id`: Hierarchy breaks, every account becomes a "parent"
+- Without `arr`: All accounts become "prospects" (customer classification fails)  
+- Without `owner_id`: Continuity/retention logic can't work
+- Without `sales_territory`/`geo`: Geographic matching fails
+
+### Required fields by type
+
+**Accounts (12 required)**:
+- Essential: `sfdc_account_id`, `account_name`
+- High Priority: `owner_id`, `owner_name`, `ultimate_parent_id`, `ultimate_parent_name`, `sales_territory`, `hq_country`, `arr`, `hierarchy_bookings_arr_converted`, `employees`, `initial_sale_tier`
+
+**Opportunities (13 required)**:
+- Essential: `sfdc_opportunity_id`, `sfdc_account_id`
+- High Priority: `opportunity_name`, `opportunity_type`, `stage`, `close_date`, `created_date`, `owner_id`, `owner_name`, `available_to_renew`, `cre_status`, `renewal_event_date`, `net_arr`
+
+**Sales Reps (7 required)**:
+- Essential: `rep_id`, `name`
+- High Priority: `team`, `manager`, `flm`, `slm`, `region`
+
+**Files**: `DataImport.tsx`, `importUtils.ts`
+
+---
+
+## [2025-12-03 11:55 PM CST] - Fix: Auto-refresh after import and delete
+
+### Feature: Data auto-refreshes after all operations
+- **Added**: `onDataChange` callback prop to DataImport component
+- **Fixed**: Data now auto-refreshes after deleting files (previously only worked after import)
+- **Fixed**: Both import and delete operations now trigger `invalidateBuildData()` to refresh counts
+- Tabs unlock status and all data counts update immediately after changes
+- **Files**: `DataImport.tsx`, `BuildDetail.tsx`
+
+---
+
+## [2025-12-03 11:45 PM CST] - Fix: Unlock animation now stops properly
+
+### Fix: Animation timer no longer resets infinitely
+- **Fixed**: Unlock animation was running forever because useEffect kept resetting the timer
+- Added `hasTriggeredUnlockAnimation` ref to ensure animation only triggers once per session
+- Animation now properly stops after 2.5 seconds
+- **File**: `BuildDetail.tsx`
+
+### Enhancement: Smoother green unlock animation
+- **Changed**: Animation now uses smooth green glow instead of harsh pink flashes
+- Uses emerald/green colors (hsl 142 76%) for success feel
+- Single smooth fade from green glow to grey (2s duration)
+- Removed jittery ping overlay effect
+- **Files**: `BuildDetail.tsx`, `index.css`
+
+---
+
+## [2025-12-03 11:30 PM CST] - UX: Tab unlock styling + Continue button
+
+### Fix: Unlocked tabs return to grey after animation
+- **Fixed**: After unlock animation, tabs 3-6 (Assignments, Balancing, Clashes, Review) now return to grey/muted style matching Data Overview
+- Reverted earlier change that made them pink
+- **File**: `BuildDetail.tsx`
+
+### Enhancement: Preview button tooltip for imported files
+- **Added**: Tooltip on disabled Preview button explaining "Preview unavailable - data already in database"
+- Helps users understand why preview doesn't work for previously-imported files
+- **File**: `DataImport.tsx`
+
+### UX: "Continue" button replaces "Open Build Details"
+- **Changed**: Button text from "Open Build Details" to "Continue"
+- **Changed**: Icon from ExternalLink to ChevronRight
+- **Fixed**: Button now switches to Data Overview tab instead of reloading page
+- Added `onContinue` prop to DataImport component for parent control
+- **Files**: `DataImport.tsx`, `BuildDetail.tsx`
+
+---
+
+## [2025-12-03 10:45 PM CST] - Fix: Sidebar nav alignment
+
+### Fix: Centered vertical stepper line with dots
+- **Fixed**: Vertical line in sidebar now perfectly aligned with dot indicators
+- Changed dot size from 7px to 6px (even number for precise centering)
+- Line positioned at exactly 11px (8px padding + 3px half-dot)
+- **File**: `AppSidebar.tsx`
+
+---
+
+## [2025-12-03 10:35 PM CST] - UX: Unlock animation + imported file actions
+
+### Enhancement: Unlock animation for tabs
+- **Changed**: Tabs now flash 3 times slowly when unlocked (not continuous pulse)
+- **Changed**: Shows step numbers during/after animation (not checkmarks)
+- **Changed**: Tabs return to grey default state after animation completes
+- Animation duration: 2.4 seconds total
+- **Files**: `BuildDetail.tsx`, `index.css`
+
+### Feature: Preview/Delete for imported files
+- **Added**: Preview and Delete buttons to already-imported file cards in Review tab
+- These cards now have consistent actions with validation cards
+- Preview disabled if data not cached in memory
+- **File**: `DataImport.tsx`
+
+---
+
+## [2025-12-03 10:25 PM CST] - UX: Preview and Delete buttons in Review tab
+
+### Feature: Preview button in Review tab
+- **Added**: "Preview" button on each data card in the Review & Import tab
+- Opens a dialog showing the DataPreview component with sample data and quality analysis
+- Shows warning if data not cached (needs re-upload)
+- **Files**: `EnhancedValidationResults.tsx`, `DataImport.tsx`
+
+### Feature: Delete button in Review tab  
+- **Added**: Trash icon button on each data card to delete/remove the file
+- Styled with destructive hover state
+- Uses existing `handleDeleteFile` function
+- **Files**: `EnhancedValidationResults.tsx`, `DataImport.tsx`
+
+---
+
+## [2025-12-03 10:15 PM CST] - UX: Import button loading state + auto-refresh
+
+### Feature: Import button loading state
+- **Added**: Loading spinner on "Import Data" button while import is in progress
+- **Added**: All import buttons disabled during import to prevent multiple clicks
+- Shows "Importing..." text with spinning loader
+- **Files**: `DataImport.tsx`, `EnhancedValidationResults.tsx`
+
+### Feature: Auto-refresh after import
+- **Added**: Build data automatically refreshes when import completes
+- No more need to manually hard refresh to see updated counts
+- Triggers unlock animation when Accounts + Sales Reps are both imported
+- **Files**: `BuildDetail.tsx` (uses `useInvalidateBuildData` hook)
+
+---
+
+## [2025-12-03 10:00 PM CST] - UX: Friendly "Continue Upload" prompt
+
+### Enhancement: Redesigned missing data prompt
+- **Changed**: Warning-style alert → Friendly, glowing, interactive prompt
+- Gradient background with subtle shimmer animation
+- Upload icon with gentle bounce animation
+- Encouraging copy: "Almost there! Just need [missing types]"
+- Large, prominent "Continue Upload" button with hover effects
+- Subtle glow pulsing effect on the container
+- **Files**: `DataImport.tsx`, `index.css`
+
+### New CSS Animations
+- `animate-pulse-subtle` - Gentle glow pulsing
+- `animate-shimmer` - Horizontal shimmer effect
+- `animate-bounce-subtle` - Soft bounce for icons
+
+---
+
+## [2025-12-03 9:45 PM CST] - Fix: Data Import tab navigation + "Go Back" button
+
+### Bug Fix: Grey screen when validating data
+- **Fixed**: Clicking "Validate Data" caused grey screen because code was switching to non-existent tabs
+- Changed `setActiveTab('validation')` → `setActiveTab('review')` (3 places)
+- Changed `setActiveTab('verification')` → `setActiveTab('review')` (1 place)
+- **File**: `DataImport.tsx`
+
+### Feature: "Go Back to Upload" prompt for missing data types
+- **Added**: Alert banner in Review tab when some data types haven't been uploaded yet
+- Shows amber warning: "Missing data: Opportunities and Sales Reps still need to be uploaded"
+- Prominent "← Go Back to Upload" button to return to upload step
+- Only shows when user has validated at least one file but not uploaded all three types
+- **File**: `DataImport.tsx`
+
+---
+
+## [2025-12-03 9:15 PM CST] - UX: Locked tabs until data import complete + unlock animation
+
+### Feature: Progressive Tab Unlocking
+- **Feature**: Assignment, Balancing, Clashes, and Review tabs are now LOCKED until both Accounts AND Sales Reps data are imported
+  - Locked tabs show 🔒 lock icon instead of step number
+  - Locked tabs are grayed out and non-clickable
+  - Hovering shows tooltip: "Import Accounts and Sales Reps data first"
+  - Only Import Data (step 1) and Data Overview (step 2) are available initially
+
+### Feature: Unlock Animation
+- **Feature**: When both data types are imported, locked tabs animate to unlocked state
+  - Glow animation effect highlights the newly unlocked tabs
+  - Animation runs for 3 seconds then fades
+  - Visual feedback confirms user can proceed to next steps
+
+### Technical
+- Added `recentlyUnlocked` and `wasLocked` state tracking
+- `useEffect` monitors `buildData?.accounts.total` and `buildData?.salesReps.total`
+- CSS class `glow-animation` applied conditionally during unlock transition
+
+### Files Changed
+- `BuildDetail.tsx` - Tab locking logic, unlock animation, tooltip integration
+
+---
+
+## [2025-12-03 8:30 PM CST] - UX: Build target date restricted to future dates only
+- **Fix**: Target date picker on new build creation now only allows future dates
+- Added `min` attribute to date input using today's date as minimum
+- **File**: `Dashboard.tsx`
+
+---
+
+## [2025-12-03 7:45 PM CST] - UX: Data Import now embedded in Build flow
+
+### Change
+- **Data Import is now the first tab** inside BuildDetail page
+- No longer asks "Select Target Build" - it knows which build you're in
+- Standalone `/import` page still works but build selector is hidden when embedded
+
+### Flow
+1. Dashboard → Click build → **Import Data** tab (first)
+2. Upload files, map fields, validate
+3. Move to Data Overview, Assignments, etc.
+
+### Files Changed
+- `DataImport.tsx` - Added `buildId` prop, hide selector when embedded
+- `BuildDetail.tsx` - Added Import Data as first tab (6 tabs now)
+
+---
+
+## [2025-12-03 7:30 PM CST] - Fix: RevOps Owner dropdown only shows REVOPS users
+
+### Problem
+- Build creation showed FLM users in "RevOps Owner" dropdown
+
+### Fix
+- Changed query from `.in('role', ['REVOPS', 'FLM'])` to `.eq('role', 'REVOPS')`
+
+---
+
+## [2025-12-03 7:15 PM CST] - Fix: Build deletion now works (cascade delete)
+
+### Problem
+- Deleting a build failed with 409 Conflict error
+- Root cause: 16 tables have foreign keys to `builds` table
+- Direct delete was blocked by referential integrity constraints
+
+### Fix
+- Created `delete_build_cascade(p_build_id)` database function
+- Deletes all related data in correct order: manager_reviews, assignments, accounts, etc.
+- Returns detailed count of deleted records for logging
+- Updated Dashboard to use this function instead of direct delete
+
+### Files Changed
+- `Dashboard.tsx` - Use new RPC function
+- New migration: `add_cascade_delete_build_function.sql`
+
+---
+
+## [2025-12-03 6:45 PM CST] - Fix: At-Risk Parents now checks both cre_status AND cre_count
+
+### Problem
+- At-Risk Parents showing 0 even when accounts had risk data
+- Root cause: Different CSV imports mapped risk data to different columns
+  - Some builds: `cre_status` (text like "At Risk", "Pre-Risk Discovery")  
+  - Some builds: `cre_count` (numeric count of CRE opportunities)
+
+### Fix
+- Updated 8 places across 3 files to check BOTH fields:
+  - `cre_status !== null` OR `cre_count > 0`
+- Now works regardless of which column the import populated
+
+### Files Changed
+- `ManagerHierarchyView.tsx` - CRE count calculation
+- `FLMDetailDialog.tsx` - Risk count in FLM detail view
+- `ComprehensiveReview.tsx` - Risk filter, portfolio summary, risk metrics cards
+
+---
+
+## [2025-12-03 5:30 PM CST] - Feature: FLM Counter-Proposal Flow & Approval Ownership
+
+### Approval Ownership Tracking
+- **Feature**: Approvals now track WHO approved (user ID, name, role, timestamp)
+  - New JSON format stored in approval notes with structured `ApprovalInfo`
+  - Backwards compatible with legacy "Book approved by [Name]" format
+- **Visual Distinction**: Green checkmarks now show tooltip with approver details
+  - Hover to see "Approved by [Name]" with role and date
+  - Gray checkmark when approved by different role (e.g., SLM approval viewed by FLM)
+  - "[Role] Approved" badge shown when viewed by different role type
+
+### FLM Counter-Proposal Workflow
+- **Feature**: When FLM clicks "Reassign" on an account in a book that was already approved by SLM:
+  - Confirmation dialog appears: "This book was already approved by [SLM Name]"
+  - Explains: "Your proposal will create a counter-proposal that requires SLM re-review"
+  - User can Cancel or "Continue with Counter-Proposal"
+- **Purpose**: Allows FLMs to challenge SLM decisions while maintaining audit trail
+
+### Pending Proposals Badge
+- **Feature**: Rep books now show orange "X Pending" badge when there are pending reassignment proposals
+  - Appears next to rep name in the team hierarchy view
+  - Tooltip explains how many pending proposals exist
+- **Purpose**: Quick visibility into which reps have unsettled changes
+
+### Cross-Build Conflict Detection (Enhanced)
+- **Feature**: Purple "Cross-Build" badge now appears on accounts in ManagerHierarchyView
+  - Shows when the same account has pending proposals in OTHER builds
+  - Tooltip lists: "Build A: 2 proposal(s), Build B: 1 proposal(s)"
+  - Applied to both parent and child account rows
+- **Purpose**: Clear flagging across all builds as requested
+
+### Files Changed
+- `ManagerHierarchyView.tsx` - All changes above
+
+## [2025-12-03] - UX: Sidebar Navigation Cleanup
+- **Removed**: "Data Import" from sidebar - it's now only accessible from within a build (as a step in the build flow)
+- **Hidden**: "Manager Dashboard" from RevOps users - was confusing since RevOps uses the main Dashboard and Review pages
+- **Moved**: Sign Out button from sidebar to Settings page - cleaner sidebar with Settings link at bottom
+- **Added**: Sign Out section in Settings page with clear button
+- **Files**: `AppSidebar.tsx`, `Settings.tsx`
+
+## [2025-12-02 6:30 PM CST] - Fix: Role Badge Showing Lowercase
+- **Fix**: Changed role badge in sidebar from `.toLowerCase()` to `.toUpperCase()`
+- **File**: `AppSidebar.tsx`
+
+## [2025-12-02 6:25 PM CST] - Fix: User Signup Role Not Being Saved
+- **Root Cause**: Database trigger `handle_new_user` wasn't reading role from user metadata - was always defaulting to REVOPS
+- **Fix Applied**: Applied migration to update trigger to read `role` from `raw_user_meta_data`
+- **Manual Fix**: Updated Warren Burt's profile from REVOPS to FLM
+- **Note**: Updated Supabase project ID in CURSOR.mdc from `jbcpesxfzkhdalrymfhv` to `lolnbotrdamhukdrrsmh`
+
+## [2025-12-03 3:15 PM CST] - Feature: Cross-Build Conflict Detection
+- **Feature**: Proposals now show warnings if the same account has pending proposals in OTHER builds
+  - Purple "Cross-Build" badge appears in the Warnings column
+  - Shows which builds have conflicts and how many proposals
+  - Detailed warning in review dialog: "Cross-Build Conflict: X proposal(s) in other builds: Build A, Build B"
+  - Does NOT auto-reject across builds (builds are independent planning scenarios)
+- **Purpose**: Helps RevOps identify when the same account is being changed in multiple planning scenarios
+- **Files**: `ReviewNotes.tsx`
+
+## [2025-12-02 2:45 PM CST] - Fix: Auto-Reject Competing Proposals on Approval
+- **Fix**: When any proposal is approved (via Review & Notes OR direct RevOps assignment), all other pending proposals for the same account are now auto-rejected
+  - **ReviewNotes.tsx**: RevOps approval from Review & Notes page auto-rejects competitors
+  - **ManagerHierarchyView.tsx**: RevOps direct proposal (auto-approved) also auto-rejects existing pending proposals
+  - Prevents "orphaned" proposals that could accidentally overwrite approved changes
+  - Competing proposals get status `rejected` with rationale explaining which proposal was chosen instead
+  - Managers whose proposals were superseded receive Slack notification explaining the outcome
+  - Added error logging for reject operations (graceful degradation if reject fails)
+- **Edge Case Handled**: FLM and SLM propose conflicting changes → approving one now cleanly resolves the conflict
+- **Files**: `ReviewNotes.tsx`, `ManagerHierarchyView.tsx`
+
+## [2025-12-02 1:00 PM CST] - Slack Notification System
+- Created `send-slack-notification` edge function for secure Slack messaging
+- Added `slack_notifications_log` table for tracking all notifications
+- Updated FeedbackWidget to use edge function (removed n8n webhook)
+- Added notifications when review is sent to manager
+- Added notifications when proposals are approved/rejected
+- Routing: pendo.io emails → DM to user; others → fallback to @sean.muse
+- Created `slackNotificationService.ts` for reusable notification functions
+
+## [2025-12-02 12:20 PM CST] - Added Feedback Widget
+- Added floating "?" help button in bottom-right corner (always visible)
+- Users can submit: Bug Reports, Questions, Feature Requests
+- Option to include Loom video URL with direct link to record
+- Sends to n8n webhook for team notifications
+- Includes user info, app version, and current URL for context
+
+## [2025-12-02 12:05 PM CST] - Fixed Role Uppercase on Sign Up
+- Roles now always stored as uppercase (REVOPS, SLM, FLM)
+- Fixed race condition where profile could be created before signup data was saved
+- User metadata now includes full_name/role/region as backup during sign up
+
 ## [2025-12-02 11:55 AM CST] - Added App Version Display in Settings
 - Added version info card at bottom of Settings page
 - Shows current version (v1.1.0) and build timestamp
@@ -143,7 +832,7 @@ All notable changes to this project will be documented in this file.
 - **Feature**: "Unsaved Changes" warning when leaving Assignments tab
   - If you try to switch tabs with pending proposals, shows confirmation dialog
   - Options: "Stay & Review" or "Leave Without Saving"
-  - Prevents accidental loss of generated proposals
+  - Prevents accidentally loss of generated proposals
 - **Fix**: Balancing Dashboard staying locked after assignments applied
   - Root cause: `useEnhancedBalancing` used local React state, not React Query
   - Query invalidation (`queryClient.invalidateQueries`) had no effect on local state

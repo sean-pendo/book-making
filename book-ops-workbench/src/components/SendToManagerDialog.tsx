@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { notifyReviewAssigned } from '@/services/slackNotificationService';
 import {
   Dialog,
   DialogContent,
@@ -48,7 +49,7 @@ export default function SendToManagerDialog({
   managerName,
   managerLevel,
 }: SendToManagerDialogProps) {
-  const { user } = useAuth();
+  const { user, effectiveProfile } = useAuth();
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [selectedManager, setSelectedManager] = useState<string>(''); // For when no managerName provided
   const [sendToAllSLMs, setSendToAllSLMs] = useState(false);
@@ -58,6 +59,21 @@ export default function SendToManagerDialog({
   const [managerSearchOpen, setManagerSearchOpen] = useState(false);
   const [userSearchOpen, setUserSearchOpen] = useState(false);
   const queryClient = useQueryClient();
+
+  // Fetch build name for notifications
+  const { data: buildData } = useQuery({
+    queryKey: ['build-name', buildId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('builds')
+        .select('name')
+        .eq('id', buildId)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: open,
+  });
 
   // Fetch ALL users (but we'll filter based on hierarchy rules)
   const { data: availableUsers, isLoading: usersLoading } = useQuery({
@@ -327,7 +343,7 @@ export default function SendToManagerDialog({
         return 1;
       }
     },
-    onSuccess: (count) => {
+    onSuccess: async (count) => {
       queryClient.invalidateQueries({ queryKey: ['existing-reviews'] });
       queryClient.invalidateQueries({ queryKey: ['manager-reviews'] });
       
@@ -341,6 +357,31 @@ export default function SendToManagerDialog({
         link = `${baseUrl}/manager-dashboard?buildId=${buildId}&managerName=${encodeURIComponent(targetManager.name)}`;
       } else {
         link = `${baseUrl}/manager-dashboard?buildId=${buildId}`;
+      }
+      
+      // Send Slack notifications
+      const buildName = buildData?.name || 'Unknown Build';
+      const assignedBy = effectiveProfile?.full_name || 'RevOps';
+      
+      if (sendToAllSLMs && availableUsers) {
+        // Notify all non-RevOps users
+        const nonRevOpsUsers = availableUsers.filter(u => u.role?.toUpperCase() !== 'REVOPS');
+        for (const userProfile of nonRevOpsUsers) {
+          if (userProfile.email) {
+            notifyReviewAssigned(userProfile.email, buildName, 'SLM', assignedBy).catch(console.error);
+          }
+        }
+      } else if (selectedUserId) {
+        // Notify the specific user
+        const selectedUser = availableUsers?.find(u => u.id === selectedUserId);
+        if (selectedUser?.email && targetManager) {
+          notifyReviewAssigned(
+            selectedUser.email, 
+            buildName, 
+            targetManager.level, 
+            assignedBy
+          ).catch(console.error);
+        }
       }
       
       setShareableLink(link);

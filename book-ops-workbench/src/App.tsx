@@ -11,7 +11,6 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import { Governance } from "./pages/Governance";
-import { DataImport } from "./pages/DataImport";
 import { AssignmentEngine } from "./pages/AssignmentEngine";
 import TerritoryBalancingDashboard from "./pages/TerritoryBalancingDashboard";
 import { GlobalClashDetector } from "./pages/GlobalClashDetector";
@@ -23,7 +22,6 @@ import ManagerDashboard from "./pages/ManagerDashboard";
 import RevOpsFinalView from "./pages/RevOpsFinalView";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
-import { SimplifiedAssignmentConfig } from "./components/SimplifiedAssignmentConfig";
 
 const queryClient = new QueryClient();
 
@@ -35,7 +33,7 @@ const App = () => (
       enableSystem 
       disableTransitionOnChange
     >
-      <TooltipProvider>
+      <TooltipProvider delayDuration={200} skipDelayDuration={100}>
         <AuthProvider>
           <Toaster />
           <Sonner />
@@ -59,13 +57,6 @@ const App = () => (
               <Layout>
                 <ProtectedRoute page="dashboard">
                   <BuildDetail />
-                </ProtectedRoute>
-              </Layout>
-            } />
-            <Route path="/import" element={
-              <Layout>
-                <ProtectedRoute page="data_import">
-                  <DataImport />
                 </ProtectedRoute>
               </Layout>
             } />
@@ -108,13 +99,6 @@ const App = () => (
               <Layout>
                 <ProtectedRoute page="settings">
                   <Settings />
-                </ProtectedRoute>
-              </Layout>
-            } />
-            <Route path="/assignment-config/:id" element={
-              <Layout>
-                <ProtectedRoute page="dashboard">
-                  <SimplifiedAssignmentConfig />
                 </ProtectedRoute>
               </Layout>
             } />

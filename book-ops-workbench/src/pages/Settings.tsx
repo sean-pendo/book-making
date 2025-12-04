@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { RolePermissionsManager } from "@/components/RolePermissionsManager";
-import { Info } from "lucide-react";
+import { Info, LogOut } from "lucide-react";
 
 type UserRole = "SLM" | "FLM" | "REVOPS";
 
@@ -24,7 +24,7 @@ type Profile = {
 };
 
 const Settings = () => {
-  const { profile } = useAuth();
+  const { profile, signOut } = useAuth();
   const queryClient = useQueryClient();
   const isAdmin = profile?.role === "REVOPS" || profile?.role === "FLM";
 
@@ -220,6 +220,24 @@ const Settings = () => {
         </Card>
       )}
 
+      {/* Sign Out */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Sign Out</CardTitle>
+          <CardDescription>End your current session</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="destructive"
+            onClick={signOut}
+            className="w-full sm:w-auto"
+          >
+            <LogOut className="h-4 w-4 mr-2" />
+            Sign Out
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* App Version Info */}
       <Card className="bg-muted/30">
         <CardHeader className="pb-3">
@@ -235,8 +253,8 @@ const Settings = () => {
               <Badge variant="outline" className="font-mono">v{__APP_VERSION__}</Badge>
             </div>
             <div>
-              <span className="text-muted-foreground">Built: </span>
-              <span className="font-mono text-xs">{new Date(__BUILD_DATE__).toLocaleString()}</span>
+              <span className="text-muted-foreground">Released: </span>
+              <span className="font-mono text-xs">{new Date(__BUILD_DATE__).toLocaleDateString()}</span>
             </div>
           </div>
         </CardContent>

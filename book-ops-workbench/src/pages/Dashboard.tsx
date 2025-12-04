@@ -128,7 +128,7 @@ const Dashboard = () => {
       const { data, error } = await supabase
         .from('profiles')
         .select('id, email, full_name')
-        .in('role', ['REVOPS', 'FLM'])
+        .eq('role', 'REVOPS')
         .order('full_name');
 
       if (error) throw error;
@@ -303,12 +303,17 @@ const Dashboard = () => {
 
     setIsDeleting(true);
     try {
-      const { error } = await supabase
-        .from('builds')
-        .delete()
-        .eq('id', buildToDelete.id);
+      // Use cascade delete function to properly remove all related data
+      const { data, error } = await supabase
+        .rpc('delete_build_cascade', { p_build_id: buildToDelete.id });
 
       if (error) throw error;
+      
+      if (!data?.success) {
+        throw new Error(data?.error || 'Failed to delete build');
+      }
+
+      console.log('🗑️ Build deleted with cascade:', data);
 
       // Clear localStorage if this was the current import build
       const currentImportBuildId = loadDataImportState.currentBuildId();
@@ -326,7 +331,7 @@ const Dashboard = () => {
 
       toast({
         title: 'Success',
-        description: `Build "${buildToDelete.name}" deleted successfully`,
+        description: `Build "${buildToDelete.name}" and all related data deleted successfully`,
       });
 
       setBuilds(builds.filter(build => build.id !== buildToDelete.id));
@@ -422,6 +427,7 @@ const Dashboard = () => {
                     type="date"
                     value={newBuildTargetDate}
                     onChange={(e) => setNewBuildTargetDate(e.target.value)}
+                    min={new Date().toISOString().split('T')[0]}
                     className="transition-all duration-200 focus:ring-2 focus:ring-primary focus:border-primary"
                   />
                 </div>

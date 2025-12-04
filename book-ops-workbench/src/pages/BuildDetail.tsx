@@ -14,17 +14,19 @@ import TerritoryBalancingDashboard from './TerritoryBalancingDashboard';
 import { AccountsTable } from '@/components/data-tables/AccountsTable';
 import { OpportunitiesTable } from '@/components/data-tables/OpportunitiesTable';
 import { SalesRepsTable } from '@/components/data-tables/SalesRepsTable';
-import { useBuildDataSummary } from '@/hooks/useBuildData';
+import { useBuildDataSummary, useInvalidateBuildData } from '@/hooks/useBuildData';
 import { formatCurrency } from '@/utils/accountCalculations';
 import { InteractiveKPICard } from '@/components/InteractiveKPICard';
 import { DataVisualizationCard } from '@/components/DataVisualizationCard';
 import { SkeletonLoader } from '@/components/SkeletonLoader';
 import { EnhancedLoader } from '@/components/EnhancedLoader';
 import { AnimatedCounter } from '@/components/AnimatedCounter';
-import { Database, Users, Target, AlertTriangle, CheckCircle, FileText, Cog, DollarSign, TrendingUp, Shield, Building2, UserCheck, Calendar, PieChart, RefreshCw } from 'lucide-react';
+import { Database, Users, Target, AlertTriangle, CheckCircle, FileText, Cog, DollarSign, TrendingUp, Shield, Building2, UserCheck, Calendar, PieChart, RefreshCw, Upload, ChevronRight, Lock } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { GlobalClashDetector } from './GlobalClashDetector';
 import { SameBuildClashDetector } from '@/components/SameBuildClashDetector';
 import { ComprehensiveReview } from './ComprehensiveReview';
+import { DataImport } from './DataImport';
 interface Build {
   id: string;
   name: string;
@@ -43,12 +45,19 @@ export const BuildDetail = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabFromUrl = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState(tabFromUrl || 'overview');
+  const [activeTab, setActiveTab] = useState(tabFromUrl || 'import');
   
   // Track pending proposals from AssignmentEngine
   const [pendingProposals, setPendingProposals] = useState({ hasPending: false, count: 0 });
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [pendingTabChange, setPendingTabChange] = useState<string | null>(null);
+  
+  // Track unlock animation state - two stages
+  const [recentlyUnlocked, setRecentlyUnlocked] = useState<string[]>([]);
+  const [stage1WasLocked, setStage1WasLocked] = useState(true); // Data import stage
+  const [stage2WasLocked, setStage2WasLocked] = useState(true); // Assignments applied stage
+  const hasTriggeredStage1Animation = React.useRef(false);
+  const hasTriggeredStage2Animation = React.useRef(false);
 
   // Callback for AssignmentEngine to notify about pending proposals
   const handlePendingProposalsChange = useCallback((hasPending: boolean, count: number) => {
@@ -116,8 +125,74 @@ export const BuildDetail = () => {
     data: buildData,
     isLoading: summaryLoading
   } = useBuildDataSummary(id);
+  
+  // Hook to invalidate and refresh build data
+  const invalidateBuildData = useInvalidateBuildData();
+  
+  // Callback for when data import completes - auto-refresh the build data
+  const handleImportComplete = useCallback(async (dataType: 'accounts' | 'opportunities' | 'sales_reps') => {
+    console.log(`✅ Import complete for ${dataType}, refreshing build data...`);
+    if (id) {
+      await invalidateBuildData(id);
+      console.log(`✅ Build data refreshed after ${dataType} import`);
+    }
+  }, [id, invalidateBuildData]);
+  
+  // Callback for when data changes (import/delete) - force refresh
+  const handleDataChange = useCallback(async () => {
+    console.log(`🔄 Data changed, refreshing build data...`);
+    if (id) {
+      await invalidateBuildData(id);
+      console.log(`✅ Build data refreshed after data change`);
+    }
+  }, [id, invalidateBuildData]);
+  
+  // STAGE 1: Track when Assignments tab becomes unlocked (accounts + sales reps required, opportunities optional)
+  useEffect(() => {
+    const hasAccounts = (buildData?.accounts.total || 0) > 0;
+    const hasSalesReps = (buildData?.salesReps.total || 0) > 0;
+    const isStage1Complete = hasAccounts && hasSalesReps; // Opportunities are optional
+    
+    // Only trigger animation once, when transitioning from locked to unlocked
+    if (isStage1Complete && stage1WasLocked && !hasTriggeredStage1Animation.current) {
+      hasTriggeredStage1Animation.current = true;
+      setRecentlyUnlocked(['assignments']);
+      setStage1WasLocked(false);
+      
+      // Clear the animation after it completes
+      setTimeout(() => {
+        setRecentlyUnlocked(prev => prev.filter(t => t !== 'assignments'));
+      }, 2500);
+    } else if (!isStage1Complete) {
+      // Reset if data gets cleared (e.g., switching builds)
+      setStage1WasLocked(true);
+      hasTriggeredStage1Animation.current = false;
+    }
+  }, [buildData?.accounts.total, buildData?.salesReps.total, stage1WasLocked]);
+  
+  // STAGE 2: Track when Balancing/Clashes/Review tabs become unlocked (assignments applied)
+  // Once unlocked, these tabs stay permanently unlocked for this build
+  useEffect(() => {
+    const hasAssignments = (buildData?.assignments.total || 0) > 0;
+    
+    // Only trigger animation once, when transitioning from locked to unlocked
+    // IMPORTANT: Once unlocked, stage 2 stays unlocked permanently (no reset)
+    if (hasAssignments && stage2WasLocked && !hasTriggeredStage2Animation.current) {
+      hasTriggeredStage2Animation.current = true;
+      setRecentlyUnlocked(prev => [...prev, 'balancing', 'clashes', 'review']);
+      setStage2WasLocked(false);
+      
+      // Clear the animation after it completes
+      setTimeout(() => {
+        setRecentlyUnlocked(prev => prev.filter(t => !['balancing', 'clashes', 'review'].includes(t)));
+      }, 2500);
+    }
+    // NOTE: We intentionally do NOT reset stage2WasLocked when assignments are cleared
+    // Once assignments have been applied, stages 4-6 remain permanently unlocked
+  }, [buildData?.assignments.total, stage2WasLocked]);
+  
   if (buildLoading || summaryLoading) {
-    return <EnhancedLoader size="lg" text={buildLoading ? 'Loading Build Details' : 'Analyzing Data'} className="min-h-screen" />;
+    return <EnhancedLoader size="lg" text={buildLoading ? 'Loading Build Details' : 'Loading Data'} className="min-h-screen" />;
   }
   if (!build) {
     return <Navigate to="/dashboard" replace />;
@@ -182,18 +257,10 @@ export const BuildDetail = () => {
                     </div>}
                 </div>
               </div>
-              <div className="text-right space-y-3">
-                <div className="text-sm">
-                  <Button variant="outline" size="sm" onClick={() => window.location.reload()} className="flex items-center gap-2">
-                    <RefreshCw className="h-4 w-4" />
-                    Hard Refresh
-                  </Button>
-                </div>
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">Created</div>
-                  <div className="font-medium">
-                    {new Date(build.created_at).toLocaleDateString()}
-                  </div>
+              <div className="text-right">
+                <div className="text-sm text-muted-foreground mb-1">Created</div>
+                <div className="font-medium">
+                  {new Date(build.created_at).toLocaleDateString()}
                 </div>
               </div>
             </div>
@@ -202,52 +269,158 @@ export const BuildDetail = () => {
       </div>
 
 
-      {/* Enhanced Main Tabs */}
+      {/* Enhanced Main Tabs with Progress Indicator */}
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="grid w-full grid-cols-5 h-12 card-glass backdrop-blur-sm">
-          <TabsTrigger value="overview" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground transition-all">
-            <Database className="w-4 h-4 mr-2" />
-            Data Overview
-          </TabsTrigger>
-          <TabsTrigger value="assignments" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground transition-all">
-            <Users className="w-4 h-4 mr-2" />
-            Assignments
-          </TabsTrigger>
-          <TabsTrigger value="balancing" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground transition-all">
-            <Target className="w-4 h-4 mr-2" />
-            Balancing
-          </TabsTrigger>
-          <TabsTrigger value="clashes" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground transition-all">
-            <AlertTriangle className="w-4 h-4 mr-2" />
-            Clashes
-          </TabsTrigger>
-          <TabsTrigger value="review" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground transition-all">
-            <FileText className="w-4 h-4 mr-2" />
-            Review
-          </TabsTrigger>
+        {/* Progress Steps Navigation - Rectangular Design */}
+        <div className="mb-6">
+          {/* Check unlock conditions for two-stage flow */}
+          {(() => {
+            const hasAccounts = (buildData?.accounts.total || 0) > 0;
+            const hasSalesReps = (buildData?.salesReps.total || 0) > 0;
+            const hasAssignments = (buildData?.assignments.total || 0) > 0;
+            
+            // Stage 1: Accounts + Sales Reps imported -> unlocks Assignments (Opportunities optional)
+            const isStage1Complete = hasAccounts && hasSalesReps;
+            // Stage 2: Assignments have been applied at some point -> unlocks Balancing, Clashes, Review permanently
+            // Uses !stage2WasLocked because once unlocked, it stays unlocked even if assignments are reset
+            const isStage2Complete = hasAssignments || !stage2WasLocked;
+            
+            // Generate appropriate message based on what's missing
+            const getMissingMessage = (tabValue: string) => {
+              if (tabValue === 'assignments') {
+                const missing = [];
+                if (!hasAccounts) missing.push('Accounts');
+                if (!hasSalesReps) missing.push('Sales Reps');
+                return missing.length > 0 ? `Import ${missing.join(' and ')} to unlock` : '';
+              } else {
+                return 'Apply assignments first to unlock';
+              }
+            };
+            
+            return (
+              <div className="flex items-stretch gap-1 relative">
+                {[
+                  { value: 'import', icon: Upload, label: 'Import Data', step: 1, unlockStage: 0 },
+                  { value: 'overview', icon: Database, label: 'Data Overview', step: 2, unlockStage: 0 },
+                  { value: 'assignments', icon: Users, label: 'Assignments', step: 3, unlockStage: 1 },
+                  { value: 'balancing', icon: Target, label: 'Balancing', step: 4, unlockStage: 2 },
+                  { value: 'clashes', icon: AlertTriangle, label: 'Clashes', step: 5, unlockStage: 2 },
+                  { value: 'review', icon: FileText, label: 'Review', step: 6, unlockStage: 2 },
+                ].map((tab, index, arr) => {
+                  const tabIndex = ['import', 'overview', 'assignments', 'balancing', 'clashes', 'review'].indexOf(activeTab);
+                  const isActive = activeTab === tab.value;
+                  const isCompleted = index < tabIndex;
+                  const isLast = index === arr.length - 1;
+                  
+                  // Determine if tab is locked based on its unlock stage
+                  const isLocked = tab.unlockStage === 1 ? !isStage1Complete 
+                                 : tab.unlockStage === 2 ? !isStage2Complete 
+                                 : false;
+                  const isJustUnlocked = recentlyUnlocked.includes(tab.value);
+                  const Icon = tab.icon;
+                  
+                  const tabButton = (
+                    <button
+                      key={tab.value}
+                      onClick={() => !isLocked && handleTabChange(tab.value)}
+                      disabled={isLocked}
+                      className={`
+                        relative flex-1 flex items-center justify-center gap-3 py-4 px-4 transition-all duration-300
+                        ${isLocked 
+                          ? 'bg-muted/30 text-muted-foreground/50 cursor-not-allowed'
+                          : isJustUnlocked
+                            ? 'unlock-flash'
+                            : isActive 
+                              ? 'bg-primary text-primary-foreground shadow-lg' 
+                              : isCompleted 
+                                ? 'bg-primary/20 text-primary hover:bg-primary/30' 
+                                : 'bg-muted/50 text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                        }
+                        ${index === 0 ? 'rounded-l-lg' : ''}
+                        ${isLast ? 'rounded-r-lg' : ''}
+                      `}
+                      style={{
+                        clipPath: isLast 
+                          ? 'polygon(0 0, 100% 0, 100% 100%, 0 100%, 8px 50%)' 
+                          : index === 0 
+                            ? 'polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%)'
+                            : 'polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%, 8px 50%)'
+                      }}
+                    >
+                      {/* Step number or lock icon */}
+                      <span className={`
+                        w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold shrink-0 transition-all duration-500
+                        ${isLocked
+                          ? 'bg-muted-foreground/10 text-muted-foreground/50'
+                          : isJustUnlocked
+                            ? 'bg-white/30'
+                            : isActive 
+                              ? 'bg-primary-foreground/20 text-primary-foreground' 
+                              : isCompleted
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted-foreground/20 text-muted-foreground'
+                        }
+                      `}>
+                        {isLocked ? (
+                          <Lock className="w-3.5 h-3.5" />
+                        ) : (
+                          tab.step
+                        )}
+                      </span>
+                      
+                      {/* Icon and Label */}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Icon className={`w-5 h-5 shrink-0 transition-all duration-300 ${isLocked ? 'opacity-50' : isJustUnlocked ? 'scale-125' : ''}`} />
+                        <span className={`font-medium text-sm truncate hidden lg:block transition-all duration-300 ${isLocked ? 'opacity-50' : isJustUnlocked ? 'font-bold' : ''}`}>{tab.label}</span>
+                      </div>
+                      
+                    </button>
+                  );
+                  
+                  // Wrap locked tabs with tooltip
+                  if (isLocked) {
+                    return (
+                      <Tooltip key={tab.value}>
+                        <TooltipTrigger asChild>
+                          {tabButton}
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="bg-popover border shadow-lg">
+                          <div className="flex items-center gap-2">
+                            <Lock className="w-4 h-4 text-muted-foreground" />
+                            <span>{getMissingMessage(tab.value)}</span>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    );
+                  }
+                  
+                  return tabButton;
+                })}
+              </div>
+            );
+          })()}
+        </div>
+        
+        {/* Hidden TabsList for accessibility - actual triggers above */}
+        <TabsList className="hidden">
+          <TabsTrigger value="import">Import</TabsTrigger>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="assignments">Assignments</TabsTrigger>
+          <TabsTrigger value="balancing">Balancing</TabsTrigger>
+          <TabsTrigger value="clashes">Clashes</TabsTrigger>
+          <TabsTrigger value="review">Review</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="space-y-6">
-          {/* Data Validation Alert */}
-          {buildData && buildData.accounts.total > 0 && buildData.accounts.total < 20000 && <Alert className="border-warning bg-warning/10">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription className="space-y-3">
-                <div>
-                  <strong>⚠️ Limited Data Detected:</strong> Showing {buildData.accounts.total.toLocaleString()} accounts, expected 27,000+. 
-                  This indicates cache issues.
-                </div>
-                <div className="flex gap-2 items-center text-sm">
-                  <Button variant="outline" size="sm" onClick={() => window.location.reload()} className="flex items-center gap-1">
-                    <RefreshCw className="h-3 w-3" />
-                    Hard Refresh
-                  </Button>
-                  <span className="text-muted-foreground">
-                    or press <kbd className="px-2 py-1 bg-muted rounded text-xs">Ctrl+Shift+R</kbd> (Windows) / <kbd className="px-2 py-1 bg-muted rounded text-xs">Cmd+Shift+R</kbd> (Mac)
-                  </span>
-                </div>
-              </AlertDescription>
-            </Alert>}
+        <TabsContent value="import" className="space-y-6">
+          <DataImport 
+            buildId={id!} 
+            onImportComplete={handleImportComplete}
+            onDataChange={handleDataChange}
+            onContinue={() => handleTabChange('overview')}
+          />
+        </TabsContent>
 
+        <TabsContent value="overview" className="space-y-6">
           {/* Enhanced Financial Overview with Interactive Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <Card className="card-elevated card-glass hover-lift group">
@@ -407,7 +580,7 @@ export const BuildDetail = () => {
               </CardContent>
             </Card>}
           
-          {buildData && buildData.accounts.total > 0 && (buildData.opportunities.total === 0 || buildData.salesReps.total === 0) && <Card className="card-elevated card-glass">
+          {buildData && buildData.accounts.total > 0 && buildData.salesReps.total === 0 && <Card className="card-elevated card-glass">
               <CardContent className="pt-6">
                 <div className="text-center space-y-6">
                   <div className="w-20 h-20 mx-auto bg-success/20 rounded-full flex items-center justify-center animate-pulse">
@@ -433,7 +606,7 @@ export const BuildDetail = () => {
               </CardContent>
             </Card>}
 
-          {buildData && buildData.accounts.total > 0 && buildData.opportunities.total > 0 && buildData.salesReps.total > 0 && <Card className="card-elevated card-glass border-glow">
+          {buildData && buildData.accounts.total > 0 && buildData.salesReps.total > 0 && <Card className="card-elevated card-glass border-glow">
               <CardContent className="pt-6">
                 <div className="text-center space-y-6">
                   <div className="w-20 h-20 mx-auto bg-gradient-primary rounded-full flex items-center justify-center animate-spin-slow shadow-glow shadow-primary/30">
@@ -447,8 +620,8 @@ export const BuildDetail = () => {
                   </div>
                   <div className="flex flex-wrap gap-3 justify-center">
                     <Button variant="glow" size="lg" onClick={() => setActiveTab('assignments')}>
-                      <Cog className="mr-2 h-5 w-5" />
-                      Run Assignment Engine
+                      <Users className="mr-2 h-5 w-5" />
+                      View Assignment Engine
                     </Button>
                     <Button variant="glass" onClick={() => setActiveTab('balancing')}>
                       <Target className="mr-2 h-4 w-4" />

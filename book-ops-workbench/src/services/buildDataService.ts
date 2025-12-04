@@ -44,6 +44,11 @@ export interface BuildDataSummary {
       APAC: number;
     };
   };
+  assignments: {
+    total: number;
+    applied: number;
+    pending: number;
+  };
   dataQuality: {
     orphanedAccounts: number;
     orphanedOpportunities: number;
@@ -186,23 +191,27 @@ class BuildDataService {
       const fetchTime = performance.now() - startTime;
       console.log(`[BuildDataService] ⚡ Loaded ${allAccounts.length} accounts in ${fetchTime.toFixed(0)}ms (${totalPages} parallel batches)`)
 
-      // Fetch opportunities and sales reps (can use single queries as they're likely under 1000)
-      const [opportunitiesRes, salesRepsRes] = await Promise.all([
+      // Fetch opportunities, sales reps, and assignments (can use single queries as they're likely under 1000)
+      const [opportunitiesRes, salesRepsRes, assignmentsRes] = await Promise.all([
         supabase.from('opportunities').select('*').eq('build_id', buildId).limit(50000),
-        supabase.from('sales_reps').select('*').eq('build_id', buildId).limit(50000)
+        supabase.from('sales_reps').select('*').eq('build_id', buildId).limit(50000),
+        supabase.from('assignments').select('*').eq('build_id', buildId).limit(50000)
       ]);
 
       if (opportunitiesRes.error) throw opportunitiesRes.error;
       if (salesRepsRes.error) throw salesRepsRes.error;
+      if (assignmentsRes.error) throw assignmentsRes.error;
 
       const accounts = allAccounts;
       const opportunities = opportunitiesRes.data || [];
       const salesReps = salesRepsRes.data || [];
+      const assignments = assignmentsRes.data || [];
 
       console.log(`[BuildDataService] Raw data fetched for build ${buildId}:`);
       console.log(`- Total accounts: ${accounts.length}`);
       console.log(`- Total opportunities: ${opportunities.length}`);
       console.log(`- Total sales reps: ${salesReps.length}`);
+      console.log(`- Total assignments: ${assignments.length}`);
       
       // Debug account classification (use hierarchy ARR logic like Assignment Engine)
       const parentAccounts = accounts.filter(a => a.is_parent);
@@ -276,6 +285,11 @@ class BuildDataService {
           activeReps: salesReps.filter(rep => rep.is_active).length,
           inactiveReps: salesReps.filter(rep => !rep.is_active).length,
           byRegion: repsByRegion,
+        },
+        assignments: {
+          total: assignments.length,
+          applied: assignments.filter(a => a.status === 'applied' || a.status === 'executed').length,
+          pending: assignments.filter(a => a.status === 'pending' || a.status === 'proposed').length,
         },
         dataQuality: {
           orphanedAccounts: accounts.filter(a => a.is_parent && !a.owner_id).length,

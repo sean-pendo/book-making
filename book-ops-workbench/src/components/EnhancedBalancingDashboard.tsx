@@ -190,6 +190,21 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
   };
 
   const repMetrics: RepMetrics[] = data.repMetrics;
+  const beforeMetrics = data.beforeMetrics;
+
+  // Determine if warning is actually necessary - only show when imbalance is significant
+  const shouldShowWarning = () => {
+    // Don't show warning if regional alignment is good (>= 60%)
+    if (balanceMetrics.avgRegionalAlignment >= 60) {
+      return false;
+    }
+    
+    // Only show warning if variance is significant (>30%) OR there are actually overloaded/underloaded reps
+    const hasSignificantVariance = balanceMetrics.maxArrVariance > 30;
+    const hasImbalancedReps = repMetrics.some(rep => rep.status === 'Overloaded' || rep.status === 'Light');
+    
+    return balanceMetrics.arrBalance === 'Unbalanced' && (hasSignificantVariance || hasImbalancedReps);
+  };
 
   const getBalanceStatusColor = (status: string) => {
     switch (status) {
@@ -306,22 +321,22 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
           </div>
         </div>
 
-        {/* Balance Status Alert */}
-        <Alert className={balanceMetrics.arrBalance === 'Unbalanced' ? 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30' : 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30'}>
-          <TrendingUp className="h-4 w-4" />
-          <AlertDescription className={balanceMetrics.arrBalance === 'Unbalanced' ? 'text-red-900 dark:text-red-200' : 'text-green-900 dark:text-green-200'}>
-            <strong>Territory Status:</strong> {balanceMetrics.arrBalance}
-            {balanceMetrics.arrBalance === 'Unbalanced' && (
+        {/* Balance Status Alert - Only show warning when imbalance is significant */}
+        {shouldShowWarning() && (
+          <Alert className="border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30">
+            <TrendingUp className="h-4 w-4" />
+            <AlertDescription className="text-red-900 dark:text-red-200">
+              <strong>Territory Status:</strong> {balanceMetrics.arrBalance}
               <span className="ml-2 text-sm">Territory rebalancing may be needed for optimal distribution.</span>
-            )}
-          </AlertDescription>
-        </Alert>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Summary Cards */}
         <div className="grid gap-4 md:grid-cols-6">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Customer Accounts</CardTitle>
+              <CardTitle className="text-sm font-medium">Parent Customer Accounts</CardTitle>
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
@@ -334,7 +349,7 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Prospect Accounts</CardTitle>
+              <CardTitle className="text-sm font-medium">Parent Prospect Accounts</CardTitle>
               <Building className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
@@ -440,11 +455,11 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
                           <div className="text-right space-y-1">
                             <div className="text-sm">
                               <span className="font-medium">{rep.customerAccounts}</span>
-                              <span className="text-muted-foreground"> customers</span>
+                              <span className="text-muted-foreground"> parent customers</span>
                             </div>
                             <div className="text-sm">
                               <span className="font-medium">{rep.prospectAccounts}</span>
-                              <span className="text-muted-foreground"> prospects</span>
+                              <span className="text-muted-foreground"> parent prospects</span>
                             </div>
                           </div>
                         </div>

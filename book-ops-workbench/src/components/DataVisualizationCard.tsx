@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ProgressRing } from './ProgressRing';
 import { AnimatedCounter } from './AnimatedCounter';
 import { motion } from 'framer-motion';
@@ -146,12 +146,11 @@ export const DataVisualizationCard = ({
   };
 
   return (
-    <TooltipProvider>
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className={className}
-      >
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={className}
+    >
         <Card
           className={`
             card-interactive transition-all duration-300
@@ -213,7 +212,6 @@ export const DataVisualizationCard = ({
             )}
           </CardContent>
         </Card>
-      </motion.div>
-    </TooltipProvider>
+    </motion.div>
   );
 };

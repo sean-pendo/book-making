@@ -2,17 +2,9 @@ import React from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { 
   Home, 
-  Database, 
   Settings, 
-  FileBarChart, 
   Users, 
-  Scale, 
-  AlertTriangle, 
   MessageSquare, 
-  BarChart3, 
-  Download, 
-  Shield,
-  LogOut,
   ClipboardCheck
 } from 'lucide-react';
 import {
@@ -20,10 +12,7 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
+  SidebarTrigger,
   useSidebar,
 } from '@/components/ui/sidebar';
 import { useAuth } from '@/contexts/AuthContext';
@@ -35,26 +24,22 @@ import { UserImpersonation } from '@/components/UserImpersonation';
 // Map URLs to permission keys
 const urlToPermissionKey: Record<string, keyof RolePermissions["pages"]> = {
   '/': 'dashboard',
-  '/import': 'data_import',
   '/manager-dashboard': 'manager_dashboard',
   '/review': 'review_notes',
   '/revops-final': 'revops_final',
-  '/settings': 'settings',
 };
 
 const navigationItems = [
-  { title: 'Dashboard', url: '/', icon: Home },
-  { title: 'Data Import', url: '/import', icon: Database },
-  { title: 'Manager Dashboard', url: '/manager-dashboard', icon: Users },
+  { title: 'Builds', url: '/', icon: Home, matchPaths: ['/', '/build'] },
+  { title: 'Manager Dashboard', url: '/manager-dashboard', icon: Users, hideForRoles: ['REVOPS'] },
   { title: 'Review & Notes', url: '/review', icon: MessageSquare },
   { title: 'RevOps Final View', url: '/revops-final', icon: ClipboardCheck },
-  { title: 'Settings', url: '/settings', icon: Settings },
 ];
 
 export function AppSidebar() {
   const { state } = useSidebar();
   const location = useLocation();
-  const { signOut, effectiveProfile, impersonatedUser, setImpersonatedUser } = useAuth();
+  const { effectiveProfile, impersonatedUser, setImpersonatedUser } = useAuth();
   const { hasPageAccess, isLoading: permissionsLoading } = useRolePermissions();
   const currentPath = location.pathname;
   const isCollapsed = state === 'collapsed';
@@ -65,52 +50,112 @@ export function AppSidebar() {
     <Sidebar collapsible="icon" className="border-r border-sidebar-border/50 backdrop-blur-sm">
       <SidebarContent className="bg-gradient-subtle">
         <SidebarGroup>
-          <SidebarGroupLabel className="px-4 py-3">
-            {!isCollapsed && (
-              <div className="flex items-center gap-3 text-sidebar-primary">
-                <div className="p-1.5 bg-gradient-primary rounded-lg shadow-md hover-glow">
-                  <FileBarChart className="h-4 w-4 text-primary-foreground" />
-                </div>
-                <span className="font-bold text-lg">Book Builder</span>
-              </div>
-            )}
-          </SidebarGroupLabel>
-          
           <SidebarGroupContent className="px-2">
-            <SidebarMenu className="space-y-2">
-              {navigationItems.filter(item => {
-                // Use dynamic permissions from database
+            {/* Collapse Toggle - aligned with nav dots */}
+            <div className="flex items-center h-16 px-2">
+              <div className="flex items-center justify-center w-[6px]">
+                <SidebarTrigger className="hover-scale -ml-[2px]" />
+              </div>
+            </div>
+            
+            {/* Clean Vertical Stepper */}
+            {(() => {
+              const filteredItems = navigationItems.filter(item => {
+                if (item.hideForRoles && effectiveProfile?.role) {
+                  const userRole = effectiveProfile.role.toUpperCase();
+                  if (item.hideForRoles.includes(userRole)) {
+                    return false;
+                  }
+                }
                 const permissionKey = urlToPermissionKey[item.url];
                 if (permissionKey) {
                   return hasPageAccess(permissionKey);
                 }
-                // Fallback: show the item if no permission mapping exists
                 return true;
-              }).map((item, index) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
-                   <NavLink 
-                      to={item.url} 
-                      end 
-                      className={({ isActive }) => 
-                        `flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-300 group relative overflow-hidden ${
-                          isActive 
-                            ? 'bg-gradient-to-r from-primary/20 to-primary/10 text-primary border-r-2 border-primary shadow-sm' 
-                            : 'hover:bg-sidebar-accent/70 text-sidebar-foreground hover:shadow-sm'
-                        }`
-                      }
+              });
+              
+              // Helper to check if path matches item
+              const isPathMatch = (item: typeof filteredItems[0], path: string) => {
+                const pathsToMatch = item.matchPaths || [item.url];
+                return pathsToMatch.some(p => path === p || path.startsWith(p + '/'));
+              };
+              
+              const currentIndex = filteredItems.findIndex(item => isPathMatch(item, currentPath));
+              
+              // Calculate progress percentage based on current step
+              const totalSteps = filteredItems.length;
+              const progressPercent = totalSteps > 1 
+                ? (currentIndex / (totalSteps - 1)) * 100 
+                : 0;
+              
+              return (
+                <div className="relative">
+                  {/* Vertical line container - centered with dots */}
+                  {!isCollapsed && (
+                    <div 
+                      className="absolute w-[2px] bg-border/50 rounded-full" 
+                      style={{ 
+                        left: '10px', 
+                        top: '20px', 
+                        bottom: '20px' 
+                      }}
                     >
-                      <item.icon className="h-4 w-4 transition-colors duration-200" />
-                      {!isCollapsed && (
-                        <span className="transition-all duration-200">
-                          {item.title}
-                        </span>
-                      )}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
+                      {/* Progress fill - colored portion */}
+                      <div 
+                        className="absolute top-0 left-0 w-full bg-primary/60 rounded-full transition-all duration-300"
+                        style={{ height: `${progressPercent}%` }}
+                      />
+                    </div>
+                  )}
+                  
+                  <div className="space-y-1">
+                    {filteredItems.map((item, index) => {
+                      const isItemActive = isPathMatch(item, currentPath);
+                      const isCompleted = index < currentIndex;
+                      const Icon = item.icon;
+                      
+                      return (
+                        <NavLink
+                          key={item.title}
+                          to={item.url}
+                          end
+                          className={`
+                            flex items-center gap-3 px-2 py-2.5 rounded-lg transition-all duration-200 group relative
+                            ${isItemActive 
+                              ? 'bg-primary/10 text-primary' 
+                              : isCompleted
+                                ? 'text-primary/70 hover:text-primary hover:bg-muted/50'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                            }
+                          `}
+                        >
+                          {/* Dot indicator - centered at 11px (8px padding + 3px half of 6px dot) */}
+                          <div className={`
+                            relative z-10 w-[6px] h-[6px] rounded-full shrink-0 transition-all duration-200
+                            ${isItemActive 
+                              ? 'bg-primary scale-150 shadow-[0_0_8px_rgba(var(--primary-rgb),0.5)]' 
+                              : isCompleted 
+                                ? 'bg-primary/70' 
+                                : 'bg-muted-foreground/40'
+                            }
+                          `} />
+                          
+                          {/* Icon and Label */}
+                          {!isCollapsed && (
+                            <>
+                              <Icon className={`w-4 h-4 shrink-0 ${isCompleted ? 'opacity-80' : ''}`} />
+                              <span className={`font-medium text-sm ${isCompleted ? 'opacity-80' : ''}`}>
+                                {item.title}
+                              </span>
+                            </>
+                          )}
+                        </NavLink>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </SidebarGroupContent>
         </SidebarGroup>
 
@@ -125,7 +170,7 @@ export function AppSidebar() {
           </div>
         )}
 
-        {/* Enhanced User info and sign out */}
+        {/* User info and Settings link */}
         <div className="mt-auto p-3 border-t border-sidebar-border/50 bg-gradient-subtle">
           {!isCollapsed && effectiveProfile && (
             <div className="mb-3 p-3 card-glass rounded-lg border bg-card text-card-foreground shadow-sm">
@@ -136,7 +181,7 @@ export function AppSidebar() {
                 </div>
                 <div className="text-muted-foreground flex items-center gap-2">
                   <Badge variant="outline" className="text-xs px-2 py-0">
-                    {effectiveProfile.role?.toLowerCase()}
+                    {effectiveProfile.role?.toUpperCase()}
                   </Badge>
                   <span>•</span>
                   <span>{effectiveProfile.region}</span>
@@ -149,15 +194,19 @@ export function AppSidebar() {
               </div>
             </div>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={signOut}
-            className="w-full justify-start hover:bg-destructive/10 hover:text-destructive transition-all group"
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 w-full ${
+                isActive
+                  ? 'bg-primary/10 text-primary'
+                  : 'hover:bg-sidebar-accent/70 text-sidebar-foreground'
+              }`
+            }
           >
-            <LogOut className="h-4 w-4 group-hover:animate-bounce" />
-            {!isCollapsed && <span className="ml-2">Sign Out</span>}
-          </Button>
+            <Settings className="h-4 w-4" />
+            {!isCollapsed && <span>Settings</span>}
+          </NavLink>
         </div>
       </SidebarContent>
     </Sidebar>

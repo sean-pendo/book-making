@@ -6,8 +6,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Search, Download, ChevronUp, ChevronDown, Sparkles, Lock, Unlock, Info } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Search, Download, ChevronUp, ChevronDown, Sparkles, Lock, Unlock, Info, Building2, GitBranch } from 'lucide-react';
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
 import { useToast } from '@/hooks/use-toast';
 
@@ -41,6 +41,7 @@ interface Account {
   expansion_score: number | null;
   initial_sale_score: number | null;
   cre_risk: boolean | null;
+  cre_status: string | null;
   risk_flag: boolean | null;
   renewal_date: string | null;
   exclude_from_reassignment: boolean | null;
@@ -212,7 +213,7 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
           hierarchy_bookings_arr_converted, cre_count,
           is_customer, geo, enterprise_vs_commercial, hq_country, account_type,
           sales_territory, expansion_tier, initial_sale_tier, expansion_score,
-          initial_sale_score, cre_risk, risk_flag, renewal_date, exclude_from_reassignment
+          initial_sale_score, cre_risk, cre_status, risk_flag, renewal_date, exclude_from_reassignment
         `)
         .eq('build_id', buildId);
 
@@ -350,10 +351,29 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
     };
   };
 
-  const getRiskBadge = (cre_risk: boolean | null, risk_flag: boolean | null) => {
+  const getRiskBadge = (account: Account) => {
+    const { cre_status, cre_risk, risk_flag } = account;
+    
+    // Show actual CRE status if available
+    if (cre_status) {
+      switch (cre_status) {
+        case 'Confirmed Churn':
+          return <Badge variant="destructive" className="bg-red-700">Confirmed Churn</Badge>;
+        case 'At Risk':
+          return <Badge variant="destructive">At Risk</Badge>;
+        case 'Monitoring':
+          return <Badge variant="default" className="bg-amber-500">Monitoring</Badge>;
+        case 'Pre-Risk Discovery':
+          return <Badge variant="outline" className="border-amber-400 text-amber-600">Pre-Risk</Badge>;
+        case 'Closed':
+          return <Badge variant="secondary">Closed</Badge>;
+      }
+    }
+    
+    // Fallback to boolean flags
     if (cre_risk) return <Badge variant="destructive">CRE Risk</Badge>;
     if (risk_flag) return <Badge variant="destructive">Risk Flag</Badge>;
-    return <Badge variant="secondary">Low Risk</Badge>;
+    return <Badge variant="secondary">No Risk</Badge>;
   };
 
   const getTierBadge = (tier: string | null) => {
@@ -545,47 +565,53 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleExclusionMutation.mutate({
-                                    accountId: account.sfdc_account_id,
-                                    currentValue: account.exclude_from_reassignment || false
-                                  });
-                                }}
-                                disabled={toggleExclusionMutation.isPending}
-                                className="h-8 w-8 p-0"
-                              >
-                                {account.exclude_from_reassignment ? (
-                                  <Lock className="h-4 w-4 text-orange-500" />
-                                ) : (
-                                  <Unlock className="h-4 w-4 text-muted-foreground" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>
-                                {account.exclude_from_reassignment
-                                  ? 'Click to allow reassignment'
-                                  : 'Click to lock and keep current owner'}
-                              </p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleExclusionMutation.mutate({
+                                  accountId: account.sfdc_account_id,
+                                  currentValue: account.exclude_from_reassignment || false
+                                });
+                              }}
+                              disabled={toggleExclusionMutation.isPending}
+                              className="h-8 w-8 p-0"
+                            >
+                              {account.exclude_from_reassignment ? (
+                                <Lock className="h-4 w-4 text-orange-500" />
+                              ) : (
+                                <Unlock className="h-4 w-4 text-muted-foreground" />
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>
+                              {account.exclude_from_reassignment
+                                ? 'Click to allow reassignment'
+                                : 'Click to lock and keep current owner'}
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          <Badge variant={hierarchy.isParent ? "default" : "outline"} className="text-xs">
-                            {hierarchy.isParent ? "Parent" : "Child"}
-                          </Badge>
+                          {hierarchy.isParent ? (
+                            <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800 w-fit">
+                              <Building2 className="h-3 w-3 mr-1" />
+                              Parent
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-950/50 dark:text-slate-400 dark:border-slate-700 w-fit">
+                              <GitBranch className="h-3 w-3 mr-1" />
+                              Child
+                            </Badge>
+                          )}
                           {hierarchy.hasParent && hierarchy.parentName && (
                             <span className="text-xs text-muted-foreground max-w-[120px] truncate">
-                              Parent: {hierarchy.parentName}
+                              of: {hierarchy.parentName}
                             </span>
                           )}
                         </div>
@@ -610,23 +636,21 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                         )}
                       </TableCell>
                       <TableCell>
-                        <TooltipProvider>
-                          {(account as any).assignments?.[0]?.rationale ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Badge variant="outline" className="cursor-help gap-1">
-                                  <Sparkles className="h-3 w-3" />
-                                  Why this rep?
-                                </Badge>
-                              </TooltipTrigger>
-                              <TooltipContent className="max-w-md">
-                                <p className="text-sm">{(account as any).assignments[0].rationale}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">-</span>
-                          )}
-                        </TooltipProvider>
+                        {(account as any).assignments?.[0]?.rationale ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge variant="outline" className="cursor-help gap-1">
+                                <Sparkles className="h-3 w-3" />
+                                Why this rep?
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-md">
+                              <p className="text-sm">{(account as any).assignments[0].rationale}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         {account.sales_territory ? (
@@ -707,7 +731,7 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {getRiskBadge(account.cre_risk, account.risk_flag)}
+                        {getRiskBadge(account)}
                       </TableCell>
                     </TableRow>
                   );

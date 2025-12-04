@@ -2,8 +2,8 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Edit, CheckCircle, UserX, Lock, Unlock, Info } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Edit, CheckCircle, UserX, Lock, Unlock, Info, Building2, GitBranch, ChevronUp, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { getAccountARR, getAccountATR, formatCurrency } from '@/utils/accountCalculations';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -31,6 +31,9 @@ interface Account {
   is_parent: boolean;
   risk_flag: boolean;
   cre_risk: boolean;
+  cre_status?: string;
+  cre_count?: number;
+  child_count?: number;
   expansion_score?: number;
   account_type?: string;
   industry?: string;
@@ -95,6 +98,64 @@ export const VirtualizedAccountTable = ({
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingLocks, setPendingLocks] = useState<Set<string>>(new Set());
+  const [sortField, setSortField] = useState<keyof Account | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [childrenData, setChildrenData] = useState<Map<string, Account[]>>(new Map());
+  const [loadingChildren, setLoadingChildren] = useState<Set<string>>(new Set());
+
+  const toggleExpand = useCallback(async (parentId: string) => {
+    const newExpanded = new Set(expandedRows);
+    
+    if (newExpanded.has(parentId)) {
+      // Collapse
+      newExpanded.delete(parentId);
+      setExpandedRows(newExpanded);
+    } else {
+      // Expand - fetch children if not already loaded
+      newExpanded.add(parentId);
+      setExpandedRows(newExpanded);
+      
+      if (!childrenData.has(parentId) && buildId) {
+        setLoadingChildren(prev => new Set(prev).add(parentId));
+        
+        const { data, error } = await supabase
+          .from('accounts')
+          .select('*')
+          .eq('build_id', buildId)
+          .eq('ultimate_parent_id', parentId)
+          .neq('sfdc_account_id', parentId)
+          .order('account_name');
+        
+        setLoadingChildren(prev => {
+          const next = new Set(prev);
+          next.delete(parentId);
+          return next;
+        });
+        
+        if (!error && data) {
+          setChildrenData(prev => new Map(prev).set(parentId, data as Account[]));
+        }
+      }
+    }
+  }, [expandedRows, childrenData, buildId]);
+
+  const handleSort = useCallback((field: keyof Account) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+    setCurrentPage(1); // Reset to first page when sorting
+  }, [sortField]);
+
+  const SortIcon = ({ field }: { field: keyof Account }) => {
+    if (sortField !== field) return <ChevronUp className="h-3 w-3 opacity-30" />;
+    return sortDirection === 'asc' 
+      ? <ChevronUp className="h-3 w-3" /> 
+      : <ChevronDown className="h-3 w-3" />;
+  };
   
   const toggleExclusionMutation = useMutation({
     mutationFn: async ({ accountId, currentValue, account }: { accountId: string; currentValue: boolean; account: Account }) => {
@@ -125,41 +186,38 @@ export const VirtualizedAccountTable = ({
       if (error) throw error;
     },
     onMutate: async ({ accountId, currentValue, account }) => {
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['build-data', buildId] });
+      // Cancel outgoing refetches for the correct query key
+      await queryClient.cancelQueries({ queryKey: ['build-parent-accounts-optimized', buildId] });
       
       // Snapshot previous value
-      const previousData = queryClient.getQueryData(['build-data', buildId]);
+      const previousData = queryClient.getQueryData(['build-parent-accounts-optimized', buildId]);
       
       const isLocking = !currentValue;
       
-      // Optimistically update ALL related queries
-      queryClient.setQueriesData({ queryKey: ['build-data'] }, (old: any) => {
+      // Optimistically update the accounts array directly
+      queryClient.setQueryData(['build-parent-accounts-optimized', buildId], (old: Account[] | undefined) => {
         if (!old) return old;
         
-        return {
-          ...old,
-          accounts: old.accounts?.map((acc: Account) => {
-            if (acc.sfdc_account_id === accountId) {
-              if (isLocking && acc.owner_id) {
-                return { 
-                  ...acc, 
-                  exclude_from_reassignment: true,
-                  new_owner_id: acc.owner_id,
-                  new_owner_name: acc.owner_name
-                };
-              } else {
-                return { 
-                  ...acc, 
-                  exclude_from_reassignment: false,
-                  new_owner_id: null,
-                  new_owner_name: null
-                };
-              }
+        return old.map((acc: Account) => {
+          if (acc.sfdc_account_id === accountId) {
+            if (isLocking && acc.owner_id) {
+              return { 
+                ...acc, 
+                exclude_from_reassignment: true,
+                new_owner_id: acc.owner_id,
+                new_owner_name: acc.owner_name
+              };
+            } else {
+              return { 
+                ...acc, 
+                exclude_from_reassignment: false,
+                new_owner_id: null,
+                new_owner_name: null
+              };
             }
-            return acc;
-          }),
-        };
+          }
+          return acc;
+        });
       });
       
       return { previousData };
@@ -172,7 +230,7 @@ export const VirtualizedAccountTable = ({
       
       // Rollback on error
       if (context?.previousData) {
-        queryClient.setQueryData(['build-data', buildId], context.previousData);
+        queryClient.setQueryData(['build-parent-accounts-optimized', buildId], context.previousData);
       }
       console.error('Error toggling exclusion:', error);
       toast({
@@ -182,23 +240,24 @@ export const VirtualizedAccountTable = ({
       });
     },
     onSuccess: (_, variables) => {
-      // Remove from pending locks on success
+      // Remove from pending locks on success - keep the optimistic update, don't refetch
       const newPending = new Set(pendingLocks);
       newPending.delete(variables.accountId);
       setPendingLocks(newPending);
       
-      queryClient.invalidateQueries({ queryKey: ['build-data'] });
+      // Don't invalidate - the optimistic update is already correct
+      // Only invalidate other dependent queries
       queryClient.invalidateQueries({ queryKey: ['accounts-detail'] });
       toast({
         title: "Success",
-        description: "Account exclusion status updated",
+        description: variables.currentValue ? "Account unlocked" : "Account locked to current owner",
       });
     },
   });
   
-  // Filter and paginate accounts
+  // Filter and sort accounts
   const filteredAccounts = useMemo(() => {
-    return accounts.filter(account => {
+    let result = accounts.filter(account => {
       // Search term filter
       if (searchTerm) {
         const searchLower = searchTerm.toLowerCase();
@@ -235,7 +294,44 @@ export const VirtualizedAccountTable = ({
       
       return true;
     });
-  }, [accounts, searchTerm, currentOwnerFilter, newOwnerFilter, lockStatusFilter, assignmentProposals]);
+
+    // Apply sorting
+    if (sortField) {
+      result = [...result].sort((a, b) => {
+        let aVal = a[sortField];
+        let bVal = b[sortField];
+        
+        // Handle special cases for calculated values
+        if (sortField === 'arr') {
+          aVal = getAccountARR(a);
+          bVal = getAccountARR(b);
+        } else if (sortField === 'calculated_atr') {
+          aVal = getAccountATR(a);
+          bVal = getAccountATR(b);
+        }
+        
+        // Handle nulls
+        if (aVal == null && bVal == null) return 0;
+        if (aVal == null) return sortDirection === 'asc' ? 1 : -1;
+        if (bVal == null) return sortDirection === 'asc' ? -1 : 1;
+        
+        // Compare
+        if (typeof aVal === 'string' && typeof bVal === 'string') {
+          return sortDirection === 'asc' 
+            ? aVal.localeCompare(bVal) 
+            : bVal.localeCompare(aVal);
+        }
+        
+        if (typeof aVal === 'number' && typeof bVal === 'number') {
+          return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+        }
+        
+        return 0;
+      });
+    }
+
+    return result;
+  }, [accounts, searchTerm, currentOwnerFilter, newOwnerFilter, lockStatusFilter, assignmentProposals, sortField, sortDirection]);
 
   // Memoized pagination calculation
   const paginatedData = useMemo(() => {
@@ -269,15 +365,30 @@ export const VirtualizedAccountTable = ({
   }, [opportunities]);
 
   const getContinuityRiskBadge = useCallback((account: Account) => {
-    // Enhanced risk calculation based on CRE count from opportunities
-    const creCount = (account as any).cre_count || 0;
+    // Use cre_status if available (rolled up from opportunities)
+    if (account.cre_status) {
+      switch (account.cre_status) {
+        case 'Confirmed Churn':
+          return <Badge variant="destructive">Confirmed Churn</Badge>;
+        case 'At Risk':
+          return <Badge variant="destructive">At Risk</Badge>;
+        case 'Monitoring':
+          return <Badge className="bg-amber-500">Monitoring</Badge>;
+        case 'Pre-Risk Discovery':
+          return <Badge variant="outline" className="border-amber-400 text-amber-600">Pre-Risk</Badge>;
+        case 'Closed':
+          return <Badge variant="secondary">Closed</Badge>;
+      }
+    }
     
+    // Fallback to CRE count if no status
+    const creCount = account.cre_count || 0;
     if (creCount === 0) {
       return <Badge variant="outline">No Risk</Badge>;
     } else if (creCount <= 2) {
-      return <Badge className="bg-orange-500">Medium Risk</Badge>;
+      return <Badge className="bg-amber-500">Medium</Badge>;
     } else {
-      return <Badge variant="destructive">High Risk</Badge>;
+      return <Badge variant="destructive">High</Badge>;
     }
   }, []);
 
@@ -332,40 +443,103 @@ export const VirtualizedAccountTable = ({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="min-w-[200px]">Account Details</TableHead>
-              <TableHead className="min-w-[80px]">
-                <TooltipProvider delayDuration={0}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className="flex items-center gap-1 cursor-help">
-                        <Lock className="h-3 w-3" />
-                        Keep
-                        <Info className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-[280px]" side="bottom">
-                      <p className="font-semibold mb-1">Lock Account</p>
-                      <p className="text-xs text-muted-foreground">
-                        Locking an account prevents the assignment engine from changing its owner. 
-                        Use this <strong>before</strong> generating assignments to keep accounts with their current owner.
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+              <TableHead 
+                className="min-w-[200px] cursor-pointer hover:bg-muted/50"
+                onClick={() => handleSort('account_name')}
+              >
+                <div className="flex items-center gap-1">
+                  Account Details
+                  <SortIcon field="account_name" />
+                </div>
               </TableHead>
-              <TableHead className="min-w-[120px]">Location</TableHead>
-              <TableHead className="min-w-[100px]">Tier</TableHead>
+              <TableHead className="min-w-[80px]">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-1 cursor-help">
+                      <Lock className="h-3 w-3" />
+                      Keep
+                      <Info className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-[280px]" side="bottom">
+                    <p className="font-semibold mb-1">Lock Account</p>
+                    <p className="text-xs text-muted-foreground">
+                      Locking an account prevents the assignment engine from changing its owner. 
+                      Use this <strong>before</strong> generating assignments to keep accounts with their current owner.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TableHead>
+              <TableHead 
+                className="min-w-[120px] cursor-pointer hover:bg-muted/50"
+                onClick={() => handleSort('sales_territory')}
+              >
+                <div className="flex items-center gap-1">
+                  Location
+                  <SortIcon field="sales_territory" />
+                </div>
+              </TableHead>
+              <TableHead 
+                className="min-w-[100px] cursor-pointer hover:bg-muted/50"
+                onClick={() => handleSort('expansion_tier')}
+              >
+                <div className="flex items-center gap-1">
+                  Tier
+                  <SortIcon field="expansion_tier" />
+                </div>
+              </TableHead>
               {accountType === 'prospect' ? (
                 <TableHead className="min-w-[120px]">Net ARR</TableHead>
               ) : (
                 <>
-                  <TableHead className="min-w-[100px]">ARR</TableHead>
-                  <TableHead className="min-w-[100px]">ATR</TableHead>
+                  <TableHead 
+                    className="min-w-[100px] cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort('arr')}
+                  >
+                    <div className="flex items-center gap-1">
+                      ARR
+                      <SortIcon field="arr" />
+                    </div>
+                  </TableHead>
+                  <TableHead 
+                    className="min-w-[100px] cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort('calculated_atr')}
+                  >
+                    <div className="flex items-center gap-1">
+                      ATR
+                      <SortIcon field="calculated_atr" />
+                    </div>
+                  </TableHead>
+                  <TableHead 
+                    className="min-w-[70px] cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort('child_count')}
+                  >
+                    <div className="flex items-center gap-1">
+                      Children
+                      <SortIcon field="child_count" />
+                    </div>
+                  </TableHead>
                 </>
               )}
-              <TableHead className="min-w-[180px]">Owner Assignment</TableHead>
+              <TableHead 
+                className="min-w-[180px] cursor-pointer hover:bg-muted/50"
+                onClick={() => handleSort('owner_name')}
+              >
+                <div className="flex items-center gap-1">
+                  Owner Assignment
+                  <SortIcon field="owner_name" />
+                </div>
+              </TableHead>
               <TableHead className="min-w-[180px]">Rule Applied</TableHead>
-              <TableHead className="min-w-[120px]">Risk</TableHead>
+              <TableHead 
+                className="min-w-[120px] cursor-pointer hover:bg-muted/50"
+                onClick={() => handleSort('cre_status')}
+              >
+                <div className="flex items-center gap-1">
+                  Risk
+                  <SortIcon field="cre_status" />
+                </div>
+              </TableHead>
               <TableHead className="min-w-[250px]">Reason</TableHead>
               <TableHead className="min-w-[100px]">Status</TableHead>
               <TableHead className="min-w-[100px]">Actions</TableHead>
@@ -373,49 +547,82 @@ export const VirtualizedAccountTable = ({
           </TableHeader>
           <TableBody>
             {paginatedData.map((account) => (
-              <TableRow key={account.sfdc_account_id}>
+              <React.Fragment key={account.sfdc_account_id}>
+              <TableRow>
                 <TableCell>
-                  <div>
-                    <div className="font-medium">{account.account_name}</div>
-                    <div className="text-sm text-muted-foreground">
-                      {account.sfdc_account_id}
+                  <div className="flex items-start gap-1">
+                    {/* Expand button for parents with children */}
+                    {account.child_count && account.child_count > 0 ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0 shrink-0"
+                        onClick={() => toggleExpand(account.sfdc_account_id)}
+                      >
+                        {loadingChildren.has(account.sfdc_account_id) ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : expandedRows.has(account.sfdc_account_id) ? (
+                          <ChevronDown className="h-4 w-4" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4" />
+                        )}
+                      </Button>
+                    ) : (
+                      <div className="w-6" /> 
+                    )}
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        {account.account_name}
+                        {account.is_parent ? (
+                          <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800">
+                            <Building2 className="h-3 w-3 mr-1" />
+                            Parent
+                          </Badge>
+                        ) : account.ultimate_parent_id ? (
+                          <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-950/50 dark:text-slate-400 dark:border-slate-700">
+                            <GitBranch className="h-3 w-3 mr-1" />
+                            Child
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {account.sfdc_account_id}
+                      </div>
                     </div>
                   </div>
                 </TableCell>
                 <TableCell>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                          <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleExclusionMutation.mutate({
-                              accountId: account.sfdc_account_id,
-                              currentValue: account.exclude_from_reassignment || false,
-                              account: account
-                            });
-                          }}
-                          disabled={toggleExclusionMutation.isPending}
-                          className="h-8 w-8 p-0 transition-all duration-200"
-                        >
-                          {account.exclude_from_reassignment || pendingLocks.has(account.sfdc_account_id) ? (
-                            <Lock className="h-4 w-4 text-yellow-600 transition-all duration-200 animate-scale-in" />
-                          ) : (
-                            <Unlock className="h-4 w-4 text-muted-foreground transition-colors duration-200" />
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>
-                          {account.exclude_from_reassignment || pendingLocks.has(account.sfdc_account_id)
-                            ? 'Locked - Click to allow reassignment'
-                            : 'Click to lock and keep current owner'}
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleExclusionMutation.mutate({
+                            accountId: account.sfdc_account_id,
+                            currentValue: account.exclude_from_reassignment || false,
+                            account: account
+                          });
+                        }}
+                        disabled={toggleExclusionMutation.isPending}
+                        className="h-8 w-8 p-0 transition-all duration-200"
+                      >
+                        {account.exclude_from_reassignment || pendingLocks.has(account.sfdc_account_id) ? (
+                          <Lock className="h-4 w-4 text-yellow-600 transition-all duration-200 animate-scale-in" />
+                        ) : (
+                          <Unlock className="h-4 w-4 text-muted-foreground transition-colors duration-200" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>
+                        {account.exclude_from_reassignment || pendingLocks.has(account.sfdc_account_id)
+                          ? 'Locked - Click to allow reassignment'
+                          : 'Click to lock and keep current owner'}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
                 </TableCell>
                 <TableCell>
                   <div className="text-sm">
@@ -433,6 +640,13 @@ export const VirtualizedAccountTable = ({
                   <>
                     <TableCell>{formatCurrency(getDisplayARR(account))}</TableCell>
                     <TableCell>{formatCurrency(getAccountATR(account))}</TableCell>
+                    <TableCell className="text-center">
+                      {account.child_count && account.child_count > 0 ? (
+                        <Badge variant="outline">{account.child_count}</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
                   </>
                 )}
                 <TableCell>
@@ -548,6 +762,44 @@ export const VirtualizedAccountTable = ({
                   </Button>
                 </TableCell>
               </TableRow>
+              
+              {/* Render child rows when expanded */}
+              {expandedRows.has(account.sfdc_account_id) && childrenData.get(account.sfdc_account_id)?.map((child) => (
+                <TableRow key={child.sfdc_account_id} className="bg-muted/30">
+                  <TableCell className="pl-10">
+                    <div className="flex items-center gap-2">
+                      <GitBranch className="h-3 w-3 text-muted-foreground" />
+                      <div>
+                        <div className="font-medium text-sm">{child.account_name}</div>
+                        <div className="text-xs text-muted-foreground">{child.sfdc_account_id}</div>
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell className="text-sm">{child.sales_territory || child.geo || '-'}</TableCell>
+                  <TableCell>
+                    <Badge variant="secondary" className="text-xs">
+                      {child.expansion_tier || child.initial_sale_tier || '-'}
+                    </Badge>
+                  </TableCell>
+                  {accountType === 'prospect' ? (
+                    <TableCell className="text-sm">{formatCurrency(child.arr || 0)}</TableCell>
+                  ) : (
+                    <>
+                      <TableCell className="text-sm">{formatCurrency(child.hierarchy_bookings_arr_converted || child.arr || 0)}</TableCell>
+                      <TableCell className="text-sm">{formatCurrency(child.calculated_atr || 0)}</TableCell>
+                      <TableCell className="text-center text-muted-foreground">-</TableCell>
+                    </>
+                  )}
+                  <TableCell className="text-sm text-muted-foreground">{child.owner_name || '-'}</TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell>{getContinuityRiskBadge(child)}</TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell>-</TableCell>
+                </TableRow>
+              ))}
+              </React.Fragment>
             ))}
           </TableBody>
         </Table>

@@ -327,4 +327,79 @@ All colors MUST be HSL.
   .animate-slide-up {
     @apply animate-[fade-in_0.3s_ease-out,slide-in-right_0.3s_ease-out];
   }
+
+  /* Friendly prompt animations */
+  .animate-pulse-subtle {
+    animation: pulse-subtle 3s ease-in-out infinite;
+  }
+
+  .animate-shimmer {
+    animation: shimmer 2.5s linear infinite;
+  }
+
+  .animate-bounce-subtle {
+    animation: bounce-subtle 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-subtle {
+    0%, 100% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0.1);
+    }
+    50% {
+      box-shadow: 0 0 20px 4px hsl(var(--primary) / 0.15);
+    }
+  }
+
+  @keyframes shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  @keyframes bounce-subtle {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-3px);
+    }
+  }
+
+  /* Unlock flash animation - prominent green glow that pulses and fades */
+  .unlock-flash {
+    animation: unlock-flash 2.5s ease-out forwards;
+    background: linear-gradient(135deg, hsl(142 76% 45%) 0%, hsl(142 76% 35%) 100%) !important;
+    color: white !important;
+    border: 2px solid hsl(142 76% 60%) !important;
+  }
+
+  .unlock-flash * {
+    color: white !important;
+  }
+
+  @keyframes unlock-flash {
+    0% {
+      box-shadow: 0 0 30px hsl(142 76% 50% / 0.8), 0 0 60px hsl(142 76% 50% / 0.4), inset 0 0 20px hsl(142 76% 70% / 0.3);
+      transform: scale(1.02);
+    }
+    25% {
+      box-shadow: 0 0 40px hsl(142 76% 50% / 0.9), 0 0 80px hsl(142 76% 50% / 0.5), inset 0 0 25px hsl(142 76% 70% / 0.4);
+      transform: scale(1.03);
+    }
+    50% {
+      box-shadow: 0 0 30px hsl(142 76% 50% / 0.7), 0 0 50px hsl(142 76% 50% / 0.3), inset 0 0 15px hsl(142 76% 70% / 0.2);
+      transform: scale(1.01);
+    }
+    75% {
+      box-shadow: 0 0 15px hsl(142 76% 50% / 0.4), 0 0 30px hsl(142 76% 50% / 0.2);
+      transform: scale(1);
+    }
+    100% {
+      box-shadow: none;
+      transform: scale(1);
+    }
+  }
 }

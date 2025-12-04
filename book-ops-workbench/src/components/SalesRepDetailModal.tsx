@@ -56,7 +56,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface SalesRepDetailModalProps {
   open: boolean;
@@ -87,6 +87,11 @@ export const SalesRepDetailModal = ({
   const [childAccounts, setChildAccounts] = useState<Record<string, AccountDetail[]>>({});
   const [showChangeOwnerDialog, setShowChangeOwnerDialog] = useState(false);
   const [selectedChildAccount, setSelectedChildAccount] = useState<AccountDetail | null>(null);
+  const [beforeMetrics, setBeforeMetrics] = useState<{
+    customerAccounts: number;
+    prospectAccounts: number;
+    customerARR: number;
+  } | null>(null);
 
 interface ExtendedAccountDetail extends AccountDetail {
   employees?: number;
@@ -103,6 +108,15 @@ interface ExtendedAccountDetail extends AccountDetail {
   new_owner_id?: string;
   has_split_ownership?: boolean;
 }
+
+  // Reset state when modal closes or rep changes
+  React.useEffect(() => {
+    if (!open) {
+      setBeforeMetrics(null);
+      setAccounts([]);
+      setChildAccounts({});
+    }
+  }, [open]);
 
   // Fetch accounts and their children when modal opens
   React.useEffect(() => {
@@ -153,6 +167,37 @@ interface ExtendedAccountDetail extends AccountDetail {
       }));
 
       setAccounts(mappedAccounts as AccountDetail[]);
+
+      // Calculate before metrics (based on owner_id) for this rep
+      const { data: beforeAccounts, error: beforeError } = await supabase
+        .from('accounts')
+        .select('sfdc_account_id, is_customer, owner_id, hierarchy_bookings_arr_converted, calculated_arr, arr, is_parent')
+        .eq('build_id', buildId)
+        .eq('owner_id', rep.rep_id)
+        .eq('is_parent', true);
+
+      if (!beforeError && beforeAccounts) {
+        const beforeCustomerAccounts = beforeAccounts.filter(acc => acc.is_customer);
+        const beforeProspectAccounts = beforeAccounts.filter(acc => !acc.is_customer);
+        const beforeCustomerARR = beforeCustomerAccounts.reduce((sum, acc) => {
+          const arrValue = typeof acc.hierarchy_bookings_arr_converted === 'string' 
+            ? parseFloat(acc.hierarchy_bookings_arr_converted) 
+            : (acc.hierarchy_bookings_arr_converted || 0);
+          const calculatedArr = typeof acc.calculated_arr === 'string'
+            ? parseFloat(acc.calculated_arr)
+            : (acc.calculated_arr || 0);
+          const arr = typeof acc.arr === 'string'
+            ? parseFloat(acc.arr)
+            : (acc.arr || 0);
+          return sum + (arrValue || calculatedArr || arr);
+        }, 0);
+
+        setBeforeMetrics({
+          customerAccounts: beforeCustomerAccounts.length,
+          prospectAccounts: beforeProspectAccounts.length,
+          customerARR: beforeCustomerARR
+        });
+      }
 
       // Fetch child accounts only for actual parent accounts (not for split ownership children)
       const actualParents = (ownedAccounts || []).filter((acc: any) => acc.is_parent);
@@ -478,19 +523,47 @@ interface ExtendedAccountDetail extends AccountDetail {
                     <TableBody>
                       <TableRow>
                         <TableCell className="font-medium">Total Accounts</TableCell>
-                        <TableCell>{rep.totalAccounts}</TableCell>
+                        <TableCell>
+                          {rep.totalAccounts}
+                          {beforeMetrics && (
+                            <span className="ml-2 text-sm text-muted-foreground">
+                              ({beforeMetrics.customerAccounts + beforeMetrics.prospectAccounts} previous owner)
+                            </span>
+                          )}
+                        </TableCell>
                       </TableRow>
                       <TableRow>
                         <TableCell className="font-medium">Customer Accounts</TableCell>
-                        <TableCell>{rep.customerAccounts}</TableCell>
+                        <TableCell>
+                          {rep.customerAccounts}
+                          {beforeMetrics && (
+                            <span className={`ml-2 text-sm ${rep.customerAccounts > beforeMetrics.customerAccounts ? 'text-green-600' : rep.customerAccounts < beforeMetrics.customerAccounts ? 'text-red-600' : 'text-muted-foreground'}`}>
+                              ({rep.customerAccounts > beforeMetrics.customerAccounts ? '+' : ''}{rep.customerAccounts - beforeMetrics.customerAccounts} vs previous owner)
+                            </span>
+                          )}
+                        </TableCell>
                       </TableRow>
                       <TableRow>
                         <TableCell className="font-medium">Prospect Accounts</TableCell>
-                        <TableCell>{rep.prospectAccounts}</TableCell>
+                        <TableCell>
+                          {rep.prospectAccounts}
+                          {beforeMetrics && (
+                            <span className={`ml-2 text-sm ${rep.prospectAccounts > beforeMetrics.prospectAccounts ? 'text-green-600' : rep.prospectAccounts < beforeMetrics.prospectAccounts ? 'text-red-600' : 'text-muted-foreground'}`}>
+                              ({rep.prospectAccounts > beforeMetrics.prospectAccounts ? '+' : ''}{rep.prospectAccounts - beforeMetrics.prospectAccounts} vs previous owner)
+                            </span>
+                          )}
+                        </TableCell>
                       </TableRow>
                       <TableRow>
                         <TableCell className="font-medium">Customer ARR</TableCell>
-                        <TableCell>{formatCurrency(rep.customerARR)}</TableCell>
+                        <TableCell>
+                          {formatCurrency(rep.customerARR)}
+                          {beforeMetrics && (
+                            <span className={`ml-2 text-sm ${rep.customerARR > beforeMetrics.customerARR ? 'text-green-600' : rep.customerARR < beforeMetrics.customerARR ? 'text-red-600' : 'text-muted-foreground'}`}>
+                              ({rep.customerARR > beforeMetrics.customerARR ? '+' : ''}{formatCurrency(rep.customerARR - beforeMetrics.customerARR)} vs previous owner)
+                            </span>
+                          )}
+                        </TableCell>
                       </TableRow>
                       <TableRow>
                         <TableCell className="font-medium">Customer ATR</TableCell>
@@ -603,14 +676,15 @@ interface ExtendedAccountDetail extends AccountDetail {
                         <TableHead className="text-center">CRE</TableHead>
                         <TableHead>Tier</TableHead>
                         <TableHead>Geo</TableHead>
-                        <TableHead>Owner</TableHead>
+                        <TableHead>Previous Owner</TableHead>
+                        <TableHead>New Owner</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredAccounts.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                          <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
                             No accounts found matching your criteria
                           </TableCell>
                         </TableRow>
@@ -643,19 +717,17 @@ interface ExtendedAccountDetail extends AccountDetail {
                                             </Badge>
                                           )}
                                           {extAccount.has_split_ownership && (
-                                            <TooltipProvider>
-                                              <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                  <Badge variant="warning" className="text-xs">
-                                                    <Split className="h-3 w-3 mr-1" />
-                                                    Split Ownership
-                                                  </Badge>
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                  <p>This account has children assigned to different owners</p>
-                                                </TooltipContent>
-                                              </Tooltip>
-                                            </TooltipProvider>
+                                            <Tooltip>
+                                              <TooltipTrigger asChild>
+                                                <Badge variant="warning" className="text-xs">
+                                                  <Split className="h-3 w-3 mr-1" />
+                                                  Split Ownership
+                                                </Badge>
+                                              </TooltipTrigger>
+                                              <TooltipContent>
+                                                <p>This account has children assigned to different owners</p>
+                                              </TooltipContent>
+                                            </Tooltip>
                                           )}
                                           {children.length > 0 && (
                                             <Badge variant="outline" className="text-xs">
@@ -691,7 +763,13 @@ interface ExtendedAccountDetail extends AccountDetail {
                                     )}
                                   </TableCell>
                                   <TableCell>{extAccount.geo || 'N/A'}</TableCell>
-                                  <TableCell className="text-sm">{account.new_owner_name || account.owner_name || 'N/A'}</TableCell>
+                                  <TableCell className="text-sm">{account.owner_name || 'N/A'}</TableCell>
+                                  <TableCell className="text-sm">
+                                    {account.new_owner_name || account.owner_name || 'N/A'}
+                                    {account.new_owner_name && account.owner_name && account.new_owner_name !== account.owner_name && (
+                                      <Badge variant="outline" className="ml-2 text-xs">Changed</Badge>
+                                    )}
+                                  </TableCell>
                                   <TableCell>
                                     {/* Actions handled via checkbox selection */}
                                   </TableCell>
@@ -706,54 +784,50 @@ interface ExtendedAccountDetail extends AccountDetail {
                                       <TableCell>
                                         <div className="flex items-center gap-2 ml-8">
                                           <span className="text-muted-foreground">└─</span>
-                                          <TooltipProvider>
-                                            <Tooltip>
-                                              <TooltipTrigger asChild>
-                                                <div className="cursor-help">
-                                                  <div className="font-medium text-sm flex items-center gap-2">
-                                                    {child.account_name}
-                                                    {(extChild as ExtendedAccountDetail).has_split_ownership && (
-                                                      <TooltipProvider>
-                                                        <Tooltip>
-                                                          <TooltipTrigger asChild>
-                                                            <Badge variant="warning" className="text-xs">
-                                                              <Split className="h-3 w-3 mr-1" />
-                                                              Split
-                                                            </Badge>
-                                                          </TooltipTrigger>
-                                                          <TooltipContent>
-                                                            <p>This child is assigned to a different owner than its parent</p>
-                                                          </TooltipContent>
-                                                        </Tooltip>
-                                                      </TooltipProvider>
-                                                    )}
-                                                  </div>
-                                                  <div className="text-xs text-muted-foreground">
-                                                    {child.sfdc_account_id}
-                                                  </div>
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <div className="cursor-help">
+                                                <div className="font-medium text-sm flex items-center gap-2">
+                                                  {child.account_name}
+                                                  {(extChild as ExtendedAccountDetail).has_split_ownership && (
+                                                    <Tooltip>
+                                                      <TooltipTrigger asChild>
+                                                        <Badge variant="warning" className="text-xs">
+                                                          <Split className="h-3 w-3 mr-1" />
+                                                          Split
+                                                        </Badge>
+                                                      </TooltipTrigger>
+                                                      <TooltipContent>
+                                                        <p>This child is assigned to a different owner than its parent</p>
+                                                      </TooltipContent>
+                                                    </Tooltip>
+                                                  )}
                                                 </div>
-                                              </TooltipTrigger>
-                                              <TooltipContent>
-                                                <div className="space-y-1 text-xs">
-                                                  {extChild.employees && (
-                                                    <div><strong>Employees:</strong> {extChild.employees.toLocaleString()}</div>
-                                                  )}
-                                                  {extChild.industry && (
-                                                    <div><strong>Industry:</strong> {extChild.industry}</div>
-                                                  )}
-                                                  {child.hq_country && (
-                                                    <div><strong>HQ Country:</strong> {child.hq_country}</div>
-                                                  )}
-                                                  {child.sales_territory && (
-                                                    <div><strong>Territory:</strong> {child.sales_territory}</div>
-                                                  )}
-                                                  <div className="pt-1 border-t border-border">
-                                                    <strong>Parent:</strong> {account.account_name}
-                                                  </div>
+                                                <div className="text-xs text-muted-foreground">
+                                                  {child.sfdc_account_id}
                                                 </div>
-                                              </TooltipContent>
-                                            </Tooltip>
-                                          </TooltipProvider>
+                                              </div>
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                              <div className="space-y-1 text-xs">
+                                                {extChild.employees && (
+                                                  <div><strong>Employees:</strong> {extChild.employees.toLocaleString()}</div>
+                                                )}
+                                                {extChild.industry && (
+                                                  <div><strong>Industry:</strong> {extChild.industry}</div>
+                                                )}
+                                                {child.hq_country && (
+                                                  <div><strong>HQ Country:</strong> {child.hq_country}</div>
+                                                )}
+                                                {child.sales_territory && (
+                                                  <div><strong>Territory:</strong> {child.sales_territory}</div>
+                                                )}
+                                                <div className="pt-1 border-t border-border">
+                                                  <strong>Parent:</strong> {account.account_name}
+                                                </div>
+                                              </div>
+                                            </TooltipContent>
+                                          </Tooltip>
                                         </div>
                                       </TableCell>
                                       <TableCell>
@@ -781,7 +855,13 @@ interface ExtendedAccountDetail extends AccountDetail {
                                         )}
                                       </TableCell>
                                       <TableCell className="text-sm">{extChild.geo || 'N/A'}</TableCell>
-                                      <TableCell className="text-sm">{child.new_owner_name || child.owner_name || 'N/A'}</TableCell>
+                                      <TableCell className="text-sm">{child.owner_name || 'N/A'}</TableCell>
+                                      <TableCell className="text-sm">
+                                        {child.new_owner_name || child.owner_name || 'N/A'}
+                                        {child.new_owner_name && child.owner_name && child.new_owner_name !== child.owner_name && (
+                                          <Badge variant="outline" className="ml-2 text-xs">Changed</Badge>
+                                        )}
+                                      </TableCell>
                                       <TableCell>
                                         <DropdownMenu>
                                           <DropdownMenuTrigger asChild>

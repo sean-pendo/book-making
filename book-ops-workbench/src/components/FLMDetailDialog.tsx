@@ -157,7 +157,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
             const atrFromAccount = parseFloat(acc.calculated_atr) || parseFloat(acc.atr) || 0;
             return sum + (atrFromOpps || atrFromAccount);
           }, 0);
-          const riskCount = parentAccounts.filter(acc => acc.cre_status !== null).length;
+          const riskCount = parentAccounts.filter(acc => acc.cre_status !== null || (acc.cre_count && acc.cre_count > 0)).length;
           const retainedCount = parentAccounts.filter(acc => !acc.new_owner_id || acc.owner_id === acc.new_owner_id).length;
           const retentionRate = parentAccounts.length > 0 ? (retainedCount / parentAccounts.length) * 100 : 0;
 

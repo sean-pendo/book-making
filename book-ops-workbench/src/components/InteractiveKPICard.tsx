@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { TrendingUp, TrendingDown, Info, ArrowRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -69,13 +69,12 @@ export const InteractiveKPICard = ({
   const IconComponent = data.icon;
 
   return (
-    <TooltipProvider>
-      <motion.div
-        initial={animated ? { opacity: 0, y: 20 } : {}}
-        animate={animated ? { opacity: 1, y: 0 } : {}}
-        transition={{ duration: 0.3 }}
-        className={className}
-      >
+    <motion.div
+      initial={animated ? { opacity: 0, y: 20 } : {}}
+      animate={animated ? { opacity: 1, y: 0 } : {}}
+      transition={{ duration: 0.3 }}
+      className={className}
+    >
         <Card 
           className={`
             card-interactive border-l-4 transition-all duration-300 cursor-pointer
@@ -173,7 +172,6 @@ export const InteractiveKPICard = ({
             </AnimatePresence>
           </CardContent>
         </Card>
-      </motion.div>
-    </TooltipProvider>
+    </motion.div>
   );
 };

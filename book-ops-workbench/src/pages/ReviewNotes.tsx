@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { notifyProposalApproved, notifyProposalRejected } from '@/services/slackNotificationService';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -143,7 +144,7 @@ export default function ReviewNotes() {
     enabled: !!selectedBuildId,
   });
 
-  // Detect conflicts: multiple proposals for the same account
+  // Detect conflicts: multiple proposals for the same account (within this build)
   const conflictMap = useMemo(() => {
     if (!reassignments) return new Map<string, number>();
     
@@ -162,9 +163,64 @@ export default function ReviewNotes() {
     return conflicts;
   }, [reassignments]);
 
+  // Detect cross-build conflicts: proposals for the same account in OTHER builds
+  const { data: crossBuildConflicts } = useQuery({
+    queryKey: ['cross-build-conflicts', selectedBuildId, reassignments?.map(r => r.sfdc_account_id)],
+    queryFn: async () => {
+      if (!selectedBuildId || !reassignments || reassignments.length === 0) return new Map<string, { buildId: string; buildName: string; count: number }[]>();
+
+      // Get unique account IDs from current reassignments
+      const accountIds = [...new Set(reassignments.map(r => r.sfdc_account_id))];
+      
+      if (accountIds.length === 0) return new Map<string, { buildId: string; buildName: string; count: number }[]>();
+
+      // Find pending proposals in OTHER builds for these accounts
+      const { data: otherBuildProposals, error } = await supabase
+        .from('manager_reassignments')
+        .select('sfdc_account_id, build_id')
+        .in('sfdc_account_id', accountIds)
+        .neq('build_id', selectedBuildId)
+        .in('approval_status', ['pending_slm', 'pending_revops']);
+
+      if (error || !otherBuildProposals) return new Map<string, { buildId: string; buildName: string; count: number }[]>();
+
+      // Get build names for the conflicting builds
+      const conflictingBuildIds = [...new Set(otherBuildProposals.map(p => p.build_id))];
+      const { data: buildNames } = await supabase
+        .from('builds')
+        .select('id, name')
+        .in('id', conflictingBuildIds);
+
+      const buildNameMap = new Map(buildNames?.map(b => [b.id, b.name]) || []);
+
+      // Group by account ID
+      const crossConflicts = new Map<string, { buildId: string; buildName: string; count: number }[]>();
+      
+      otherBuildProposals.forEach(proposal => {
+        const existing = crossConflicts.get(proposal.sfdc_account_id) || [];
+        const buildEntry = existing.find(e => e.buildId === proposal.build_id);
+        
+        if (buildEntry) {
+          buildEntry.count++;
+        } else {
+          existing.push({
+            buildId: proposal.build_id,
+            buildName: buildNameMap.get(proposal.build_id) || 'Unknown Build',
+            count: 1,
+          });
+        }
+        
+        crossConflicts.set(proposal.sfdc_account_id, existing);
+      });
+
+      return crossConflicts;
+    },
+    enabled: !!selectedBuildId && !!reassignments && reassignments.length > 0,
+  });
+
   // Get warning info for a reassignment
   const getWarnings = (reassignment: any) => {
-    const warnings: Array<{ type: 'conflict' | 'late' | 'out_of_scope'; message: string }> = [];
+    const warnings: Array<{ type: 'conflict' | 'late' | 'out_of_scope' | 'cross_build'; message: string }> = [];
     
     // Check for out-of-scope (no proposed owner)
     if (reassignment.proposed_owner_name === '[OUT OF SCOPE]' || !reassignment.proposed_owner_id) {
@@ -174,12 +230,23 @@ export default function ReviewNotes() {
       });
     }
     
-    // Check for conflict (multiple proposals for same account)
+    // Check for conflict (multiple proposals for same account in THIS build)
     const conflictCount = conflictMap.get(reassignment.sfdc_account_id);
     if (conflictCount && conflictCount > 1) {
       warnings.push({
         type: 'conflict',
-        message: `${conflictCount} proposals for this account`,
+        message: `${conflictCount} proposals in this build`,
+      });
+    }
+
+    // Check for cross-build conflict (proposals in OTHER builds)
+    const crossBuildInfo = crossBuildConflicts?.get(reassignment.sfdc_account_id);
+    if (crossBuildInfo && crossBuildInfo.length > 0) {
+      const totalOtherProposals = crossBuildInfo.reduce((sum, b) => sum + b.count, 0);
+      const buildNames = crossBuildInfo.map(b => b.buildName).join(', ');
+      warnings.push({
+        type: 'cross_build',
+        message: `${totalOtherProposals} proposal(s) in other builds: ${buildNames}`,
       });
     }
     
@@ -205,6 +272,17 @@ export default function ReviewNotes() {
         .single();
 
       if (fetchError) throw fetchError;
+
+      // Get manager email for notification
+      let managerEmail: string | null = null;
+      if (reassignment.manager_user_id) {
+        const { data: managerProfile } = await supabase
+          .from('profiles')
+          .select('email, full_name')
+          .eq('id', reassignment.manager_user_id)
+          .single();
+        managerEmail = managerProfile?.email || null;
+      }
 
       // Update the reassignment status to final approved
       const { error: updateError } = await supabase
@@ -232,6 +310,71 @@ export default function ReviewNotes() {
         .eq('build_id', reassignment.build_id);
 
       if (accountError) throw accountError;
+
+      // AUTO-REJECT competing proposals for the same account
+      // This prevents orphaned proposals and accidental double-approvals
+      const { data: competingProposals, error: competingError } = await supabase
+        .from('manager_reassignments')
+        .select('id, manager_user_id, proposed_owner_name')
+        .eq('sfdc_account_id', reassignment.sfdc_account_id)
+        .eq('build_id', reassignment.build_id)
+        .neq('id', id)
+        .in('approval_status', ['pending_slm', 'pending_revops']);
+
+      if (!competingError && competingProposals && competingProposals.length > 0) {
+        // Reject all competing proposals
+        const competingIds = competingProposals.map(p => p.id);
+        const { error: rejectError } = await supabase
+          .from('manager_reassignments')
+          .update({
+            status: 'rejected',
+            approval_status: 'rejected',
+            revops_approved_by: user!.id,
+            revops_approved_at: new Date().toISOString(),
+            rationale: `Superseded: Another proposal for this account was approved (assigned to ${reassignment.proposed_owner_name})`,
+          })
+          .in('id', competingIds);
+
+        if (rejectError) {
+          console.error('[ReviewNotes] Failed to auto-reject competing proposals:', rejectError);
+        }
+
+        // Notify managers whose proposals were superseded
+        const buildName = builds?.find(b => b.id === reassignment.build_id)?.name || 'Unknown Build';
+        for (const competing of competingProposals) {
+          if (competing.manager_user_id && competing.manager_user_id !== reassignment.manager_user_id) {
+            const { data: competingManagerProfile } = await supabase
+              .from('profiles')
+              .select('email')
+              .eq('id', competing.manager_user_id)
+              .single();
+
+            if (competingManagerProfile?.email) {
+              notifyProposalRejected(
+                competingManagerProfile.email,
+                reassignment.account_name || 'Unknown Account',
+                effectiveProfile?.full_name || 'RevOps',
+                `Another proposal was approved instead (assigned to ${reassignment.proposed_owner_name})`,
+                buildName
+              ).catch(console.error);
+            }
+          }
+        }
+
+        console.log(`[ReviewNotes] Auto-rejected ${competingProposals.length} competing proposal(s) for account ${reassignment.sfdc_account_id}`);
+      }
+
+      // Send Slack notification to the manager who proposed the change
+      if (managerEmail) {
+        const buildName = builds?.find(b => b.id === reassignment.build_id)?.name || 'Unknown Build';
+        notifyProposalApproved(
+          managerEmail,
+          reassignment.account_name || 'Unknown Account',
+          reassignment.proposed_owner_name || 'Unknown',
+          effectiveProfile?.full_name || 'RevOps',
+          buildName
+        ).catch(console.error);
+      }
     },
     onSuccess: () => {
       toast({
@@ -257,6 +400,26 @@ export default function ReviewNotes() {
   // RevOps reject - sends back to SLM/FLM
   const rejectMutation = useMutation({
     mutationFn: async ({ id, rationale }: { id: string; rationale: string }) => {
+      // First, get the reassignment details
+      const { data: reassignment, error: fetchError } = await supabase
+        .from('manager_reassignments')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      // Get manager email for notification
+      let managerEmail: string | null = null;
+      if (reassignment.manager_user_id) {
+        const { data: managerProfile } = await supabase
+          .from('profiles')
+          .select('email, full_name')
+          .eq('id', reassignment.manager_user_id)
+          .single();
+        managerEmail = managerProfile?.email || null;
+      }
+
       const { error } = await supabase
         .from('manager_reassignments')
         .update({
@@ -269,6 +432,18 @@ export default function ReviewNotes() {
         .eq('id', id);
 
       if (error) throw error;
+
+      // Send Slack notification to the manager who proposed the change
+      if (managerEmail) {
+        const buildName = builds?.find(b => b.id === reassignment.build_id)?.name || 'Unknown Build';
+        notifyProposalRejected(
+          managerEmail,
+          reassignment.account_name || 'Unknown Account',
+          effectiveProfile?.full_name || 'RevOps',
+          rationale,
+          buildName
+        ).catch(console.error);
+      }
     },
     onSuccess: () => {
       toast({
@@ -477,11 +652,16 @@ export default function ReviewNotes() {
                                         ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700'
                                         : warning.type === 'conflict' 
                                           ? 'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700'
-                                          : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700'
+                                          : warning.type === 'cross_build'
+                                            ? 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/30 dark:text-purple-300 dark:border-purple-700'
+                                            : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700'
                                     }`}
                                   >
                                     <AlertTriangle className="w-3 h-3" />
-                                    {warning.type === 'out_of_scope' ? 'Out of Scope' : warning.type === 'conflict' ? 'Conflict' : 'Late'}
+                                    {warning.type === 'out_of_scope' ? 'Out of Scope' 
+                                      : warning.type === 'conflict' ? 'Conflict' 
+                                      : warning.type === 'cross_build' ? 'Cross-Build' 
+                                      : 'Late'}
                                   </Badge>
                                 ))}
                               </div>
@@ -702,6 +882,12 @@ export default function ReviewNotes() {
                             <>
                               <strong>Late Submission:</strong> This proposal was created after the SLM already submitted their review. 
                               The SLM may not have seen this request.
+                            </>
+                          )}
+                          {warning.type === 'cross_build' && (
+                            <>
+                              <strong className="text-purple-700 dark:text-purple-400">🔀 Cross-Build Conflict:</strong> {warning.message}. 
+                              Changes in this build may conflict with decisions in other planning scenarios.
                             </>
                           )}
                         </p>

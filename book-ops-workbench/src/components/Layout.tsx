@@ -1,9 +1,10 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
-import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { SidebarProvider } from '@/components/ui/sidebar';
 import { Badge } from '@/components/ui/badge';
 import { AppSidebar } from '@/components/AppSidebar';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { FeedbackWidget } from '@/components/FeedbackWidget';
 import { useAuth } from '@/contexts/AuthContext';
 
 interface LayoutProps {
@@ -36,9 +37,9 @@ export const Layout = ({ children }: LayoutProps) => {
         <div className="flex-1 flex flex-col">
           {/* Header */}
           <header className="h-16 flex items-center gap-4 border-b bg-gradient-subtle backdrop-blur-sm px-6 sticky top-0 z-10">
-            <SidebarTrigger className="hover-scale" />
             <div className="flex-1">
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
+                <img src="/favicon.png" alt="Book Builder" className="h-8 w-8 rounded-lg" />
                 <h1 className="text-xl font-bold text-gradient">Book Builder</h1>
                 {effectiveProfile?.role?.toUpperCase() === 'REVOPS' && (
                   <Badge variant="outline" className="status-info font-medium">
@@ -58,6 +59,9 @@ export const Layout = ({ children }: LayoutProps) => {
           </main>
         </div>
       </div>
+      
+      {/* Feedback Widget - always visible */}
+      <FeedbackWidget />
     </SidebarProvider>
   );
 };

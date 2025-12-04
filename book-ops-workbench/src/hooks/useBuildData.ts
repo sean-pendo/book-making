@@ -44,29 +44,24 @@ export const useBuildDataRelationships = (buildId: string | undefined) => {
 export const useInvalidateBuildData = () => {
   const queryClient = useQueryClient();
   
-  return (buildId: string) => {
+  return async (buildId: string) => {
     console.log(`[useBuildData] 🔥 FORCE INVALIDATING all caches for build ${buildId}`);
     
     // Clear service cache completely
     buildDataService.clearBuildCache(buildId);
     buildDataService.clearAllCache();
     
-    // Force invalidate and refetch React Query cache with wildcard patterns
-    queryClient.invalidateQueries({ 
-      predicate: (query) => {
-        const key = query.queryKey;
-        return key.includes('build-data-summary') || key.includes('build-data-relationships');
-      }
+    // Force refetch React Query cache - this immediately re-runs the query
+    await queryClient.refetchQueries({ 
+      queryKey: ['build-data-summary', buildId],
+      type: 'active'
     });
     
-    // Also remove all cached queries for this build to force fresh data
-    queryClient.removeQueries({ 
-      predicate: (query) => {
-        const key = query.queryKey;
-        return key.includes('build-data-summary') || key.includes('build-data-relationships');
-      }
+    await queryClient.refetchQueries({ 
+      queryKey: ['build-data-relationships', buildId],
+      type: 'active'
     });
     
-    console.log('🧹 All caches cleared, forcing fresh data fetch...');
+    console.log('🧹 All caches cleared and data refetched!');
   };
 };

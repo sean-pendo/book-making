@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -246,8 +246,7 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
   const selectedRepData = selectedRep ? enhancedMetrics?.find(r => r.rep_id === selectedRep) : null;
 
   return (
-    <TooltipProvider>
-      <div className="min-h-screen bg-gradient-to-br from-background to-muted/30">
+    <div className="min-h-screen bg-gradient-to-br from-background to-muted/30">
         <div className="max-w-7xl mx-auto p-6 space-y-8">
           {/* Header */}
           <div className="flex items-center justify-between">
@@ -946,6 +945,5 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
           </Tabs>
         </div>
       </div>
-    </TooltipProvider>
   );
 };

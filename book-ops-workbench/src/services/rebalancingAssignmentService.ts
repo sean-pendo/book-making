@@ -78,8 +78,10 @@ interface RepWorkload {
   currentATR: number;
   accountCount: number;
   tier1Count: number;
+  tier2Count: number;
   riskCount: number;
   renewalCount: number;
+  isStrategic?: boolean;
 }
 
 interface BalancingTargets {
@@ -99,6 +101,14 @@ interface BalancingTargets {
     targetCount: number;
     minAccounts: number;
     maxAccounts: number;
+  };
+  // Balance Limits from user configuration
+  balanceLimits?: {
+    maxCREPerRep: number;
+    maxATRPerRep: number;
+    maxTier1PerRep: number;
+    maxTier2PerRep: number;
+    maxRenewalConcentration: number; // percentage
   };
 }
 
@@ -435,6 +445,13 @@ export class RebalancingAssignmentService {
       const customerMaxARR = assignmentConfig?.customer_max_arr || 3000000;
       const customerMaxAccounts = assignmentConfig?.customer_max_accounts || 8;
       
+      // Load Balance Limits from user configuration
+      const maxCREPerRep = assignmentConfig?.max_cre_per_rep || 5;
+      const maxATRPerRep = assignmentConfig?.atr_max || 500000;
+      const maxTier1PerRep = assignmentConfig?.max_tier1_per_rep || 5;
+      const maxTier2PerRep = assignmentConfig?.max_tier2_per_rep || 8;
+      const maxRenewalConcentration = assignmentConfig?.renewal_concentration_max || 25;
+      
       const targets: BalancingTargets = {
         normal: {
           targetARR: normalReps.length > 0 
@@ -443,6 +460,13 @@ export class RebalancingAssignmentService {
           maxARR: customerMaxARR,
           minAccounts: Math.floor(customerMaxAccounts * 0.75), // 75% of max as min
           maxAccounts: customerMaxAccounts
+        },
+        balanceLimits: {
+          maxCREPerRep,
+          maxATRPerRep,
+          maxTier1PerRep,
+          maxTier2PerRep,
+          maxRenewalConcentration
         }
       };
       
@@ -456,6 +480,7 @@ export class RebalancingAssignmentService {
       }
       
       console.log(`[REBALANCE] 📋 Using customer targets: target=${customerTargetARR}, max=${customerMaxARR}, maxAccounts=${customerMaxAccounts}`);
+      console.log(`[REBALANCE] ⚖️ Balance Limits: CRE=${maxCREPerRep}, ATR=$${maxATRPerRep}, Tier1=${maxTier1PerRep}, Tier2=${maxTier2PerRep}, Renewal%=${maxRenewalConcentration}`);
       
       return targets;
     } else {
@@ -668,6 +693,7 @@ export class RebalancingAssignmentService {
       currentATR: 0,
       accountCount: 0,
       tier1Count: 0,
+      tier2Count: 0,
       riskCount: 0,
       renewalCount: 0,
       isStrategic: rep.is_strategic_rep || false
@@ -684,7 +710,13 @@ export class RebalancingAssignmentService {
       const isStrategic = account.is_strategic || ((account.hierarchy_bookings_arr_converted as number) || 0) > 0;
       const poolTargets = isStrategic && targets.strategic ? targets.strategic : targets.normal;
       
-      // Find best rep - with HARD limits, prefer same pool but allow cross-pool if needed
+      // Get account characteristics for balance limit checks
+      const accountATR = account.calculated_atr || account.atr || 0;
+      const accountCRECount = account.cre_count || 0;
+      const isTier1Account = account.expansion_tier === 'Tier 1' || account.initial_sale_tier === 'Tier 1';
+      const isTier2Account = account.expansion_tier === 'Tier 2' || account.initial_sale_tier === 'Tier 2';
+      
+      // Find best rep - with HARD limits including Balance Limits
       let availableRep = repWorkloads
         .filter(rep => {
           const repIsStrategic = rep.isStrategic;
@@ -704,6 +736,35 @@ export class RebalancingAssignmentService {
           // Normal hard limits
           if (newARR > poolTargets.maxARR) return false;
           if (newCount > poolTargets.maxAccounts) return false;
+          
+          // Balance Limit checks
+          if (targets.balanceLimits) {
+            const limits = targets.balanceLimits;
+            
+            // CRE limit: don't exceed max CRE/risk accounts per rep
+            if (accountCRECount > 0 && rep.riskCount + 1 > limits.maxCREPerRep) {
+              console.log(`[BALANCE] Skipping ${rep.repName}: CRE limit reached (${rep.riskCount}/${limits.maxCREPerRep})`);
+              return false;
+            }
+            
+            // ATR limit: don't exceed max ATR per rep
+            if (rep.currentATR + accountATR > limits.maxATRPerRep) {
+              console.log(`[BALANCE] Skipping ${rep.repName}: ATR limit reached ($${(rep.currentATR/1000).toFixed(0)}K + $${(accountATR/1000).toFixed(0)}K > $${(limits.maxATRPerRep/1000).toFixed(0)}K)`);
+              return false;
+            }
+            
+            // Tier 1 limit
+            if (isTier1Account && rep.tier1Count + 1 > limits.maxTier1PerRep) {
+              console.log(`[BALANCE] Skipping ${rep.repName}: Tier 1 limit reached (${rep.tier1Count}/${limits.maxTier1PerRep})`);
+              return false;
+            }
+            
+            // Tier 2 limit
+            if (isTier2Account && (rep.tier2Count || 0) + 1 > limits.maxTier2PerRep) {
+              console.log(`[BALANCE] Skipping ${rep.repName}: Tier 2 limit reached (${rep.tier2Count || 0}/${limits.maxTier2PerRep})`);
+              return false;
+            }
+          }
           
           return true;
         })
@@ -784,10 +845,11 @@ export class RebalancingAssignmentService {
         // Update rep workload
         availableRep.currentAccounts.push(account);
         availableRep.currentARR += accountARR;
-        availableRep.currentATR += (account.calculated_atr || account.atr || 0);
+        availableRep.currentATR += accountATR;
         availableRep.accountCount++;
-        availableRep.tier1Count += (account.expansion_tier === 'Tier 1' || account.initial_sale_tier === 'Tier 1') ? 1 : 0;
-        availableRep.riskCount += (account.risk_flag || account.cre_risk) ? 1 : 0;
+        availableRep.tier1Count += isTier1Account ? 1 : 0;
+        availableRep.tier2Count = (availableRep.tier2Count || 0) + (isTier2Account ? 1 : 0);
+        availableRep.riskCount += (account.risk_flag || account.cre_risk || accountCRECount > 0) ? 1 : 0;
         availableRep.renewalCount += (account.renewal_date) ? 1 : 0;
       } else {
         // CONFLICT: No rep can take this account - find least loaded rep
@@ -1023,8 +1085,50 @@ export class RebalancingAssignmentService {
       totalProposals: proposals.length,
       targetARRPerRep: this.TARGET_ARR_PER_REP,
       targetAccountsPerRep: `${this.TARGET_ACCOUNTS_PER_REP_MIN}-${this.TARGET_ACCOUNTS_PER_REP_MAX}`,
-      byRep: {} as any
+      byRep: {} as Record<string, {
+        accountCount: number;
+        totalAccounts: number;
+        totalARR: number;
+        totalATR: number;
+        tier1Count: number;
+        tier2Count: number;
+        riskCount: number;
+        arrBalance: string;
+        balanceScore: string;
+        balanceGrade: string;
+      }>,
+      byGeo: {} as Record<string, {
+        repCount: number;
+        customerAccounts: number;
+        prospectAccounts: number;
+        totalARR: number;
+        totalATR: number;
+      }>
     };
+
+    // Build rep-to-region mapping
+    const repRegionMap: Record<string, string> = {};
+    salesReps.forEach(rep => {
+      repRegionMap[rep.rep_id] = rep.region || 'Unknown';
+    });
+
+    // Calculate per-geo statistics
+    const geoRegions = new Set<string>();
+    salesReps.forEach(rep => {
+      if (rep.region) geoRegions.add(rep.region);
+    });
+
+    // Initialize geo stats
+    geoRegions.forEach(region => {
+      const repsInRegion = salesReps.filter(r => r.region === region);
+      stats.byGeo[region] = {
+        repCount: repsInRegion.length,
+        customerAccounts: 0,
+        prospectAccounts: 0,
+        totalARR: 0,
+        totalATR: 0
+      };
+    });
 
     // Calculate per-rep statistics
     salesReps.forEach(rep => {
@@ -1033,16 +1137,50 @@ export class RebalancingAssignmentService {
         accounts.find(acc => acc.sfdc_account_id === p.accountId)
       ).filter(Boolean) as Account[];
 
-      const totalARR = repAccounts.reduce((sum, acc) => sum + (acc.calculated_arr || acc.arr || 0), 0);
+      const totalARR = repAccounts.reduce((sum, acc) => 
+        sum + Number(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0), 0);
+      const totalATR = repAccounts.reduce((sum, acc) => 
+        sum + Number(acc.calculated_atr || acc.atr || 0), 0);
+      const tier1Count = repAccounts.filter(acc => 
+        acc.initial_sale_tier === 'Tier 1' || acc.expansion_tier === 'Tier 1').length;
+      const tier2Count = repAccounts.filter(acc => 
+        acc.initial_sale_tier === 'Tier 2' || acc.expansion_tier === 'Tier 2').length;
+      const riskCount = repAccounts.filter(acc => acc.cre_risk || acc.cre_count && acc.cre_count > 0).length;
+      
       const balanceScore = Math.abs(totalARR - this.TARGET_ARR_PER_REP) / this.TARGET_ARR_PER_REP;
 
       stats.byRep[rep.name] = {
         accountCount: repAccounts.length,
+        totalAccounts: repAccounts.length,
         totalARR,
+        totalATR,
+        tier1Count,
+        tier2Count,
+        riskCount,
         arrBalance: `${totalARR >= this.TARGET_ARR_PER_REP ? '+' : ''}${((totalARR - this.TARGET_ARR_PER_REP)/1000000).toFixed(1)}M`,
         balanceScore: balanceScore.toFixed(2),
         balanceGrade: balanceScore < 0.05 ? 'A' : balanceScore < 0.10 ? 'B' : balanceScore < 0.20 ? 'C' : 'D'
       };
+
+      // Update geo stats for this rep
+      const repRegion = rep.region;
+      if (repRegion && stats.byGeo[repRegion]) {
+        repAccounts.forEach(acc => {
+          if (acc.is_customer) {
+            stats.byGeo[repRegion].customerAccounts++;
+          } else {
+            stats.byGeo[repRegion].prospectAccounts++;
+          }
+          stats.byGeo[repRegion].totalARR += Number(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0);
+          stats.byGeo[repRegion].totalATR += Number(acc.calculated_atr || acc.atr || 0);
+        });
+      }
+    });
+
+    console.log('[REBALANCE] Statistics generated:', {
+      totalProposals: stats.totalProposals,
+      geoRegions: Object.keys(stats.byGeo),
+      repCount: Object.keys(stats.byRep).length
     });
 
     return stats;

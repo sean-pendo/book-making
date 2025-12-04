@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Database, Users, FileText, TrendingUp, ExternalLink } from 'lucide-react';
+import { Database, Users, FileText, TrendingUp, Upload } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/components/ui/use-toast';
@@ -19,9 +19,10 @@ interface DataVerificationProps {
   buildId: string;
   buildName?: string;
   onRefresh?: () => void;
+  onGoToUpload?: () => void;
 }
 
-export const DataVerification = ({ buildId, buildName, onRefresh }: DataVerificationProps) => {
+export const DataVerification = ({ buildId, buildName, onRefresh, onGoToUpload }: DataVerificationProps) => {
   const [counts, setCounts] = useState<DataCounts>({ accounts: 0, opportunities: 0, salesReps: 0, assignments: 0 });
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
@@ -157,7 +158,7 @@ export const DataVerification = ({ buildId, buildName, onRefresh }: DataVerifica
         </div>
 
         {hasData && (
-          <div className="pt-4 border-t space-y-3">
+          <div className="pt-4 border-t">
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">
                 {getTotalRecords.toLocaleString()}
@@ -166,21 +167,20 @@ export const DataVerification = ({ buildId, buildName, onRefresh }: DataVerifica
                 Total Records Ready for Book Building
               </div>
             </div>
-            
-            <div className="flex gap-2 justify-center">
-              <Button onClick={handleNavigateToBuild} className="flex items-center gap-2">
-                <ExternalLink className="w-4 h-4" />
-                Open Build Details
-              </Button>
-            </div>
           </div>
         )}
 
         {!hasData && !loading && (
-          <div className="text-center py-4 text-muted-foreground">
-            <Database className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p>No data found for this build.</p>
-            <p className="text-sm">Import your CSV files to get started.</p>
+          <div className="text-center py-6 text-muted-foreground">
+            <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p className="font-medium mb-1">No data found for this build.</p>
+            <p className="text-sm mb-4">Import your CSV files to get started.</p>
+            {onGoToUpload && (
+              <Button onClick={onGoToUpload} className="gap-2">
+                <Upload className="w-4 h-4" />
+                Go to Upload
+              </Button>
+            )}
           </div>
         )}
       </CardContent>

@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -117,12 +116,14 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
 
   const loadTotals = async () => {
     try {
+      // Note: Added .limit(50000) to avoid Supabase's default 1000 row limit
       const { data: accounts, error } = await supabase
         .from('accounts')
         .select('cre_count, calculated_atr, expansion_tier, renewal_quarter')
         .eq('build_id', buildId)
         .eq('is_parent', true)
-        .eq('is_customer', true);
+        .eq('is_customer', true)
+        .limit(50000);
 
       if (error) throw error;
 
@@ -171,18 +172,21 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
     setCalculating(true);
     try {
       // Fetch ONLY CUSTOMER parent accounts and active reps
+      // Note: Added .limit(50000) to avoid Supabase's default 1000 row limit
       const [accountsRes, repsRes] = await Promise.all([
         supabase
           .from('accounts')
           .select('*')
           .eq('build_id', buildId)
           .eq('is_parent', true)
-          .eq('is_customer', true), // ONLY CUSTOMERS
+          .eq('is_customer', true)
+          .limit(50000),
         supabase
           .from('sales_reps')
           .select('*')
           .eq('build_id', buildId)
-          .eq('is_active', true) // ONLY ACTIVE REPS
+          .eq('is_active', true)
+          .limit(1000)
       ]);
 
       if (accountsRes.error) throw accountsRes.error;
@@ -288,8 +292,45 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
     }
   };
 
-  if (loading || !config) {
-    return null;
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-muted-foreground">Loading configuration...</span>
+      </div>
+    );
+  }
+
+  // If no config exists yet, show initial setup UI
+  if (!config) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="flex items-center gap-2 font-semibold">
+              <Calculator className="h-5 w-5" />
+              Balance Thresholds
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              No configuration exists yet. Click "Calculate Thresholds" to auto-generate targets based on your data.
+            </p>
+          </div>
+        </div>
+        
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription className="text-sm">
+            <p className="font-semibold mb-2">Initial Setup Required</p>
+            <p>Before generating assignments, you need to calculate balance thresholds. This will analyze your imported accounts and sales reps to determine fair distribution targets.</p>
+          </AlertDescription>
+        </Alert>
+        
+        <Button onClick={calculateThresholds} disabled={calculating} size="lg" className="w-full">
+          <RefreshCw className={`h-4 w-4 mr-2 ${calculating ? 'animate-spin' : ''}`} />
+          {calculating ? 'Calculating...' : 'Calculate Thresholds'}
+        </Button>
+      </div>
+    );
   }
 
   const ThresholdRow = ({ 
@@ -381,44 +422,45 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Calculator className="h-5 w-5" />
-              Balance Thresholds
-            </CardTitle>
-            <CardDescription>
-              Auto-calculated targets for workload balancing. Override specific values as needed.
-            </CardDescription>
-          </div>
-          <Button onClick={calculateThresholds} disabled={calculating}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${calculating ? 'animate-spin' : ''}`} />
-            Recalculate
-          </Button>
+    <div className="space-y-6">
+      {/* Header with Recalculate */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="flex items-center gap-2 font-semibold">
+            <Calculator className="h-5 w-5" />
+            Balance Thresholds
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Auto-calculated targets for workload balancing. Override specific values as needed.
+          </p>
         </div>
-        
-        {/* Calculation Explanation */}
-        <Alert className="mt-4">
-          <Info className="h-4 w-4" />
-          <AlertDescription className="text-sm">
-            <p className="font-semibold mb-2">How Calculation Works:</p>
-            <ol className="space-y-1 ml-4 list-decimal">
-              <li>Sums <strong>total CREs</strong> across all customer parent accounts</li>
-              <li>Sums <strong>total ATR</strong> across all customer parent accounts</li>
-              <li>Counts <strong>Tier 1</strong> and <strong>Tier 2</strong> customer accounts</li>
-              <li>Counts <strong>quarterly renewals</strong> (Q1, Q2, Q3, Q4)</li>
-              <li>Divides each total by <strong>active normal reps</strong> (excludes strategic reps)</li>
-              <li>Applies variance % to create Min/Max ranges</li>
-            </ol>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Example: 410 accounts, 100 total CREs, 50 normal reps → Target = 2.0, Min = 1.6 (20% variance), Max = 2.4
-            </p>
-          </AlertDescription>
-        </Alert>
-      </CardHeader>
-      <CardContent className="space-y-6">
+        <Button onClick={calculateThresholds} disabled={calculating}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${calculating ? 'animate-spin' : ''}`} />
+          Recalculate
+        </Button>
+      </div>
+      
+      {/* Calculation Explanation */}
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertDescription className="text-sm">
+          <p className="font-semibold mb-2">How Calculation Works:</p>
+          <ol className="space-y-1 ml-4 list-decimal">
+            <li>Sums <strong>total CREs</strong> across all customer parent accounts</li>
+            <li>Sums <strong>total ATR</strong> across all customer parent accounts</li>
+            <li>Counts <strong>Tier 1</strong> and <strong>Tier 2</strong> customer accounts</li>
+            <li>Counts <strong>quarterly renewals</strong> (Q1, Q2, Q3, Q4)</li>
+            <li>Divides each total by <strong>active normal reps</strong> (excludes strategic reps)</li>
+            <li>Applies variance % to create Min/Max ranges</li>
+          </ol>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Example: 410 accounts, 100 total CREs, 50 normal reps → Target = 2.0, Min = 1.6 (20% variance), Max = 2.4
+          </p>
+        </AlertDescription>
+      </Alert>
+      
+      {/* Content */}
+      <div className="space-y-6">
         {/* Variance Settings */}
         <div className="space-y-4">
           <h3 className="font-semibold flex items-center gap-2">
@@ -464,7 +506,7 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
         {/* Calculated Thresholds */}
         <div className="space-y-2">
           <h3 className="font-semibold">Calculated Thresholds (Normal Reps Only)</h3>
-          {config.last_calculated_at && (
+          {config?.last_calculated_at && (
             <p className="text-sm text-muted-foreground">
               Last calculated: {new Date(config.last_calculated_at).toLocaleString()} 
               <br />
@@ -475,14 +517,14 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
           <div className="space-y-2">
             <ThresholdRow
               label="CRE Count"
-              calculated={{ min: config.cre_min || 0, target: config.cre_target || 0, max: config.cre_max || 0 }}
+              calculated={{ min: config?.cre_min || 0, target: config?.cre_target || 0, max: config?.cre_max || 0 }}
               overrideField="cre_max_override"
               overrideValue={overrides.cre_max_override}
               total={totals.totalCRE}
             />
             <ThresholdRow
               label="ATR"
-              calculated={{ min: config.atr_min || 0, target: config.atr_target || 0, max: config.atr_max || 0 }}
+              calculated={{ min: config?.atr_min || 0, target: config?.atr_target || 0, max: config?.atr_max || 0 }}
               overrideField="atr_max_override"
               overrideValue={overrides.atr_max_override}
               total={totals.totalATR}
@@ -490,49 +532,49 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
             />
             <ThresholdRow
               label="Tier 1 Accounts"
-              calculated={{ min: config.tier1_min || 0, target: config.tier1_target || 0, max: config.tier1_max || 0 }}
+              calculated={{ min: config?.tier1_min || 0, target: config?.tier1_target || 0, max: config?.tier1_max || 0 }}
               overrideField="tier1_max_override"
               overrideValue={overrides.tier1_max_override}
               total={totals.totalTier1}
             />
             <ThresholdRow
               label="Tier 2 Accounts"
-              calculated={{ min: config.tier2_min || 0, target: config.tier2_target || 0, max: config.tier2_max || 0 }}
+              calculated={{ min: config?.tier2_min || 0, target: config?.tier2_target || 0, max: config?.tier2_max || 0 }}
               overrideField="tier2_max_override"
               overrideValue={overrides.tier2_max_override}
               total={totals.totalTier2}
             />
             <ThresholdRow
               label="Q1 Renewals (Feb-Apr)"
-              calculated={{ min: config.q1_renewal_min || 0, target: config.q1_renewal_target || 0, max: config.q1_renewal_max || 0 }}
+              calculated={{ min: config?.q1_renewal_min || 0, target: config?.q1_renewal_target || 0, max: config?.q1_renewal_max || 0 }}
               overrideField="q1_renewal_max_override"
               overrideValue={overrides.q1_renewal_max_override}
               total={totals.totalQ1}
             />
             <ThresholdRow
               label="Q2 Renewals (May-Jul)"
-              calculated={{ min: config.q2_renewal_min || 0, target: config.q2_renewal_target || 0, max: config.q2_renewal_max || 0 }}
+              calculated={{ min: config?.q2_renewal_min || 0, target: config?.q2_renewal_target || 0, max: config?.q2_renewal_max || 0 }}
               overrideField="q2_renewal_max_override"
               overrideValue={overrides.q2_renewal_max_override}
               total={totals.totalQ2}
             />
             <ThresholdRow
               label="Q3 Renewals (Aug-Oct)"
-              calculated={{ min: config.q3_renewal_min || 0, target: config.q3_renewal_target || 0, max: config.q3_renewal_max || 0 }}
+              calculated={{ min: config?.q3_renewal_min || 0, target: config?.q3_renewal_target || 0, max: config?.q3_renewal_max || 0 }}
               overrideField="q3_renewal_max_override"
               overrideValue={overrides.q3_renewal_max_override}
               total={totals.totalQ3}
             />
             <ThresholdRow
               label="Q4 Renewals (Nov-Jan)"
-              calculated={{ min: config.q4_renewal_min || 0, target: config.q4_renewal_target || 0, max: config.q4_renewal_max || 0 }}
+              calculated={{ min: config?.q4_renewal_min || 0, target: config?.q4_renewal_target || 0, max: config?.q4_renewal_max || 0 }}
               overrideField="q4_renewal_max_override"
               overrideValue={overrides.q4_renewal_max_override}
               total={totals.totalQ4}
             />
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

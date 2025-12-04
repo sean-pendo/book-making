@@ -6,11 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Search, User, Split, Download } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Loader2, Search, User, Split, Download, AlertTriangle, AlertCircle } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, ChevronRight, MessageSquare, Edit2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, MessageSquare, Edit2, Undo2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import ManagerNotesDialog from './ManagerNotesDialog';
@@ -21,6 +21,7 @@ import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
 import { downloadFile } from '@/utils/exportUtils';
+import { notifyProposalRejected } from '@/services/slackNotificationService';
 
 // Interface for hierarchical account display
 interface AccountWithHierarchy {
@@ -75,6 +76,12 @@ export default function ManagerHierarchyView({
   const [reassigningAccount, setReassigningAccount] = useState<any>(null);
   const [newOwnerId, setNewOwnerId] = useState<string>('');
   const [reassignmentRationale, setReassignmentRationale] = useState<string>('');
+  // Counter-proposal confirmation state
+  const [counterProposalConfirm, setCounterProposalConfirm] = useState<{
+    account: any;
+    approvedBy: string;
+    approverRole: string;
+  } | null>(null);
   const { user, effectiveProfile } = useAuth();
   const queryClient = useQueryClient();
 
@@ -264,28 +271,94 @@ export default function ManagerHierarchyView({
     enabled: !!buildId,
   });
 
-  // Derive approval state from notes - track approved rep books and FLM teams
-  const { approvedRepBooks, approvedFLMTeams } = useMemo(() => {
+  // Interface for approval info stored in notes
+  interface ApprovalInfo {
+    approvedBy: string;
+    approverName: string;
+    approverRole: 'REVOPS' | 'SLM' | 'FLM';
+    approvedAt: string;
+  }
+
+  // Derive approval state from notes - track approved rep books and FLM teams with approver info
+  const { approvedRepBooks, approvedFLMTeams, repApprovalInfo, flmApprovalInfo } = useMemo(() => {
     const repBooks = new Set<string>();
     const flmTeams = new Set<string>();
+    const repInfo = new Map<string, ApprovalInfo>();
+    const flmInfo = new Map<string, ApprovalInfo>();
     
     if (accountNotes) {
-      Object.keys(accountNotes).forEach(accountId => {
+      Object.entries(accountNotes).forEach(([accountId, noteData]) => {
         // Check for rep book approvals (rep-book-{repId})
         if (accountId.startsWith('rep-book-')) {
           const repId = accountId.replace('rep-book-', '');
           repBooks.add(repId);
+          
+          // Try to parse approval info from note_text (JSON format)
+          try {
+            const noteText = noteData.latestNote?.note_text;
+            if (noteText && noteText.startsWith('{')) {
+              const parsed = JSON.parse(noteText) as ApprovalInfo;
+              repInfo.set(repId, parsed);
+            } else if (noteText) {
+              // Legacy format: "Book approved by [Name]"
+              const match = noteText.match(/approved by (.+)/i);
+              repInfo.set(repId, {
+                approvedBy: noteData.latestNote?.manager_user_id || 'unknown',
+                approverName: match?.[1] || 'Unknown',
+                approverRole: 'SLM', // Assume SLM for legacy notes
+                approvedAt: noteData.latestNote?.created_at || new Date().toISOString(),
+              });
+            }
+          } catch {
+            // If parsing fails, use basic info from note
+            repInfo.set(repId, {
+              approvedBy: noteData.latestNote?.manager_user_id || 'unknown',
+              approverName: 'Unknown',
+              approverRole: 'SLM',
+              approvedAt: noteData.latestNote?.created_at || new Date().toISOString(),
+            });
+          }
         }
         // Check for FLM team approvals (flm-team-{encodedName})
         if (accountId.startsWith('flm-team-')) {
           const encodedName = accountId.replace('flm-team-', '');
           const flmName = decodeURIComponent(encodedName);
           flmTeams.add(flmName);
+          
+          // Try to parse approval info from note_text (JSON format)
+          try {
+            const noteText = noteData.latestNote?.note_text;
+            if (noteText && noteText.startsWith('{')) {
+              const parsed = JSON.parse(noteText) as ApprovalInfo;
+              flmInfo.set(flmName, parsed);
+            } else if (noteText) {
+              // Legacy format: "Team approved by [Name]"
+              const match = noteText.match(/approved by (.+)/i);
+              flmInfo.set(flmName, {
+                approvedBy: noteData.latestNote?.manager_user_id || 'unknown',
+                approverName: match?.[1] || 'Unknown',
+                approverRole: 'SLM', // Assume SLM for legacy notes
+                approvedAt: noteData.latestNote?.created_at || new Date().toISOString(),
+              });
+            }
+          } catch {
+            flmInfo.set(flmName, {
+              approvedBy: noteData.latestNote?.manager_user_id || 'unknown',
+              approverName: 'Unknown',
+              approverRole: 'SLM',
+              approvedAt: noteData.latestNote?.created_at || new Date().toISOString(),
+            });
+          }
         }
       });
     }
     
-    return { approvedRepBooks: repBooks, approvedFLMTeams: flmTeams };
+    return { 
+      approvedRepBooks: repBooks, 
+      approvedFLMTeams: flmTeams,
+      repApprovalInfo: repInfo,
+      flmApprovalInfo: flmInfo,
+    };
   }, [accountNotes]);
 
   const toggleRep = (repId: string) => {
@@ -311,6 +384,60 @@ export default function ManagerHierarchyView({
       if (error) throw error;
       return data;
     },
+  });
+
+  // Fetch cross-build conflicts: pending proposals for same accounts in OTHER builds
+  const accountIds = useMemo(() => 
+    accounts?.map(a => a.sfdc_account_id) || [],
+    [accounts]
+  );
+
+  const { data: crossBuildConflicts } = useQuery({
+    queryKey: ['cross-build-reassignment-conflicts', buildId, accountIds],
+    queryFn: async () => {
+      if (!accountIds.length) return new Map<string, { buildName: string; proposalCount: number }[]>();
+      
+      // Get all pending reassignments for these accounts in OTHER builds
+      const { data: otherBuildReassignments, error } = await supabase
+        .from('manager_reassignments')
+        .select(`
+          sfdc_account_id,
+          build_id,
+          approval_status,
+          builds!inner(name)
+        `)
+        .in('sfdc_account_id', accountIds)
+        .neq('build_id', buildId)
+        .in('approval_status', ['pending_slm', 'pending_revops']);
+
+      if (error) {
+        console.error('Error fetching cross-build conflicts:', error);
+        return new Map<string, { buildName: string; proposalCount: number }[]>();
+      }
+
+      // Group by account ID
+      const conflictMap = new Map<string, { buildName: string; proposalCount: number }[]>();
+      
+      otherBuildReassignments?.forEach((r: any) => {
+        const accountId = r.sfdc_account_id;
+        const buildName = r.builds?.name || 'Unknown Build';
+        
+        if (!conflictMap.has(accountId)) {
+          conflictMap.set(accountId, []);
+        }
+        
+        // Check if we already have this build in the list
+        const existing = conflictMap.get(accountId)!.find(c => c.buildName === buildName);
+        if (existing) {
+          existing.proposalCount++;
+        } else {
+          conflictMap.get(accountId)!.push({ buildName, proposalCount: 1 });
+        }
+      });
+
+      return conflictMap;
+    },
+    enabled: accountIds.length > 0,
   });
 
   const getRepAccounts = (repId: string) => {
@@ -482,8 +609,10 @@ export default function ManagerHierarchyView({
       acc.owner_id === acc.new_owner_id && acc.owner_id === repId
     ).length;
 
-    // Calculate CRE Parents count (parent accounts with cre_status set - matches ComprehensiveReview)
-    const creCount = customerAccounts.filter(acc => acc.cre_status !== null && acc.cre_status !== '').length;
+    // Calculate CRE Parents count (parent accounts with cre_status set OR cre_count > 0)
+    const creCount = customerAccounts.filter(acc => 
+      (acc.cre_status !== null && acc.cre_status !== '') || (acc.cre_count && acc.cre_count > 0)
+    ).length;
     
     // Calculate region match % only for CUSTOMER accounts
     const customerRegionMatches = customerAccounts.filter(acc => 
@@ -521,6 +650,76 @@ export default function ManagerHierarchyView({
 
   const hasReassignment = (accountId: string) => {
     return !!getReassignment(accountId);
+  };
+
+  // Count pending proposals for a rep's book
+  const getPendingProposalsForRep = (repId: string): { count: number; accounts: string[] } => {
+    if (!accountReassignments || !accounts) return { count: 0, accounts: [] };
+    
+    // Get all accounts for this rep
+    const repAccountIds = new Set(
+      accounts.filter(a => a.new_owner_id === repId).map(a => a.sfdc_account_id)
+    );
+    
+    // Find pending reassignments for these accounts
+    const pendingForRep = accountReassignments.filter(r => repAccountIds.has(r.sfdc_account_id));
+    
+    return {
+      count: pendingForRep.length,
+      accounts: pendingForRep.map(r => r.sfdc_account_id),
+    };
+  };
+
+  // Get cross-build conflicts for an account
+  const getCrossBuildConflicts = (accountId: string): { buildName: string; proposalCount: number }[] | null => {
+    if (!crossBuildConflicts) return null;
+    return crossBuildConflicts.get(accountId) || null;
+  };
+
+  const hasCrossBuildConflict = (accountId: string): boolean => {
+    const conflicts = getCrossBuildConflicts(accountId);
+    return conflicts !== null && conflicts.length > 0;
+  };
+
+  // Check if a rep's book is approved by someone other than the current user
+  const getOtherApprovalInfo = (repId: string): { approvedBy: string; approverRole: string } | null => {
+    if (!approvedRepBooks.has(repId)) return null;
+    const info = repApprovalInfo.get(repId);
+    if (!info) return null;
+    // If approved by someone else (different user ID)
+    if (info.approvedBy !== user?.id) {
+      return {
+        approvedBy: info.approverName,
+        approverRole: info.approverRole,
+      };
+    }
+    return null;
+  };
+
+  // Handle reassignment click - check for counter-proposal scenario
+  const handleReassignClick = (account: any, rep: any) => {
+    const otherApproval = getOtherApprovalInfo(rep.rep_id);
+    
+    // If the book is approved by someone else (e.g., SLM approved, FLM is now viewing)
+    if (otherApproval && otherApproval.approverRole !== effectiveProfile?.role) {
+      // Show counter-proposal confirmation dialog
+      setCounterProposalConfirm({
+        account: { ...account, currentOwner: rep },
+        approvedBy: otherApproval.approvedBy,
+        approverRole: otherApproval.approverRole,
+      });
+    } else {
+      // Normal flow - open reassignment dialog directly
+      setReassigningAccount({ ...account, currentOwner: rep });
+    }
+  };
+
+  // Confirm counter-proposal - proceed with reassignment
+  const confirmCounterProposal = () => {
+    if (counterProposalConfirm) {
+      setReassigningAccount(counterProposalConfirm.account);
+      setCounterProposalConfirm(null);
+    }
   };
 
   // Get approval status label for badge display
@@ -786,6 +985,55 @@ export default function ManagerHierarchyView({
           .eq('build_id', buildId);
 
         if (updateError) throw updateError;
+
+        // AUTO-REJECT any existing competing proposals for this account
+        // This prevents orphaned proposals that could cause confusion
+        const { data: competingProposals } = await supabase
+          .from('manager_reassignments')
+          .select('id, manager_user_id, proposed_owner_name, account_name')
+          .eq('sfdc_account_id', accountId)
+          .eq('build_id', buildId)
+          .in('approval_status', ['pending_slm', 'pending_revops']);
+
+        if (competingProposals && competingProposals.length > 0) {
+          const competingIds = competingProposals.map(p => p.id);
+          const { error: rejectError } = await supabase
+            .from('manager_reassignments')
+            .update({
+              status: 'rejected',
+              approval_status: 'rejected',
+              revops_approved_by: user!.id,
+              revops_approved_at: new Date().toISOString(),
+              rationale: `Superseded: RevOps directly assigned this account to ${newOwner.name}`,
+            })
+            .in('id', competingIds);
+
+          if (rejectError) {
+            console.error('[ManagerHierarchyView] Failed to auto-reject competing proposals:', rejectError);
+          }
+
+          // Notify managers whose proposals were superseded
+          for (const competing of competingProposals) {
+            if (competing.manager_user_id) {
+              const { data: competingManagerProfile } = await supabase
+                .from('profiles')
+                .select('email')
+                .eq('id', competing.manager_user_id)
+                .single();
+
+              if (competingManagerProfile?.email) {
+                notifyProposalRejected(
+                  competingManagerProfile.email,
+                  competing.account_name || 'Unknown Account',
+                  effectiveProfile?.full_name || 'RevOps',
+                  `RevOps directly assigned this account to ${newOwner.name}`,
+                ).catch(console.error);
+              }
+            }
+          }
+
+          console.log(`[ManagerHierarchyView] Auto-rejected ${competingProposals.length} competing proposal(s) for account ${accountId}`);
+        }
       }
     },
     onSuccess: () => {
@@ -843,17 +1091,25 @@ export default function ManagerHierarchyView({
       const rep = salesReps?.find(r => r.rep_id === repId);
       if (!rep) throw new Error('Rep not found');
 
-      // Create an approval note for this rep's book
+      // Create structured approval info
+      const approvalInfo: ApprovalInfo = {
+        approvedBy: user!.id,
+        approverName: effectiveProfile?.full_name || 'Manager',
+        approverRole: (effectiveProfile?.role || 'FLM') as 'REVOPS' | 'SLM' | 'FLM',
+        approvedAt: new Date().toISOString(),
+      };
+
+      // Create an approval note for this rep's book with structured JSON
       const { error } = await supabase
         .from('manager_notes')
         .insert({
           build_id: buildId,
           sfdc_account_id: `rep-book-${repId}`, // Special ID for rep-level approvals
           manager_user_id: user!.id,
-          note_text: `Book approved by ${effectiveProfile?.full_name || 'Manager'}`,
+          note_text: JSON.stringify(approvalInfo),
           category: 'approval',
           status: 'resolved',
-          tags: ['book-approval', rep.name],
+          tags: ['book-approval', rep.name, effectiveProfile?.role || 'FLM'],
         });
 
       if (error) throw error;
@@ -880,17 +1136,25 @@ export default function ManagerHierarchyView({
       // URL encode the FLM name to handle special characters
       const encodedFLMName = encodeURIComponent(flmName);
 
-      // Create an approval note for this FLM's entire team
+      // Create structured approval info
+      const approvalInfo: ApprovalInfo = {
+        approvedBy: user!.id,
+        approverName: effectiveProfile?.full_name || 'Manager',
+        approverRole: (effectiveProfile?.role || 'SLM') as 'REVOPS' | 'SLM' | 'FLM',
+        approvedAt: new Date().toISOString(),
+      };
+
+      // Create an approval note for this FLM's entire team with structured JSON
       const { error } = await supabase
         .from('manager_notes')
         .insert({
           build_id: buildId,
           sfdc_account_id: `flm-team-${encodedFLMName}`, // Special ID for FLM-level approvals
           manager_user_id: user!.id,
-          note_text: `Team approved by ${effectiveProfile?.full_name || 'Manager'}`,
+          note_text: JSON.stringify(approvalInfo),
           category: 'approval',
           status: 'resolved',
-          tags: ['team-approval', flmName],
+          tags: ['team-approval', flmName, effectiveProfile?.role || 'SLM'],
         });
 
       if (error) throw error;
@@ -899,6 +1163,85 @@ export default function ManagerHierarchyView({
       toast({
         title: 'Team Approved',
         description: 'The FLM\'s entire team has been approved.',
+      });
+      queryClient.invalidateQueries({ queryKey: ['manager-all-notes'] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  // Undo a rep book approval
+  const undoRepApprovalMutation = useMutation({
+    mutationFn: async (repId: string) => {
+      // Delete the approval note for this rep's book
+      const { error } = await supabase
+        .from('manager_notes')
+        .delete()
+        .eq('build_id', buildId)
+        .eq('sfdc_account_id', `rep-book-${repId}`)
+        .eq('category', 'approval');
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast({
+        title: 'Approval Removed',
+        description: 'You can now make changes to this book.',
+      });
+      queryClient.invalidateQueries({ queryKey: ['manager-all-notes'] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  // Undo an FLM team approval - also removes all individual rep approvals under this FLM
+  const undoFLMApprovalMutation = useMutation({
+    mutationFn: async (flmName: string) => {
+      const encodedFLMName = encodeURIComponent(flmName);
+      
+      // Get all reps under this FLM to delete their individual approvals too
+      const repsUnderFLM = salesReps?.filter(rep => rep.flm === flmName) || [];
+      const repBookIds = repsUnderFLM.map(rep => `rep-book-${rep.rep_id}`);
+      
+      // Delete the FLM team approval
+      const { error: teamError } = await supabase
+        .from('manager_notes')
+        .delete()
+        .eq('build_id', buildId)
+        .eq('sfdc_account_id', `flm-team-${encodedFLMName}`)
+        .eq('category', 'approval');
+
+      if (teamError) throw teamError;
+      
+      // Also delete all individual rep approvals under this FLM (cascade undo)
+      if (repBookIds.length > 0) {
+        const { error: repsError } = await supabase
+          .from('manager_notes')
+          .delete()
+          .eq('build_id', buildId)
+          .in('sfdc_account_id', repBookIds)
+          .eq('category', 'approval');
+        
+        if (repsError) {
+          console.error('Failed to delete individual rep approvals:', repsError);
+          // Don't throw - team approval was already deleted
+        }
+      }
+    },
+    onSuccess: () => {
+      toast({
+        title: 'Approval Removed',
+        description: 'Team and all individual rep approvals have been removed.',
       });
       queryClient.invalidateQueries({ queryKey: ['manager-all-notes'] });
     },
@@ -966,13 +1309,41 @@ export default function ManagerHierarchyView({
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             {approvedFLMTeams.has(flm) && (
-                              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-green-500 text-white animate-in zoom-in-50 duration-300">
-                                <Check className="w-5 h-5" />
-                              </div>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div className="flex items-center justify-center w-8 h-8 rounded-full bg-green-500 text-white animate-in zoom-in-50 duration-300">
+                                    <Check className="w-5 h-5" />
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Approved by {flmApprovalInfo.get(flm)?.approverName || 'Unknown'}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {flmApprovalInfo.get(flm)?.approverRole || 'Manager'} • {
+                                      flmApprovalInfo.get(flm)?.approvedAt 
+                                        ? new Date(flmApprovalInfo.get(flm)!.approvedAt).toLocaleDateString()
+                                        : 'Unknown date'
+                                    }
+                                  </p>
+                                </TooltipContent>
+                              </Tooltip>
                             )}
                             <div>
                               <div className="font-semibold text-lg">{flm}</div>
-                              <div className="text-sm text-muted-foreground">{flmMetrics.totalReps} reps</div>
+                              <div className="text-sm text-muted-foreground">
+                                {flmMetrics.totalReps} reps
+                                {approvedFLMTeams.has(flm) && flmApprovalInfo.get(flm) && (
+                                  <Badge 
+                                    variant="outline" 
+                                    className={`ml-2 text-xs ${
+                                      flmApprovalInfo.get(flm)?.approverRole === effectiveProfile?.role
+                                        ? 'bg-green-100 text-green-700 border-green-300'
+                                        : 'bg-gray-100 text-gray-600 border-gray-300'
+                                    }`}
+                                  >
+                                    {flmApprovalInfo.get(flm)?.approverRole} Approved
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
                           </div>
                           <div className="flex items-center gap-6">
@@ -992,24 +1363,48 @@ export default function ManagerHierarchyView({
                             </div>
                             {/* Approve Team button - only visible to SLM viewing FLMs */}
                             {managerLevel === 'SLM' && (
-                              <Button 
-                                variant={approvedFLMTeams.has(flm) ? "outline" : "default"}
-                                size="sm"
-                                onClick={() => approveFLMTeamMutation.mutate(flm)}
-                                disabled={reviewStatus === 'accepted' || approvedFLMTeams.has(flm) || approveFLMTeamMutation.isPending}
-                                className={`min-w-[130px] ${approvedFLMTeams.has(flm) ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-100' : ''}`}
-                              >
-                                {approveFLMTeamMutation.isPending ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : approvedFLMTeams.has(flm) ? (
-                                  <>
-                                    <Check className="w-4 h-4 mr-1" />
-                                    Approved
-                                  </>
+                              <>
+                                {approvedFLMTeams.has(flm) && flmApprovalInfo.get(flm)?.approvedBy === user?.id && reviewStatus !== 'accepted' ? (
+                                  // Show Undo button when approved by current user and not yet submitted
+                                  <Button 
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => undoFLMApprovalMutation.mutate(flm)}
+                                    disabled={undoFLMApprovalMutation.isPending}
+                                    className="min-w-[130px] bg-green-100 border-green-300 text-green-700 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-700 group"
+                                  >
+                                    {undoFLMApprovalMutation.isPending ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <>
+                                        <Check className="w-4 h-4 mr-1 group-hover:hidden" />
+                                        <Undo2 className="w-4 h-4 mr-1 hidden group-hover:inline" />
+                                        <span className="group-hover:hidden">Approved</span>
+                                        <span className="hidden group-hover:inline">Undo</span>
+                                      </>
+                                    )}
+                                  </Button>
                                 ) : (
-                                  'Approve Team'
+                                  <Button 
+                                    variant={approvedFLMTeams.has(flm) ? "outline" : "default"}
+                                    size="sm"
+                                    onClick={() => approveFLMTeamMutation.mutate(flm)}
+                                    disabled={reviewStatus === 'accepted' || approvedFLMTeams.has(flm) || approveFLMTeamMutation.isPending}
+                                    className={`min-w-[130px] ${approvedFLMTeams.has(flm) ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-100' : ''}`}
+                                  >
+                                    {approveFLMTeamMutation.isPending ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : approvedFLMTeams.has(flm) ? (
+                                      <>
+                                        <Check className="w-4 h-4 mr-1" />
+                                        Approved
+                                      </>
+                                    ) : (
+                                      'Approve Team'
+                                    )}
+                                  </Button>
                                 )}
-                              </Button>
+                              </>
                             )}
                           </div>
                         </div>
@@ -1022,9 +1417,12 @@ export default function ManagerHierarchyView({
                       const hierarchicalAccounts = getHierarchicalAccounts(rep.rep_id);
                       const isExpanded = expandedReps.has(rep.rep_id);
 
+                      // Check if rep is approved directly OR via FLM team
+                      const isRepApproved = approvedRepBooks.has(rep.rep_id) || (rep.flm && approvedFLMTeams.has(rep.flm));
+                      
                       return (
                         <Collapsible key={rep.rep_id} open={isExpanded} onOpenChange={() => toggleRep(rep.rep_id)}>
-                          <Card className={`transition-all duration-300 ${approvedRepBooks.has(rep.rep_id) ? 'bg-green-50/50 dark:bg-green-950/20 border-green-200' : 'hover:bg-accent/5'}`}>
+                          <Card className={`transition-all duration-300 ${isRepApproved ? 'bg-green-50/50 dark:bg-green-950/20 border-green-200' : 'hover:bg-accent/5'}`}>
                             <div className="p-4">
                               <div className="flex items-center justify-between mb-2">
                                 <CollapsibleTrigger asChild>
@@ -1033,16 +1431,100 @@ export default function ManagerHierarchyView({
                                       {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                                     </Button>
                                     <div className="flex items-center gap-2">
-                                      {approvedRepBooks.has(rep.rep_id) && (
-                                        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-green-500 text-white animate-in zoom-in-50 duration-300">
-                                          <Check className="w-3 h-3" />
-                                        </div>
+                                      {/* Show checkmark if approved directly OR via FLM team */}
+                                      {(approvedRepBooks.has(rep.rep_id) || (rep.flm && approvedFLMTeams.has(rep.flm))) && (
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <div className={`flex items-center justify-center w-5 h-5 rounded-full text-white animate-in zoom-in-50 duration-300 ${
+                                              // Green if approved directly by current role, or via FLM by current role
+                                              (repApprovalInfo.get(rep.rep_id)?.approverRole === effectiveProfile?.role) ||
+                                              (rep.flm && approvedFLMTeams.has(rep.flm) && flmApprovalInfo.get(rep.flm)?.approverRole === effectiveProfile?.role)
+                                                ? 'bg-green-500'
+                                                : 'bg-gray-400'
+                                            }`}>
+                                              <Check className="w-3 h-3" />
+                                            </div>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            {approvedRepBooks.has(rep.rep_id) ? (
+                                              <>
+                                                <p>Approved by {repApprovalInfo.get(rep.rep_id)?.approverName || 'Unknown'}</p>
+                                                <p className="text-xs text-muted-foreground">
+                                                  {repApprovalInfo.get(rep.rep_id)?.approverRole || 'Manager'} • {
+                                                    repApprovalInfo.get(rep.rep_id)?.approvedAt 
+                                                      ? new Date(repApprovalInfo.get(rep.rep_id)!.approvedAt).toLocaleDateString()
+                                                      : 'Unknown date'
+                                                  }
+                                                </p>
+                                              </>
+                                            ) : rep.flm && approvedFLMTeams.has(rep.flm) ? (
+                                              <>
+                                                <p>Approved via FLM team by {flmApprovalInfo.get(rep.flm)?.approverName || 'Unknown'}</p>
+                                                <p className="text-xs text-muted-foreground">
+                                                  {flmApprovalInfo.get(rep.flm)?.approverRole || 'Manager'} • {
+                                                    flmApprovalInfo.get(rep.flm)?.approvedAt 
+                                                      ? new Date(flmApprovalInfo.get(rep.flm)!.approvedAt).toLocaleDateString()
+                                                      : 'Unknown date'
+                                                  }
+                                                </p>
+                                              </>
+                                            ) : null}
+                                          </TooltipContent>
+                                        </Tooltip>
                                       )}
                                       <div>
-                                        <div className="font-medium">{rep.name}</div>
+                                        <div className="font-medium flex items-center gap-2">
+                                          {rep.name}
+                                          {/* Pending proposals badge */}
+                                          {(() => {
+                                            const pending = getPendingProposalsForRep(rep.rep_id);
+                                            if (pending.count > 0) {
+                                              return (
+                                                <Tooltip>
+                                                  <TooltipTrigger asChild>
+                                                    <Badge 
+                                                      variant="outline" 
+                                                      className="text-xs bg-amber-100 text-amber-700 border-amber-300"
+                                                    >
+                                                      <AlertCircle className="w-3 h-3 mr-1" />
+                                                      {pending.count} Pending
+                                                    </Badge>
+                                                  </TooltipTrigger>
+                                                  <TooltipContent>
+                                                    <p>{pending.count} pending reassignment proposal(s) in this book</p>
+                                                  </TooltipContent>
+                                                </Tooltip>
+                                              );
+                                            }
+                                            return null;
+                                          })()}
+                                        </div>
                                         <div className="text-sm text-muted-foreground">
                                           {rep.team && <span>{rep.team}</span>}
                                           {rep.region && <span className="ml-2">• {rep.region}</span>}
+                                          {/* Show badge for direct approval by someone else */}
+                                          {approvedRepBooks.has(rep.rep_id) && repApprovalInfo.get(rep.rep_id) && 
+                                           repApprovalInfo.get(rep.rep_id)?.approverRole !== effectiveProfile?.role && (
+                                            <Badge 
+                                              variant="outline" 
+                                              className="ml-2 text-xs bg-gray-100 text-gray-600 border-gray-300"
+                                            >
+                                              {repApprovalInfo.get(rep.rep_id)?.approverRole} Approved
+                                            </Badge>
+                                          )}
+                                          {/* Show badge for FLM team approval when no direct approval */}
+                                          {!approvedRepBooks.has(rep.rep_id) && rep.flm && approvedFLMTeams.has(rep.flm) && (
+                                            <Badge 
+                                              variant="outline" 
+                                              className={`ml-2 text-xs ${
+                                                flmApprovalInfo.get(rep.flm)?.approverRole === effectiveProfile?.role
+                                                  ? 'bg-green-100 text-green-700 border-green-300'
+                                                  : 'bg-gray-100 text-gray-600 border-gray-300'
+                                              }`}
+                                            >
+                                              via FLM
+                                            </Badge>
+                                          )}
                                         </div>
                                       </div>
                                     </div>
@@ -1089,24 +1571,58 @@ export default function ManagerHierarchyView({
                                       <span className="ml-1 font-medium">{metrics.creCount}</span>
                                     </div>
                                   </div>
-                                  <Button 
-                                    variant={approvedRepBooks.has(rep.rep_id) ? "outline" : "default"}
-                                    size="sm"
-                                    onClick={() => approveRepBookMutation.mutate(rep.rep_id)}
-                                    disabled={reviewStatus === 'accepted' || approvedRepBooks.has(rep.rep_id) || approveRepBookMutation.isPending}
-                                    className={`min-w-[120px] transition-all duration-300 ${approvedRepBooks.has(rep.rep_id) ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-100' : ''}`}
-                                  >
-                                    {approveRepBookMutation.isPending ? (
-                                      <Loader2 className="w-4 h-4 animate-spin" />
-                                    ) : approvedRepBooks.has(rep.rep_id) ? (
-                                      <>
-                                        <Check className="w-4 h-4 mr-1" />
-                                        Approved
-                                      </>
-                                    ) : (
-                                      'Approve Book'
-                                    )}
-                                  </Button>
+                                  {(() => {
+                                    // Check if rep is approved directly OR via FLM team approval
+                                    const isDirectlyApproved = approvedRepBooks.has(rep.rep_id);
+                                    const isApprovedViaFLM = rep.flm && approvedFLMTeams.has(rep.flm);
+                                    const isApproved = isDirectlyApproved || isApprovedViaFLM;
+                                    const canUndo = isDirectlyApproved && repApprovalInfo.get(rep.rep_id)?.approvedBy === user?.id && reviewStatus !== 'accepted';
+                                    
+                                    if (canUndo) {
+                                      // Show Undo button when approved by current user and not yet submitted
+                                      return (
+                                        <Button 
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => undoRepApprovalMutation.mutate(rep.rep_id)}
+                                          disabled={undoRepApprovalMutation.isPending}
+                                          className="min-w-[120px] transition-all duration-300 bg-green-100 border-green-300 text-green-700 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-700 group"
+                                        >
+                                          {undoRepApprovalMutation.isPending ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                          ) : (
+                                            <>
+                                              <Check className="w-4 h-4 mr-1 group-hover:hidden" />
+                                              <Undo2 className="w-4 h-4 mr-1 hidden group-hover:inline" />
+                                              <span className="group-hover:hidden">Approved</span>
+                                              <span className="hidden group-hover:inline">Undo</span>
+                                            </>
+                                          )}
+                                        </Button>
+                                      );
+                                    }
+                                    
+                                    return (
+                                      <Button 
+                                        variant={isApproved ? "outline" : "default"}
+                                        size="sm"
+                                        onClick={() => approveRepBookMutation.mutate(rep.rep_id)}
+                                        disabled={reviewStatus === 'accepted' || isApproved || approveRepBookMutation.isPending}
+                                        className={`min-w-[120px] transition-all duration-300 ${isApproved ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-100' : ''}`}
+                                      >
+                                        {approveRepBookMutation.isPending ? (
+                                          <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : isApproved ? (
+                                          <>
+                                            <Check className="w-4 h-4 mr-1" />
+                                            Approved
+                                          </>
+                                        ) : (
+                                          'Approve Book'
+                                        )}
+                                      </Button>
+                                    );
+                                  })()}
                                 </div>
                               </div>
                             </div>
@@ -1155,19 +1671,38 @@ export default function ManagerHierarchyView({
                                                   )}
                                                 </div>
                                                 {account.has_split_ownership && !account.isVirtualParent && (
-                                                  <TooltipProvider>
-                                                    <Tooltip>
-                                                      <TooltipTrigger asChild>
-                                                        <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-300">
-                                                          <Split className="h-3 w-3 mr-1" />
-                                                          Split
-                                                        </Badge>
-                                                      </TooltipTrigger>
-                                                      <TooltipContent>
-                                                        <p>This account has children assigned to different owners</p>
-                                                      </TooltipContent>
-                                                    </Tooltip>
-                                                  </TooltipProvider>
+                                                  <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                      <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-300">
+                                                        <Split className="h-3 w-3 mr-1" />
+                                                        Split
+                                                      </Badge>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>
+                                                      <p>This account has children assigned to different owners</p>
+                                                    </TooltipContent>
+                                                  </Tooltip>
+                                                )}
+                                                {/* Cross-Build Conflict Warning */}
+                                                {hasCrossBuildConflict(account.sfdc_account_id) && (
+                                                  <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                      <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-300">
+                                                        <AlertTriangle className="h-3 w-3 mr-1" />
+                                                        Cross-Build
+                                                      </Badge>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>
+                                                      <p className="font-medium">Pending proposals in other builds:</p>
+                                                      <ul className="text-xs mt-1">
+                                                        {getCrossBuildConflicts(account.sfdc_account_id)?.map((conflict, idx) => (
+                                                          <li key={idx}>
+                                                            • {conflict.buildName}: {conflict.proposalCount} proposal(s)
+                                                          </li>
+                                                        ))}
+                                                      </ul>
+                                                    </TooltipContent>
+                                                  </Tooltip>
                                                 )}
                                               </div>
                                             </TableCell>
@@ -1183,18 +1718,16 @@ export default function ManagerHierarchyView({
                                                 const reassignment = getReassignment(account.sfdc_account_id);
                                                 if (!reassignment) return null;
                                                 return (
-                                                  <TooltipProvider>
-                                                    <Tooltip>
-                                                      <TooltipTrigger asChild>
-                                                        <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 cursor-help">
-                                                          {getApprovalStatusLabel(reassignment.approval_status)}
-                                                        </Badge>
-                                                      </TooltipTrigger>
-                                                      <TooltipContent>
-                                                        <p>Proposed: {reassignment.proposed_owner_name || 'Unknown'}</p>
-                                                      </TooltipContent>
-                                                    </Tooltip>
-                                                  </TooltipProvider>
+                                                  <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 cursor-help">
+                                                        {getApprovalStatusLabel(reassignment.approval_status)}
+                                                      </Badge>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>
+                                                      <p>Proposed: {reassignment.proposed_owner_name || 'Unknown'}</p>
+                                                    </TooltipContent>
+                                                  </Tooltip>
                                                 );
                                               })()}
                                             </TableCell>
@@ -1230,7 +1763,7 @@ export default function ManagerHierarchyView({
                                                   <Button
                                                     variant="outline"
                                                     size="sm"
-                                                    onClick={() => setReassigningAccount({ ...account, currentOwner: rep })}
+                                                    onClick={() => handleReassignClick(account, rep)}
                                                     disabled={reviewStatus === 'accepted' || hasReassignment(account.sfdc_account_id)}
                                                   >
                                                     Reassign
@@ -1281,6 +1814,27 @@ export default function ManagerHierarchyView({
                                                     <div className="flex items-center gap-2">
                                                       <div className="w-2 h-2 bg-muted-foreground rounded-full"></div>
                                                       <div className="font-medium text-sm">{child.account_name}</div>
+                                                      {/* Cross-Build Conflict Warning for Child */}
+                                                      {hasCrossBuildConflict(child.sfdc_account_id) && (
+                                                        <Tooltip>
+                                                          <TooltipTrigger asChild>
+                                                            <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-300">
+                                                              <AlertTriangle className="h-3 w-3 mr-1" />
+                                                              Cross-Build
+                                                            </Badge>
+                                                          </TooltipTrigger>
+                                                          <TooltipContent>
+                                                            <p className="font-medium">Pending proposals in other builds:</p>
+                                                            <ul className="text-xs mt-1">
+                                                              {getCrossBuildConflicts(child.sfdc_account_id)?.map((conflict, idx) => (
+                                                                <li key={idx}>
+                                                                  • {conflict.buildName}: {conflict.proposalCount} proposal(s)
+                                                                </li>
+                                                              ))}
+                                                            </ul>
+                                                          </TooltipContent>
+                                                        </Tooltip>
+                                                      )}
                                                     </div>
                                                   </TableCell>
                                                   <TableCell>
@@ -1293,18 +1847,16 @@ export default function ManagerHierarchyView({
                                                       const reassignment = getReassignment(child.sfdc_account_id);
                                                       if (!reassignment) return null;
                                                       return (
-                                                        <TooltipProvider>
-                                                          <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs cursor-help">
-                                                                {getApprovalStatusLabel(reassignment.approval_status)}
-                                                              </Badge>
-                                                            </TooltipTrigger>
-                                                            <TooltipContent>
-                                                              <p>Proposed: {reassignment.proposed_owner_name || 'Unknown'}</p>
-                                                            </TooltipContent>
-                                                          </Tooltip>
-                                                        </TooltipProvider>
+                                                        <Tooltip>
+                                                          <TooltipTrigger asChild>
+                                                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs cursor-help">
+                                                              {getApprovalStatusLabel(reassignment.approval_status)}
+                                                            </Badge>
+                                                          </TooltipTrigger>
+                                                          <TooltipContent>
+                                                            <p>Proposed: {reassignment.proposed_owner_name || 'Unknown'}</p>
+                                                          </TooltipContent>
+                                                        </Tooltip>
                                                       );
                                                     })()}
                                                   </TableCell>
@@ -1337,7 +1889,7 @@ export default function ManagerHierarchyView({
                                                       <Button
                                                         variant="outline"
                                                         size="sm"
-                                                        onClick={() => setReassigningAccount({ ...child, currentOwner: rep })}
+                                                        onClick={() => handleReassignClick(child, rep)}
                                                         disabled={reviewStatus === 'accepted' || hasReassignment(child.sfdc_account_id)}
                                                         className="text-xs"
                                                       >
@@ -1534,6 +2086,56 @@ export default function ManagerHierarchyView({
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 )}
                 Submit Reassignment
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Counter-Proposal Confirmation Dialog */}
+      {counterProposalConfirm && (
+        <Dialog open={!!counterProposalConfirm} onOpenChange={() => setCounterProposalConfirm(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-500" />
+                Counter-Proposal Required
+              </DialogTitle>
+              <DialogDescription>
+                This account is in a book that was already approved by {counterProposalConfirm.approverRole}.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-4 rounded-lg">
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  <strong>{counterProposalConfirm.approvedBy}</strong> ({counterProposalConfirm.approverRole}) has already approved this rep's book.
+                </p>
+                <p className="text-sm text-amber-700 dark:text-amber-300 mt-2">
+                  Your proposal will create a counter-proposal that requires {counterProposalConfirm.approverRole} re-review before it can be applied.
+                </p>
+              </div>
+
+              <div className="bg-muted/50 p-3 rounded-lg">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Account</span>
+                  <span className="font-medium">{counterProposalConfirm.account.account_name}</span>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setCounterProposalConfirm(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="default"
+                onClick={confirmCounterProposal}
+              >
+                Continue with Counter-Proposal
               </Button>
             </DialogFooter>
           </DialogContent>

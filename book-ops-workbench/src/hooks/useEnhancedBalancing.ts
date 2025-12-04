@@ -73,6 +73,15 @@ interface EnhancedBalancingData {
   repMetrics: RepMetrics[];
   repAccountDetails: Record<string, AccountDetail[]>;
   assignedAccountsCount: number; // Total accounts with new_owner_id set
+  beforeMetrics?: {
+    totalCustomerARR: number;
+    totalCustomerAccounts: number;
+    totalProspectAccounts: number;
+    avgCustomerARRPerRep: number;
+    avgCustomerAccountsPerRep: number;
+    avgProspectAccountsPerRep: number;
+    maxArrVariance: number;
+  };
 }
 
 export const useEnhancedBalancing = (buildId?: string) => {
@@ -415,6 +424,28 @@ export const useEnhancedBalancing = (buildId?: string) => {
       // Calculate total assigned accounts (those with new_owner_id set)
       const totalAssignedAccounts = assignedCustomers.length + assignedProspects.length;
 
+      // Calculate before metrics (based on owner_id)
+      const beforeCustomerAccounts = accounts.filter(acc => acc.is_customer && acc.owner_id);
+      const beforeProspectAccounts = accounts.filter(acc => !acc.is_customer && acc.owner_id);
+      const beforeCustomerARR = beforeCustomerAccounts.reduce((sum, acc) => {
+        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
+        return sum + arrValue;
+      }, 0);
+      const beforeAvgCustomerARRPerRep = reps.length > 0 ? beforeCustomerARR / reps.length : 0;
+      const beforeAvgCustomerAccountsPerRep = reps.length > 0 ? beforeCustomerAccounts.length / reps.length : 0;
+      const beforeAvgProspectAccountsPerRep = reps.length > 0 ? beforeProspectAccounts.length / reps.length : 0;
+
+      // Calculate before variance
+      const beforeRepCustomerCounts = reps.map(rep => {
+        return beforeCustomerAccounts.filter(acc => acc.owner_id === rep.rep_id).length;
+      });
+      const beforeAvgAccounts = beforeRepCustomerCounts.length > 0 && beforeRepCustomerCounts.reduce((sum, count) => sum + count, 0) > 0
+        ? beforeRepCustomerCounts.reduce((sum, count) => sum + count, 0) / beforeRepCustomerCounts.length
+        : 0;
+      const beforeMaxVariance = beforeAvgAccounts > 0
+        ? Math.max(...beforeRepCustomerCounts.map(count => Math.abs((count - beforeAvgAccounts) / beforeAvgAccounts * 100)))
+        : 0;
+
       return {
         customerMetrics: {
           totalARR: totalCustomerARR,
@@ -437,7 +468,16 @@ export const useEnhancedBalancing = (buildId?: string) => {
         },
         repMetrics: repMetricsData.sort((a, b) => b.customerARR - a.customerARR),
         repAccountDetails,
-        assignedAccountsCount: totalAssignedAccounts
+        assignedAccountsCount: totalAssignedAccounts,
+        beforeMetrics: {
+          totalCustomerARR: beforeCustomerARR,
+          totalCustomerAccounts: beforeCustomerAccounts.length,
+          totalProspectAccounts: beforeProspectAccounts.length,
+          avgCustomerARRPerRep: beforeAvgCustomerARRPerRep,
+          avgCustomerAccountsPerRep: beforeAvgCustomerAccountsPerRep,
+          avgProspectAccountsPerRep: beforeAvgProspectAccountsPerRep,
+          maxArrVariance: beforeMaxVariance
+        }
       };
     } catch (err) {
       console.error('[useEnhancedBalancing] Error fetching data:', err);

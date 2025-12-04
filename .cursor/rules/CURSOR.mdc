@@ -53,7 +53,13 @@ We are currently in **QA Mode**. The codebase is unstable.
 ### 🛡️ Safety & Coding
 *   **File Operations**: Always check if a file exists before creation. Prefer `edit` over `overwrite`.
 *   **No Magic**: Do not assume deployment environments. Check env vars first.
-*   
+*   **Pre-Deploy Code Review**: **MANDATORY**. Before deploying ANY change to Vercel:
+    1. Re-read the code you modified to verify it makes sense
+    2. Check for edge cases (null values, empty arrays, race conditions)
+    3. Verify the change doesn't break related flows (e.g., if you change approval logic, check ALL approval paths)
+    4. Look for missing error handling
+    5. Ensure notifications go to the right people
+    6. Run linter checks on modified files
 
 ## 6. Versioning & Releases
 
@@ -61,6 +67,8 @@ We are currently in **QA Mode**. The codebase is unstable.
 The app version is shown in **Settings** at the bottom. It pulls from `package.json` at build time.
 
 ### Release Workflow (AI-Assisted)
+**Proactive releases**: After significant changes (3+ features/fixes, or end of session), suggest a patch release (e.g., 1.1.1 → 1.1.2).
+
 When the user says "release", "push to GitHub", or "create a version", follow this process:
 
 1. **Bump version** in `book-ops-workbench/package.json`
@@ -96,5 +104,21 @@ Push to GitHub when:
 `Release vX.X.X - Brief summary` for releases
 `Fix: description` or `Feature: description` for regular commits
 
-## 8. Learning Log
+## 8. Developer & Notifications
+
+### Developer Info
+- **Developer Slack**: `@sean.muse` (pendo.io workspace)
+- **Developer Email**: `sean.muse@pendo.io`
+- All developer feedback, error notifications, and fallback messages go to @sean.muse
+
+### Slack Notification Routing
+- **pendo.io emails** → DM to user (extracted from email prefix)
+- **Non-pendo.io emails** → Fallback DM to @sean.muse with context
+- **Feedback widget** → Always DMs @sean.muse
+
+### Supabase Project
+- **Project ID**: `lolnbotrdamhukdrrsmh`
+- **Edge Functions**: `send-slack-notification`, `gemini-territory-mapping`, etc.
+
+## 9. Learning Log
 Maintain a learning log so as we build this app I continue to understand what we are doing, and why

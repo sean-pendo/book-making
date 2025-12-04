@@ -1,5 +1,4 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -8,10 +7,10 @@ import { Info, Settings, CheckCircle, AlertTriangle, TrendingDown, Users, MapPin
 
 interface WaterfallLogicExplainerProps {
   buildId: string;
+  onConfigureClick?: () => void;
 }
 
-export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = ({ buildId }) => {
-  const navigate = useNavigate();
+export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = ({ buildId, onConfigureClick }) => {
 
   return (
     <div className="space-y-6">
@@ -28,7 +27,7 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
                 Simple, predictable 3-priority system with hard capacity constraints
               </CardDescription>
             </div>
-            <Button onClick={() => navigate(`/assignment-config/${buildId}`)}>
+            <Button onClick={onConfigureClick}>
               <Settings className="w-4 h-4 mr-2" />
               Configure Settings
             </Button>
@@ -414,7 +413,7 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
                 Set target ARR, capacity variance, and risk thresholds before generating assignments
               </p>
             </div>
-            <Button onClick={() => navigate(`/assignment-config/${buildId}`)} variant="outline">
+            <Button onClick={onConfigureClick} variant="outline">
               Configure Now
             </Button>
           </div>

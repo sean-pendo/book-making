@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Progress } from '@/components/ui/progress';
 import { Download, CheckCircle, AlertCircle, ArrowRight, FileText, Users, TrendingUp, Info, HelpCircle, Send, Undo2, Lock, ArrowLeft, RotateCcw, Loader2, Building, Building2, Target } from 'lucide-react';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
@@ -97,7 +97,9 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
           cre_risk,
           cre_status,
           expansion_tier,
-          is_customer
+          is_customer,
+          sales_territory,
+          geo
         `)
         .eq('build_id', buildId)
         .eq('is_customer', true)
@@ -323,9 +325,9 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         if (tierFilter === 'unassigned' && tier && tier !== 'unassigned' && tier !== 'none') return false;
       }
       
-      // Risk filter
+      // Risk filter - check both cre_status and cre_count
       if (riskFilter !== 'all') {
-        const hasRisk = change.cre_status !== null || change.risk_flag;
+        const hasRisk = change.cre_status !== null || (change.cre_count && change.cre_count > 0) || change.risk_flag;
         if (riskFilter === 'risk' && !hasRisk) return false;
         if (riskFilter === 'no-risk' && hasRisk) return false;
       }
@@ -382,12 +384,30 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       return sum + (atrFromOpps || atrFromAccount); // Prefer opportunities data
     }, 0);
     const totalRiskAccounts = parentAccounts.filter(acc => 
-      acc.cre_status !== null
+      acc.cre_status !== null || (acc.cre_count && acc.cre_count > 0)
     ).length;
     const totalActiveReps = allActiveSalesReps.length;
     
     // Get sales rep data from the Map
     const salesRepsMap = buildData.salesRepsByRepId;
+    
+    // Calculate regional alignment - accounts where territory matches rep's region
+    let regionallyAligned = 0;
+    let totalWithTerritory = 0;
+    parentAccounts.forEach(acc => {
+      const territory = acc.sales_territory || acc.geo;
+      if (territory) {
+        totalWithTerritory++;
+        const ownerId = acc.new_owner_id || acc.owner_id;
+        const ownerRep = salesRepsMap.get(ownerId);
+        if (ownerRep?.region && territory.toLowerCase().includes(ownerRep.region.toLowerCase())) {
+          regionallyAligned++;
+        }
+      }
+    });
+    const regionalAlignmentRate = totalWithTerritory > 0 
+      ? (regionallyAligned / totalWithTerritory) * 100 
+      : 0;
 
     // Group all customer accounts by current owner FLM and SLM with split ownership logic
     const portfoliosBySLM = parentAccounts.reduce((acc, account) => {
@@ -466,8 +486,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         acc[slm][flm].unassignedTierCount++;
       }
       
-      // Risk accounts - based on CRE status from opportunities
-      if (account.cre_status !== null) {
+      // Risk accounts - based on CRE status OR cre_count from opportunities
+      if (account.cre_status !== null || (account.cre_count && account.cre_count > 0)) {
         acc[slm][flm].riskCount++;
       }
       
@@ -548,6 +568,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       totalATR,
       totalRiskAccounts,
       totalActiveReps,
+      regionalAlignmentRate,
       portfoliosBySLM: processedPortfoliosBySLM
     };
   }, [allAccounts, buildData, allActiveSalesReps, opportunitiesForATR]);
@@ -721,24 +742,53 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
     csvRows.push('');
     csvRows.push('');
     
-    // Account Changes Section
-    csvRows.push('=== ALL ACCOUNT MOVES (OWNERSHIP CHANGES) ===');
+    // All Customer Accounts Section
+    csvRows.push('=== ALL CUSTOMER ACCOUNTS ===');
     csvRows.push('');
-    csvRows.push('Account Name,Account ID,ARR,Tier,Current Owner,New Owner,CRE Risk,CRE Count,Risk Flag');
+    csvRows.push('Account Name,Account ID,ARR ($M),ATR ($M),Tier,Territory,Current Owner,New Owner,Changed,CRE Status,CRE Count');
     
-    assignmentChanges?.forEach((change) => {
-      const arr = (parseFloat(change.hierarchy_bookings_arr_converted) || parseFloat(change.calculated_arr) || parseFloat(change.arr) || 0) / 1000000;
+    allAccounts?.forEach((account: any) => {
+      const arr = (parseFloat(account.hierarchy_bookings_arr_converted) || parseFloat(account.calculated_arr) || parseFloat(account.arr) || 0) / 1000000;
+      const atr = (parseFloat(account.calculated_atr) || parseFloat(account.atr) || 0) / 1000000;
+      const wasReassigned = account.new_owner_id && account.owner_id !== account.new_owner_id;
+      
       csvRows.push([
-        `"${change.account_name || ''}"`, // Quote to handle commas in names
-        change.sfdc_account_id || '',
-        arr.toFixed(2),
-        change.expansion_tier || 'Unassigned',
-        `"${change.owner_name || 'Unassigned'}"`,
-        `"${change.new_owner_name || 'Unassigned'}"`,
-        change.cre_status || '',
-        change.cre_count || 0
+        `"${account.account_name || ''}"`,
+        account.sfdc_account_id || '',
+        arr.toFixed(3),
+        atr.toFixed(3),
+        account.expansion_tier || 'Unassigned',
+        `"${account.sales_territory || account.geo || ''}"`,
+        `"${account.owner_name || 'Unassigned'}"`,
+        `"${account.new_owner_name || account.owner_name || 'Unassigned'}"`,
+        wasReassigned ? 'Yes' : 'No',
+        account.cre_status || '',
+        account.cre_count || 0
       ].join(','));
     });
+    
+    csvRows.push('');
+    csvRows.push('');
+    
+    // Prospect Accounts Section (if available)
+    if (prospectAccounts && prospectAccounts.length > 0) {
+      csvRows.push('=== ALL PROSPECT ACCOUNTS ===');
+      csvRows.push('');
+      csvRows.push('Account Name,Account ID,Territory,Current Owner,New Owner,Changed');
+      
+      prospectAccounts.forEach((account: any) => {
+        const wasReassigned = account.new_owner_id && account.owner_id !== account.new_owner_id;
+        
+        csvRows.push([
+          `"${account.account_name || ''}"`,
+          account.sfdc_account_id || '',
+          `"${account.sales_territory || account.geo || ''}"`,
+          `"${account.owner_name || 'Unassigned'}"`,
+          `"${account.new_owner_name || account.owner_name || 'Unassigned'}"`,
+          wasReassigned ? 'Yes' : 'No'
+        ].join(','));
+      });
+    }
     
     // Convert to CSV blob
     const csvContent = csvRows.join('\n');
@@ -915,260 +965,109 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         </p>
       </div>
 
-      {/* Summary Cards - Combined View */}
+      {/* Customer Portfolio - Compact Summary Bar */}
       {(viewMode === 'all' || viewMode === 'customers') && portfolioSummary && (
-        <div className="space-y-2">
-          {viewMode === 'all' && <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Building2 className="h-4 w-4" /> Customer Portfolio</h3>}
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <Card className="border-l-4 border-l-green-500">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Parent Accounts</CardTitle>
-                <Building2 className="h-4 w-4 text-green-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{portfolioSummary.totalAccounts}</div>
-                <p className="text-xs text-muted-foreground">
-                  Customer hierarchies
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total ARR</CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">${(portfolioSummary.totalARR / 1000000).toFixed(1)}M</div>
-                <p className="text-xs text-muted-foreground">
-                  Customer revenue
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total ATR</CardTitle>
-                <CheckCircle className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">${(portfolioSummary.totalATR / 1000000).toFixed(1)}M</div>
-                <p className="text-xs text-muted-foreground">
-                  Available to renew
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">At-Risk Parents</CardTitle>
-                <AlertCircle className="h-4 w-4 text-red-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-red-600">{portfolioSummary.totalRiskAccounts}</div>
-                <p className="text-xs text-muted-foreground">
-                  Parent accounts with CRE status
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Active Reps</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{portfolioSummary.totalActiveReps}</div>
-                <p className="text-xs text-muted-foreground">
-                  Assignment eligible
-                </p>
-              </CardContent>
-            </Card>
+        <div className="rounded-lg border bg-card p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Building2 className="h-4 w-4 text-green-600" />
+            <span className="text-sm font-medium">Customer Portfolio</span>
           </div>
-          
-          {/* Customer Impact Analytics Row */}
-          {assignmentChanges && allAccounts && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-3">
-              <Card className="border-l-4 border-l-green-500">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Parents Reassigned</CardTitle>
-                  <ArrowRight className="h-4 w-4 text-green-600" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{assignmentChanges.length}</div>
-                  <p className="text-xs text-muted-foreground">
-                    {allAccounts.length > 0 ? ((assignmentChanges.length / allAccounts.length) * 100).toFixed(1) : 0}% of parent accounts
-                  </p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">ARR Impacted</CardTitle>
-                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">
-                    ${(assignmentChanges.reduce((sum, acc) => {
-                      const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
-                      return sum + arrValue;
-                    }, 0) / 1000000).toFixed(1)}M
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    From reassigned accounts
-                  </p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Retention Rate</CardTitle>
-                  <CheckCircle className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">
-                    {allAccounts.length > 0 ? (((allAccounts.length - assignmentChanges.length) / allAccounts.length) * 100).toFixed(1) : 0}%
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Accounts staying with same owner
-                  </p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">High-Risk Reassignments</CardTitle>
-                  <AlertCircle className="h-4 w-4 text-red-500" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-red-600">
-                    {assignmentChanges.filter(acc => acc.cre_status !== null).length}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Parents with CRE status being reassigned
-                  </p>
-                </CardContent>
-              </Card>
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+            {/* Accounts */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold">{portfolioSummary.totalAccounts.toLocaleString()}</span>
+              <span className="text-xs text-muted-foreground">accounts</span>
             </div>
-          )}
+            <div className="h-8 w-px bg-border hidden sm:block" />
+            
+            {/* ARR */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold">${(portfolioSummary.totalARR / 1000000).toFixed(1)}M</span>
+              <span className="text-xs text-muted-foreground">ARR</span>
+            </div>
+            <div className="h-8 w-px bg-border hidden sm:block" />
+            
+            {/* ATR */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold">${(portfolioSummary.totalATR / 1000000).toFixed(1)}M</span>
+              <span className="text-xs text-muted-foreground">ATR</span>
+            </div>
+            <div className="h-8 w-px bg-border hidden sm:block" />
+            
+            {/* At-Risk */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold text-red-600">{portfolioSummary.totalRiskAccounts}</span>
+              <span className="text-xs text-muted-foreground">at-risk</span>
+            </div>
+            <div className="h-8 w-px bg-border hidden sm:block" />
+            
+            {/* Retention */}
+            {assignmentChanges && allAccounts && (
+              <>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold text-green-600">
+                    {allAccounts.length > 0 ? (((allAccounts.length - assignmentChanges.length) / allAccounts.length) * 100).toFixed(1) : 0}%
+                  </span>
+                  <span className="text-xs text-muted-foreground">retention</span>
+                </div>
+                <div className="h-8 w-px bg-border hidden sm:block" />
+                
+                {/* Regional Alignment */}
+                <div className="flex items-baseline gap-1.5">
+                  <span className={`text-2xl font-bold ${portfolioSummary.regionalAlignmentRate >= 80 ? 'text-green-600' : portfolioSummary.regionalAlignmentRate >= 60 ? 'text-amber-500' : 'text-red-500'}`}>
+                    {portfolioSummary.regionalAlignmentRate.toFixed(1)}%
+                  </span>
+                  <span className="text-xs text-muted-foreground">geo-aligned</span>
+                </div>
+                <div className="h-8 w-px bg-border hidden sm:block" />
+                
+                {/* Reassigned */}
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold">{assignmentChanges.length}</span>
+                  <span className="text-xs text-muted-foreground">reassigned</span>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Prospect Summary Cards */}
+      {/* Prospect Portfolio - Compact Summary Bar */}
       {(viewMode === 'all' || viewMode === 'prospects') && prospectMetrics && (
-        <div className="space-y-2">
-          {viewMode === 'all' && <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Target className="h-4 w-4" /> Prospect Portfolio</h3>}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="border-l-4 border-l-blue-500">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Parent Accounts</CardTitle>
-                <Target className="h-4 w-4 text-blue-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{prospectMetrics.total}</div>
-                <p className="text-xs text-muted-foreground">
-                  Prospect hierarchies
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Assigned</CardTitle>
-                <CheckCircle className="h-4 w-4 text-green-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{prospectMetrics.assigned}</div>
-                <p className="text-xs text-muted-foreground">
-                  Have new owner
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Reassigned</CardTitle>
-                <ArrowRight className="h-4 w-4 text-amber-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{prospectMetrics.reassigned}</div>
-                <p className="text-xs text-muted-foreground">
-                  Ownership changed
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Retention Rate</CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{prospectMetrics.retentionRate.toFixed(1)}%</div>
-                <p className="text-xs text-muted-foreground">
-                  Same owner kept
-                </p>
-              </CardContent>
-            </Card>
+        <div className="rounded-lg border bg-card p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Target className="h-4 w-4 text-blue-600" />
+            <span className="text-sm font-medium">Prospect Portfolio</span>
           </div>
-          
-          {/* Prospect Impact Analytics Row */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-3">
-            <Card className="border-l-4 border-l-blue-500">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Prospects Reassigned</CardTitle>
-                <ArrowRight className="h-4 w-4 text-blue-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{prospectMetrics.reassigned}</div>
-                <p className="text-xs text-muted-foreground">
-                  {prospectMetrics.total > 0 ? ((prospectMetrics.reassigned / prospectMetrics.total) * 100).toFixed(1) : 0}% of prospects
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">New Assignments</CardTitle>
-                <CheckCircle className="h-4 w-4 text-green-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-green-600">{prospectMetrics.assigned}</div>
-                <p className="text-xs text-muted-foreground">
-                  Now have owner assigned
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Kept Same Owner</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {prospectMetrics.total - prospectMetrics.reassigned}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Owner unchanged
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Coverage Rate</CardTitle>
-                <Target className="h-4 w-4 text-blue-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-blue-600">
-                  {prospectMetrics.total > 0 ? ((prospectMetrics.assigned / prospectMetrics.total) * 100).toFixed(1) : 0}%
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Prospects with owners
-                </p>
-              </CardContent>
-            </Card>
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+            {/* Accounts */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold">{prospectMetrics.total.toLocaleString()}</span>
+              <span className="text-xs text-muted-foreground">accounts</span>
+            </div>
+            <div className="h-8 w-px bg-border hidden sm:block" />
+            
+            {/* Reassigned */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold">{prospectMetrics.reassigned.toLocaleString()}</span>
+              <span className="text-xs text-muted-foreground">reassigned</span>
+            </div>
+            <div className="h-8 w-px bg-border hidden sm:block" />
+            
+            {/* Retention */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold text-green-600">{prospectMetrics.retentionRate.toFixed(1)}%</span>
+              <span className="text-xs text-muted-foreground">retention</span>
+            </div>
+            <div className="h-8 w-px bg-border hidden sm:block" />
+            
+            {/* Coverage */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold text-blue-600">
+                {prospectMetrics.total > 0 ? ((prospectMetrics.assigned / prospectMetrics.total) * 100).toFixed(1) : 0}%
+              </span>
+              <span className="text-xs text-muted-foreground">coverage</span>
+            </div>
           </div>
         </div>
       )}
@@ -1762,7 +1661,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                 {assignmentChanges && (
                   <div className="space-y-3">
                     {assignmentChanges
-                      .filter(acc => acc.cre_status !== null)
+                      .filter(acc => acc.cre_status !== null || (acc.cre_count && acc.cre_count > 0))
                       .sort((a, b) => {
                         // Sort by severity: Confirmed Churn > At Risk > Pre-Risk Discovery > Monitoring > Closed
                         const severity: Record<string, number> = { 'Confirmed Churn': 5, 'At Risk': 4, 'Pre-Risk Discovery': 3, 'Monitoring': 2, 'Closed': 1 };
@@ -1804,7 +1703,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                           </div>
                         );
                       })}
-                    {assignmentChanges.filter(acc => acc.cre_status !== null).length === 0 && (
+                    {assignmentChanges.filter(acc => acc.cre_status !== null || (acc.cre_count && acc.cre_count > 0)).length === 0 && (
                       <p className="text-center text-muted-foreground py-4">
                         No at-risk parent accounts being reassigned
                       </p>

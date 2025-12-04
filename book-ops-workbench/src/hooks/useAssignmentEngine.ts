@@ -33,7 +33,9 @@ interface Account {
   is_parent: boolean;
   risk_flag: boolean;
   cre_risk: boolean;
+  cre_status?: string;
   cre_count?: number;
+  child_count?: number;
   expansion_score?: number;
   account_type?: string;
   industry?: string;
@@ -136,35 +138,7 @@ export const useAssignmentEngine = (buildId?: string) => {
         
         return supabase
           .from('accounts')
-          .select(`
-            sfdc_account_id,
-            account_name,
-            parent_id,
-            ultimate_parent_id,
-            enterprise_vs_commercial,
-            expansion_tier,
-            initial_sale_tier,
-            arr,
-            hierarchy_bookings_arr_converted,
-            calculated_arr,
-            owner_id,
-            owner_name,
-            new_owner_id,
-            new_owner_name,
-            geo,
-            sales_territory,
-            is_customer,
-            is_parent,
-            risk_flag,
-            cre_risk,
-            expansion_score,
-            account_type,
-            industry,
-            employees,
-            atr,
-            calculated_atr,
-            exclude_from_reassignment
-          `)
+          .select('*')
           .eq('build_id', buildId)
           .eq('is_parent', true)
           .order('account_name')
@@ -904,10 +878,8 @@ export const useAssignmentEngine = (buildId?: string) => {
       // Small delay to ensure data propagation
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      toast({
-        title: "✅ Assignments Applied",
-        description: `Successfully applied ${uniqueProposals.length} assignments with preserved reasoning.`,
-      });
+      // Note: Success dialog is shown by AssignmentEngine.tsx, not a toast here
+      // This avoids duplicate notifications
       
       // Clear assignment result after successful execution and refresh
       console.log('[Assignment Execute] 🧹 Clearing assignment result after successful execution');

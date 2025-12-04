@@ -10,7 +10,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Upload, Check, AlertTriangle, X, FileText, Database, Settings, Download, Plus, Shield, Trash2, ExternalLink } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Upload, Check, AlertTriangle, X, FileText, Database, Settings, Download, Plus, Shield, Trash2, CheckCircle, FileSearch, ShieldCheck, GitBranch, Loader2, ChevronRight, Users } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
@@ -162,7 +163,6 @@ const countPopulatedFields = async (
 import { DataPreview } from '@/components/DataPreview';
 import { EnhancedValidationResults } from '@/components/EnhancedValidationResults';
 import { ImportProgressMonitor } from '@/components/ImportProgressMonitor';
-import { DataRecovery } from '@/components/DataRecovery';
 import { loadDataImportState, saveDataImportState, clearDataImportState } from '@/utils/persistenceUtils';
 
 interface ImportFile {
@@ -199,6 +199,7 @@ interface ImportFile {
   };
   importResult?: ImportResult;
   _populatedFieldCount?: number; // Count of populated fields from Supabase (fallback when no metadata)
+  importProgress?: { processed: number; total: number }; // Track import progress
 }
 
 interface FieldMapping {
@@ -208,10 +209,20 @@ interface FieldMapping {
   mapped: boolean;
 }
 
-export const DataImport = () => {
+interface DataImportProps {
+  buildId?: string; // When provided, skip build selector and use this build
+  onImportComplete?: (dataType: 'accounts' | 'opportunities' | 'sales_reps') => void | Promise<void>;
+  onDataChange?: () => void | Promise<void>; // Called after any data change (import, delete) to trigger refresh
+  onContinue?: () => void; // Called when user wants to proceed after import
+}
+
+export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChange, onContinue }: DataImportProps = {}) => {
   const { toast } = useToast();
   const { effectiveProfile, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+  
+  // If buildId is provided via props, we're embedded in BuildDetail
+  const isEmbedded = !!propBuildId;
   
   // State with persistence
   const [files, setFiles] = useState<ImportFile[]>(() => {
@@ -243,10 +254,22 @@ export const DataImport = () => {
   const [activeTab, setActiveTab] = useState(() => loadDataImportState.activeTab());
   const [selectedFile, setSelectedFile] = useState<ImportFile | null>(null);
   const [showMappingDialog, setShowMappingDialog] = useState(false);
-  const [currentBuildId, setCurrentBuildId] = useState<string | null>(() => loadDataImportState.currentBuildId());
+  // Use propBuildId if provided (embedded mode), otherwise use localStorage state
+  const [currentBuildId, setCurrentBuildId] = useState<string | null>(() => propBuildId || loadDataImportState.currentBuildId());
   const [availableBuilds, setAvailableBuilds] = useState<Array<{id: string, name: string}>>([]);
   const [isCreatingBuild, setIsCreatingBuild] = useState(false);
   const [newBuildName, setNewBuildName] = useState('');
+  const [importingFileIds, setImportingFileIds] = useState<Set<string>>(new Set());
+  const [previewFile, setPreviewFile] = useState<ImportFile | null>(null);
+  const [errorViewFile, setErrorViewFile] = useState<ImportFile | null>(null);
+  const [dataRefreshKey, setDataRefreshKey] = useState(0);
+  
+  // Sync with propBuildId when it changes (for embedded mode)
+  useEffect(() => {
+    if (propBuildId && propBuildId !== currentBuildId) {
+      setCurrentBuildId(propBuildId);
+    }
+  }, [propBuildId]);
 
   // Persist state changes with error handling
   useEffect(() => {
@@ -670,11 +693,11 @@ export const DataImport = () => {
     { csvField: '', schemaField: 'sfdc_account_id', required: true, mapped: false, priority: 'essential', description: 'Unique Salesforce Account ID (18-digit)' },
     { csvField: '', schemaField: 'account_name', required: true, mapped: false, priority: 'essential', description: 'Company or organization name' },
     
-    // High priority fields - Critical for territory assignment and revenue tracking
+    // High priority fields - Important for territory assignment and revenue tracking (but not blocking)
     { csvField: '', schemaField: 'owner_id', required: false, mapped: false, priority: 'high', description: 'Account owner user ID' },
     { csvField: '', schemaField: 'owner_name', required: false, mapped: false, priority: 'high', description: 'Account owner full name' },
-    { csvField: '', schemaField: 'ultimate_parent_id', required: false, mapped: false, priority: 'high', description: 'Ultimate parent account ID for hierarchy' },
-    { csvField: '', schemaField: 'ultimate_parent_name', required: false, mapped: false, priority: 'high', description: 'Ultimate parent account name' },
+    { csvField: '', schemaField: 'ultimate_parent_id', required: false, mapped: false, priority: 'high', description: 'Ultimate parent account ID for hierarchy (empty for parent accounts)' },
+    { csvField: '', schemaField: 'ultimate_parent_name', required: false, mapped: false, priority: 'high', description: 'Ultimate parent account name (empty for parent accounts)' },
     { csvField: '', schemaField: 'sales_territory', required: false, mapped: false, priority: 'high', description: 'Sales territory assignment' },
     { csvField: '', schemaField: 'hq_country', required: false, mapped: false, priority: 'high', description: 'Headquarters country for geo assignment' },
     { csvField: '', schemaField: 'arr', required: false, mapped: false, priority: 'high', description: 'Annual Recurring Revenue' },
@@ -712,7 +735,7 @@ export const DataImport = () => {
     { csvField: '', schemaField: 'sfdc_opportunity_id', required: true, mapped: false, priority: 'essential', description: 'Unique Salesforce Opportunity ID' },
     { csvField: '', schemaField: 'sfdc_account_id', required: true, mapped: false, priority: 'essential', description: 'Related Account ID' },
     
-    // High priority fields - Critical for pipeline management and revenue forecasting
+    // High priority fields - Important for pipeline management (but not blocking)
     { csvField: '', schemaField: 'opportunity_name', required: false, mapped: false, priority: 'high', description: 'Opportunity name' },
     { csvField: '', schemaField: 'opportunity_type', required: false, mapped: false, priority: 'high', description: 'Opportunity type (New Business, Expansion, Renewal)' },
     { csvField: '', schemaField: 'stage', required: false, mapped: false, priority: 'high', description: 'Current sales stage' },
@@ -735,7 +758,7 @@ export const DataImport = () => {
     { csvField: '', schemaField: 'rep_id', required: true, mapped: false, priority: 'essential', description: 'Unique sales rep identifier (User ID, SFDC ID)' },
     { csvField: '', schemaField: 'name', required: true, mapped: false, priority: 'essential', description: 'Sales representative full name' },
     
-    // High priority fields - Critical for management hierarchy and territory assignment
+    // High priority fields - Important for management hierarchy (but not blocking)
     { csvField: '', schemaField: 'team', required: false, mapped: false, priority: 'high', description: 'Sales team assignment' },
     { csvField: '', schemaField: 'manager', required: false, mapped: false, priority: 'high', description: 'Direct manager name' },
     { csvField: '', schemaField: 'flm', required: false, mapped: false, priority: 'high', description: 'First Level Manager' },
@@ -984,6 +1007,10 @@ export const DataImport = () => {
         description: `${fileToDelete.type} data has been removed from the database`,
       });
 
+      // Trigger data refresh in parent component and local DataVerification
+      await onDataChange?.();
+      setDataRefreshKey(prev => prev + 1);
+
     } catch (error) {
       console.error('💥 Error deleting file data:', error);
       toast({
@@ -992,7 +1019,7 @@ export const DataImport = () => {
         variant: "destructive"
       });
     }
-  }, [files, selectedFile?.id, currentBuildId, toast]);
+  }, [files, selectedFile?.id, currentBuildId, toast, onDataChange]);
 
   const autoMapAllFields = (file: ImportFile) => {
     if (!file.autoMappings) return;
@@ -1271,7 +1298,7 @@ export const DataImport = () => {
         });
       }
       
-      setActiveTab('validation');
+      setActiveTab('review');
     } catch (error) {
       setFiles(prev => prev.map(f => 
         f.id === file.id 
@@ -1293,6 +1320,12 @@ export const DataImport = () => {
 
   const handleValidateAndImport = async (file: ImportFile) => {
     console.log('🚀 handleValidateAndImport called for:', file.name, 'with validation result:', !!file.validationResult);
+    
+    // Prevent importing the same file twice
+    if (importingFileIds.has(file.id)) {
+      console.log('⏳ This file is already being imported, ignoring click');
+      return;
+    }
     
     // Enhanced pre-import validation
     if (!file.validationResult) {
@@ -1355,6 +1388,7 @@ export const DataImport = () => {
     }
 
     // Set status to importing (not validating - validation is already done)
+    setImportingFileIds(prev => new Set(prev).add(file.id));
     setFiles(prev => prev.map(f => 
       f.id === file.id 
         ? { ...f, status: 'validating' as const }
@@ -1435,7 +1469,18 @@ export const DataImport = () => {
           : f
       ));
 
+      // Clear importing state for this file
+      setImportingFileIds(prev => {
+        const next = new Set(prev);
+        next.delete(file.id);
+        return next;
+      });
+
       if (result.success) {
+        // Notify parent component that import is complete (for auto-refresh)
+        await onImportComplete?.(file.type);
+        await onDataChange?.(); // Trigger general data refresh
+        
         // Clear the build count cache so Data Verification shows fresh data
         const { buildCountService } = await import('@/services/buildCountService');
         buildCountService.clearBuildCache(currentBuildId);
@@ -1466,9 +1511,9 @@ export const DataImport = () => {
           description: `Successfully imported ${result.recordsImported} of ${result.recordsProcessed} records to build "${buildExists.name}". Database shows ${actualDatabaseCount} total records.`,
         });
 
-        // Switch to verification tab to show user their data is ready
+        // Switch to review tab to show user their data is ready
         setTimeout(() => {
-          setActiveTab('verification');
+          setActiveTab('review');
         }, 1000);
 
         // Show verification confirmation after switching tabs
@@ -1486,10 +1531,16 @@ export const DataImport = () => {
           description: `Imported ${result.recordsImported} records, ${result.errors.length} errors occurred. Database shows ${actualDatabaseCount} total records.`,
           variant: "destructive",
         });
-        setActiveTab('validation');
+        setActiveTab('review');
       }
     } catch (error) {
       console.error('Import failed:', error);
+      // Clear importing state for this file on error
+      setImportingFileIds(prev => {
+        const next = new Set(prev);
+        next.delete(file.id);
+        return next;
+      });
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       
       // Check for RLS policy violations specifically
@@ -1546,7 +1597,7 @@ export const DataImport = () => {
       case 'opportunities':
         return <FileText className="w-4 h-4" />;
       case 'sales_reps':
-        return <Settings className="w-4 h-4" />;
+        return <Users className="w-4 h-4" />;
       default:
         return <FileText className="w-4 h-4" />;
     }
@@ -1572,9 +1623,9 @@ export const DataImport = () => {
     if (!currentBuildId) return false;
     const completedFiles = files.filter(f => f.status === 'completed');
     const hasAccounts = completedFiles.some(f => f.type === 'accounts');
-    const hasOpportunities = completedFiles.some(f => f.type === 'opportunities');
     const hasSalesReps = completedFiles.some(f => f.type === 'sales_reps');
-    return hasAccounts && hasOpportunities && hasSalesReps;
+    // Opportunities are optional - only require accounts + sales reps
+    return hasAccounts && hasSalesReps;
   }, [files, currentBuildId]);
 
   // Calculate total records from completed files
@@ -1593,26 +1644,30 @@ export const DataImport = () => {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Data Import</h1>
-        <p className="text-muted-foreground">
-          Upload and validate your Salesforce data files with field mapping and hygiene checks
-        </p>
-        
-        {showAuthWarning && (
-          <Alert className="mt-4">
-            <Shield className="h-4 w-4" />
-            <AlertDescription>
-              {!effectiveProfile 
-                ? "You must be logged in to import data." 
-                : `Import requires REVOPS or LEADERSHIP role. Your current role: ${effectiveProfile.role}`
-              }
-            </AlertDescription>
-          </Alert>
-        )}
-      </div>
+      {/* Header - Only show when NOT embedded in BuildDetail */}
+      {!isEmbedded && (
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Data Import</h1>
+          <p className="text-muted-foreground">
+            Upload and validate your Salesforce data files with field mapping and hygiene checks
+          </p>
+          
+          {showAuthWarning && (
+            <Alert className="mt-4">
+              <Shield className="h-4 w-4" />
+              <AlertDescription>
+                {!effectiveProfile 
+                  ? "You must be logged in to import data." 
+                  : `Import requires REVOPS or LEADERSHIP role. Your current role: ${effectiveProfile.role}`
+                }
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
+      )}
 
-      {/* Build Selection */}
+      {/* Build Selection - Only show when NOT embedded in BuildDetail */}
+      {!isEmbedded && (
       <Card>
         <CardHeader>
           <CardTitle>Select Target Build</CardTitle>
@@ -1687,6 +1742,7 @@ export const DataImport = () => {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Debug Tools - Only show in development or for debugging */}
       {process.env.NODE_ENV === 'development' && (
@@ -1730,9 +1786,12 @@ export const DataImport = () => {
                 </div>
               </div>
               <div className="flex justify-center">
-                <Button onClick={handleNavigateToBuild} className="flex items-center gap-2">
-                  <ExternalLink className="w-4 h-4" />
-                  Open Build Details
+                <Button 
+                  onClick={onContinue || handleNavigateToBuild} 
+                  className="flex items-center gap-2"
+                >
+                  Continue
+                  <ChevronRight className="w-4 h-4" />
                 </Button>
               </div>
             </div>
@@ -1741,12 +1800,71 @@ export const DataImport = () => {
       )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-5">
-          <TabsTrigger value="upload">File Upload</TabsTrigger>
-          <TabsTrigger value="mapping">Field Mapping</TabsTrigger>
-          <TabsTrigger value="validation">Validation Results</TabsTrigger>
-          <TabsTrigger value="verification">Data Verification</TabsTrigger>
-          <TabsTrigger value="recovery">Data Recovery</TabsTrigger>
+        {/* Progress Steps Navigation - Arrow Design */}
+        <div className="mb-4">
+          <div className="flex items-stretch gap-0.5 relative">
+            {[
+              { value: 'upload', icon: Upload, label: 'Upload', step: 1 },
+              { value: 'mapping', icon: GitBranch, label: 'Map Fields', step: 2 },
+              { value: 'review', icon: CheckCircle, label: 'Review & Import', step: 3 },
+            ].map((tab, index, arr) => {
+              const tabOrder = ['upload', 'mapping', 'review'];
+              const currentTabIndex = tabOrder.indexOf(activeTab);
+              const isActive = activeTab === tab.value;
+              const isCompleted = index < currentTabIndex;
+              const isLast = index === arr.length - 1;
+              const Icon = tab.icon;
+              
+              return (
+                <button
+                  key={tab.value}
+                  onClick={() => setActiveTab(tab.value)}
+                  className={`
+                    relative flex-1 flex items-center justify-center gap-2 py-3 px-3 transition-all duration-300
+                    ${isActive 
+                      ? 'bg-primary text-primary-foreground shadow-md' 
+                      : isCompleted 
+                        ? 'bg-primary/20 text-primary hover:bg-primary/30' 
+                        : 'bg-muted/50 text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                    }
+                    ${index === 0 ? 'rounded-l-md' : ''}
+                    ${isLast ? 'rounded-r-md' : ''}
+                  `}
+                  style={{
+                    clipPath: isLast 
+                      ? 'polygon(0 0, 100% 0, 100% 100%, 0 100%, 6px 50%)' 
+                      : index === 0 
+                        ? 'polygon(0 0, calc(100% - 6px) 0, 100% 50%, calc(100% - 6px) 100%, 0 100%)'
+                        : 'polygon(0 0, calc(100% - 6px) 0, 100% 50%, calc(100% - 6px) 100%, 0 100%, 6px 50%)'
+                  }}
+                >
+                  {/* Step indicator */}
+                  <span className={`
+                    w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0
+                    ${isActive 
+                      ? 'bg-primary-foreground/20 text-primary-foreground' 
+                      : isCompleted
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted-foreground/20 text-muted-foreground'
+                    }
+                  `}>
+                    {isCompleted ? <CheckCircle className="w-3.5 h-3.5" /> : tab.step}
+                  </span>
+                  
+                  {/* Icon and Label */}
+                  <Icon className="w-4 h-4 shrink-0" />
+                  <span className="font-medium text-sm truncate hidden md:block">{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        
+        {/* Hidden TabsList for accessibility */}
+        <TabsList className="hidden">
+          <TabsTrigger value="upload">Upload</TabsTrigger>
+          <TabsTrigger value="mapping">Map Fields</TabsTrigger>
+          <TabsTrigger value="review">Review & Import</TabsTrigger>
         </TabsList>
 
         <TabsContent value="upload" className="space-y-4">
@@ -1859,7 +1977,7 @@ export const DataImport = () => {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Settings className="w-5 h-5" />
+                  <Users className="w-5 h-5" />
                   Sales Reps CSV
                 </CardTitle>
                 <CardDescription className="min-h-[3rem]">
@@ -1944,21 +2062,33 @@ export const DataImport = () => {
                                Map Fields
                              </Button>
                            )}
-                           {file.status === 'validated' && (
-                             <Button size="sm" onClick={() => handleValidateAndImport(file)}>
-                               Import Data
-                             </Button>
-                           )}
-                           {(file.status === 'warning') && (
-                             <Button size="sm" onClick={() => handleValidateAndImport(file)}>
-                               Import Valid Data
-                             </Button>
-                           )}
-                           {file.status === 'error' && (
-                             <Button size="sm" variant="outline">
-                               View Errors
-                             </Button>
-                           )}
+                          {file.status === 'validated' && (
+                            <Button 
+                              size="sm" 
+                              onClick={() => handleValidateAndImport(file)}
+                              disabled={importingFileIds.has(file.id)}
+                            >
+                              {importingFileIds.has(file.id) ? (
+                                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Importing...</>
+                              ) : 'Import Data'}
+                            </Button>
+                          )}
+                          {(file.status === 'warning') && (
+                            <Button 
+                              size="sm" 
+                              onClick={() => handleValidateAndImport(file)}
+                              disabled={importingFileIds.has(file.id)}
+                            >
+                              {importingFileIds.has(file.id) ? (
+                                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Importing...</>
+                              ) : 'Import Valid Data'}
+                            </Button>
+                          )}
+                          {file.status === 'error' && (
+                            <Button size="sm" variant="outline" onClick={() => setErrorViewFile(file)}>
+                              View Errors
+                            </Button>
+                          )}
                            <Button 
                              size="sm" 
                              variant="ghost" 
@@ -1987,7 +2117,7 @@ export const DataImport = () => {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {files.filter(f => f.status === 'uploaded' || f.status === 'mapped' || f.status === 'validated' || f.status === 'completed').length === 0 ? (
+              {files.filter(f => f.status !== 'validating').length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <Settings className="w-12 h-12 mx-auto mb-4 opacity-50" />
                   <h3 className="text-lg font-medium mb-2">No Files Ready for Mapping</h3>
@@ -1995,7 +2125,7 @@ export const DataImport = () => {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {files.filter(f => f.status === 'uploaded' || f.status === 'mapped' || f.status === 'validated' || f.status === 'completed').map(file => (
+                  {files.filter(f => f.status !== 'validating').map(file => (
                     <div key={file.id} className={`border rounded-lg p-4 ${file.status === 'completed' ? 'bg-green-50/50 dark:bg-green-950/20 border-green-200 dark:border-green-800' : ''}`}>
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
@@ -2071,184 +2201,286 @@ export const DataImport = () => {
           </Card>
         </TabsContent>
 
-        <TabsContent value="validation" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Validation Results</CardTitle>
-              <CardDescription>
-                Review data quality and hygiene check results
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {files.filter(f => f.validationResult || f.status === 'completed').length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <AlertTriangle className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <h3 className="text-lg font-medium mb-2">No Validation Results</h3>
-                  <p>Complete field mapping and validation to see detailed results.</p>
+        {/* Review & Import Tab - Combined Validation + Verification */}
+        <TabsContent value="review" className="space-y-4">
+          {/* Check for missing REQUIRED data types (accounts + sales reps) and show go-back prompt */}
+          {(() => {
+            const uploadedTypes = files.map(f => f.type);
+            // Only accounts and sales reps are required - opportunities are optional
+            const requiredTypes = ['accounts', 'sales_reps'] as const;
+            const missingTypes = requiredTypes.filter(t => !uploadedTypes.includes(t));
+            
+            if (missingTypes.length > 0 && files.some(f => f.validationResult || f.status === 'validated' || f.status === 'mapped')) {
+              const typeLabels: Record<string, string> = {
+                accounts: 'Accounts',
+                sales_reps: 'Sales Reps'
+              };
+              
+              return (
+                <div className="relative overflow-hidden rounded-xl border-2 border-primary/30 bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 p-5 animate-pulse-subtle">
+                  {/* Subtle glow effect */}
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/5 to-transparent animate-shimmer" />
+                  
+                  <div className="relative flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+                        <Upload className="h-5 w-5 text-primary animate-bounce-subtle" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">
+                          Almost there! Just need {missingTypes.map(t => typeLabels[t]).join(' and ')}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          Upload the remaining files to continue
+                        </p>
+                      </div>
+                    </div>
+                    <Button 
+                      size="lg"
+                      className="shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 bg-primary hover:bg-primary/90"
+                      onClick={() => setActiveTab('upload')}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      Continue Upload
+                    </Button>
+                  </div>
                 </div>
-              ) : (
-                <div className="space-y-6">
-                  {files.filter(f => f.validationResult || f.status === 'completed').map(file => (
-                    <div key={file.id} className="space-y-4">
-                      {/* Show completed import summary for existing data - simplified */}
-                      {file.status === 'completed' && file.id.startsWith('existing-') && (
-                        <div className="border rounded-lg p-3 bg-muted/30 border-muted">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
+              );
+            }
+            return null;
+          })()}
+
+          {/* Validation Results for uploaded files */}
+          {files.filter(f => f.validationResult || f.status === 'completed').length > 0 && (
+            <div className="space-y-4">
+              {files.filter(f => f.validationResult || f.status === 'completed').map(file => (
+                <div key={file.id}>
+                  {/* Show completed import summary for existing data */}
+                  {file.status === 'completed' && file.id.startsWith('existing-') && (
+                    <Card className="border-green-200 dark:border-green-800">
+                      <CardContent className="py-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className={`flex items-center gap-1 font-medium ${
+                              file.type === 'accounts' ? 'text-blue-500' :
+                              file.type === 'opportunities' ? 'text-purple-500' :
+                              file.type === 'sales_reps' ? 'text-green-500' : 'text-muted-foreground'
+                            }`}>
                               {getFileTypeIcon(file.type)}
-                              <span className="font-medium">{file.name}</span>
-                              <Badge variant="outline" className="bg-green-50 dark:bg-green-950/30 border-green-300 dark:border-green-800 text-green-700 dark:text-green-300">
-                                <Check className="w-3 h-3 mr-1" />
-                                Imported
-                              </Badge>
+                              <span>{file.type === 'accounts' ? 'Accounts' : file.type === 'opportunities' ? 'Opportunities' : file.type === 'sales_reps' ? 'Sales Reps' : file.type}</span>
                             </div>
-                            <div className="text-sm text-muted-foreground">
+                            <span className="text-muted-foreground">{file.name}</span>
+                            <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                              <Check className="w-3 h-3 mr-1" />
+                              Imported
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-sm text-muted-foreground">
                               {file.validRows?.toLocaleString() || file.rowCount?.toLocaleString() || 0} records
-                            </div>
+                            </span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Button 
+                                    variant="outline" 
+                                    size="sm"
+                                    onClick={() => setPreviewFile(file)}
+                                    disabled={!file.parsedData}
+                                  >
+                                    <FileSearch className="w-4 h-4 mr-1" />
+                                    Preview
+                                  </Button>
+                                </span>
+                              </TooltipTrigger>
+                              {!file.parsedData && (
+                                <TooltipContent>
+                                  <p>Preview unavailable - data already in database</p>
+                                </TooltipContent>
+                              )}
+                            </Tooltip>
+                            <Button 
+                              variant="ghost" 
+                              size="sm"
+                              onClick={() => handleDeleteFile(file.id)}
+                              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
                           </div>
                         </div>
-                      )}
+                      </CardContent>
+                    </Card>
+                  )}
 
-                      {/* Show full validation UI for files with fresh validation results (not existing data) */}
-                      {file.validationResult && !file.id.startsWith('existing-') && (
-                        <>
-                          {/* Data Preview Component */}
-                          {file.parsedData && file.headers && (
-                            <DataPreview
-                              data={file.parsedData.slice(0, 20)} // Show first 20 rows for preview
-                              headers={file.headers}
-                              fileName={file.name}
-                              fileType={file.type}
-                              fieldMappings={file.fieldMappings}
-                            />
-                          )}
-
-                          {/* Enhanced Validation Results Component */}
-                          <EnhancedValidationResults
-                            file={file}
-                            onImport={handleValidateAndImport}
-                            onDownloadErrorReport={handleDownloadErrorReport}
-                          />
-
-                          {/* Original validation display for backward compatibility */}
-                          <div className="border rounded-lg p-4 bg-muted/10">
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-2">
-                                {getFileTypeIcon(file.type)}
-                                <span className="font-medium">{file.name}</span>
-                                {getStatusBadge(file.status)}
-                              </div>
-                            </div>
-                            
-                            <div className="space-y-4">
-                              {/* Summary Stats */}
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                <div className="text-center p-3 bg-muted/20 rounded-lg">
-                                  <div className="text-2xl font-bold text-foreground">
-                                    {file.validationResult.totalRows}
-                                  </div>
-                                  <div className="text-sm text-muted-foreground">Total Records</div>
-                                </div>
-                                <div className="text-center p-3 bg-green-50 dark:bg-green-950/30 rounded-lg">
-                                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-                                    {file.validationResult.validRows}
-                                  </div>
-                                  <div className="text-sm text-muted-foreground">Valid Records</div>
-                                </div>
-                                <div className="text-center p-3 bg-yellow-50 dark:bg-yellow-950/30 rounded-lg">
-                                  <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
-                                    {file.validationResult.warnings.length}
-                                  </div>
-                                  <div className="text-sm text-muted-foreground">Warnings</div>
-                                </div>
-                                <div className="text-center p-3 bg-red-50 dark:bg-red-950/30 rounded-lg">
-                                  <div className="text-2xl font-bold text-red-600 dark:text-red-400">
-                                    {file.validationResult.criticalErrors.length}
-                                  </div>
-                                  <div className="text-sm text-muted-foreground">Critical Errors</div>
-                                </div>
-                              </div>
-
-                              {/* Import Action */}
-                              {file.validationResult.validRows > 0 && file.status !== 'completed' && (
-                                <div className="flex justify-between items-center p-4 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg">
-                                  <div>
-                                    <div className="font-medium text-green-800 dark:text-green-200">Ready for Import</div>
-                                    <div className="text-sm text-green-600 dark:text-green-400">
-                                      {file.validationResult.validRows} records can be imported
-                                      {file.validationResult.criticalErrors.length > 0 && 
-                                        ` (${file.validationResult.criticalErrors.length} records will be skipped due to critical errors)`
-                                      }
-                                    </div>
-                                  </div>
-                                  <Button 
-                                    onClick={() => handleValidateAndImport(file)}
-                                    disabled={file.status === 'validating' || !currentBuildId}
-                                    className="bg-green-600 hover:bg-green-700"
-                                  >
-                                    {file.status === 'validating' ? 'Importing...' : 'Import Data'}
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  ))}
+                  {/* Show validation for fresh uploads */}
+                  {file.validationResult && !file.id.startsWith('existing-') && (
+                    <EnhancedValidationResults
+                      file={file}
+                      onImport={handleValidateAndImport}
+                      onDownloadErrorReport={handleDownloadErrorReport}
+                      onReconfigureMapping={() => setActiveTab('mapping')}
+                      onPreview={(f) => setPreviewFile(f)}
+                      onDelete={(f) => handleDeleteFile(f.id)}
+                      onViewErrors={(f) => setErrorViewFile(f)}
+                      isImporting={importingFileIds.has(file.id)}
+                    />
+                  )}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+              ))}
+            </div>
+          )}
 
-        {/* Data Verification Tab */}
-        <TabsContent value="verification" className="space-y-4">
+          {/* Data Verification */}
           {currentBuildId && (
             <DataVerification 
+              key={`verification-${dataRefreshKey}`}
               buildId={currentBuildId} 
               buildName={availableBuilds.find(b => b.id === currentBuildId)?.name || 'Current Build'}
+              onGoToUpload={() => setActiveTab('upload')}
             />
           )}
-          {!currentBuildId && (
+
+          {/* Empty state */}
+          {files.filter(f => f.validationResult || f.status === 'completed').length === 0 && !currentBuildId && (
             <Card>
-              <CardContent className="pt-6">
+              <CardContent className="py-12">
                 <div className="text-center text-muted-foreground">
-                  <Database className="mx-auto h-12 w-12 mb-4 opacity-50" />
-                  <h3 className="text-lg font-medium mb-2">Select a Build</h3>
-                  <p>Choose or create a build above to view data verification</p>
+                  <FileSearch className="mx-auto h-12 w-12 mb-4 opacity-50" />
+                  <h3 className="text-lg font-medium mb-2">No Data to Review</h3>
+                  <p>Upload files and complete field mapping first</p>
                 </div>
               </CardContent>
             </Card>
           )}
         </TabsContent>
 
-        {/* Data Recovery Tab */}
-        <TabsContent value="recovery" className="space-y-4">
-          {currentBuildId && (
-            <DataRecovery 
-              buildId={currentBuildId}
-              onRecoveryComplete={() => {
-                toast({
-                  title: "Recovery Complete",
-                  description: "Data recovery has been completed successfully.",
-                });
-              }}
-            />
-          )}
-          {!currentBuildId && (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center min-h-[200px]">
-                <div className="text-center">
-                  <Database className="mx-auto h-12 w-12 mb-4 opacity-50" />
-                  <h3 className="text-lg font-medium mb-2">Select a Build</h3>
-                  <p>Choose or create a build above to access data recovery tools</p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
       </Tabs>
+
+      {/* Data Preview Dialog */}
+      <Dialog open={!!previewFile} onOpenChange={(open) => !open && setPreviewFile(null)}>
+        <DialogContent className="max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              Preview - {previewFile?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Showing sample data from your {previewFile?.type?.replace('_', ' ')} file
+            </DialogDescription>
+          </DialogHeader>
+          
+          {previewFile?.parsedData && previewFile?.headers ? (
+            <div className="flex-1 overflow-auto">
+              <DataPreview 
+                data={previewFile.parsedData}
+                headers={previewFile.headers}
+                fileName={previewFile.name}
+                fileType={previewFile.type}
+                fieldMappings={previewFile.fieldMappings}
+              />
+            </div>
+          ) : (
+            <div className="py-12 text-center text-muted-foreground">
+              <AlertTriangle className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <h3 className="text-lg font-medium mb-2">Preview Not Available</h3>
+              <p>Data was not cached in memory. Re-upload the file to preview.</p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Error Viewing Dialog */}
+      <Dialog open={!!errorViewFile} onOpenChange={(open) => !open && setErrorViewFile(null)}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Validation Errors - {errorViewFile?.name}
+            </DialogTitle>
+            <DialogDescription>
+              {errorViewFile?.validationResult && (
+                <>
+                  {errorViewFile.validationResult.criticalErrors?.length || 0} critical errors, {' '}
+                  {errorViewFile.validationResult.errors?.length || 0} errors, {' '}
+                  {errorViewFile.validationResult.warnings?.length || 0} warnings
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-auto space-y-4 py-4">
+            {errorViewFile?.validationResult?.criticalErrors && errorViewFile.validationResult.criticalErrors.length > 0 && (
+              <div>
+                <h4 className="font-semibold text-destructive mb-2">Critical Errors (Blocking Import)</h4>
+                <div className="bg-destructive/10 border border-destructive/30 rounded-md p-3 max-h-48 overflow-y-auto">
+                  <ul className="text-sm space-y-1">
+                    {errorViewFile.validationResult.criticalErrors.slice(0, 50).map((error, i) => (
+                      <li key={i} className="text-destructive">{error}</li>
+                    ))}
+                    {errorViewFile.validationResult.criticalErrors.length > 50 && (
+                      <li className="text-muted-foreground italic">
+                        ... and {errorViewFile.validationResult.criticalErrors.length - 50} more critical errors
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            )}
+            {errorViewFile?.validationResult?.errors && errorViewFile.validationResult.errors.length > 0 && (
+              <div>
+                <h4 className="font-semibold text-orange-500 mb-2">Errors</h4>
+                <div className="bg-orange-500/10 border border-orange-500/30 rounded-md p-3 max-h-48 overflow-y-auto">
+                  <ul className="text-sm space-y-1">
+                    {errorViewFile.validationResult.errors.slice(0, 50).map((error, i) => (
+                      <li key={i} className="text-orange-500">{error}</li>
+                    ))}
+                    {errorViewFile.validationResult.errors.length > 50 && (
+                      <li className="text-muted-foreground italic">
+                        ... and {errorViewFile.validationResult.errors.length - 50} more errors
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            )}
+            {errorViewFile?.validationResult?.warnings && errorViewFile.validationResult.warnings.length > 0 && (
+              <div>
+                <h4 className="font-semibold text-yellow-500 mb-2">Warnings</h4>
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-md p-3 max-h-48 overflow-y-auto">
+                  <ul className="text-sm space-y-1">
+                    {errorViewFile.validationResult.warnings.slice(0, 50).map((warning, i) => (
+                      <li key={i} className="text-yellow-600">{warning}</li>
+                    ))}
+                    {errorViewFile.validationResult.warnings.length > 50 && (
+                      <li className="text-muted-foreground italic">
+                        ... and {errorViewFile.validationResult.warnings.length - 50} more warnings
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            )}
+            {(!errorViewFile?.validationResult || 
+              ((!errorViewFile.validationResult.criticalErrors || errorViewFile.validationResult.criticalErrors.length === 0) &&
+               (!errorViewFile.validationResult.errors || errorViewFile.validationResult.errors.length === 0) &&
+               (!errorViewFile.validationResult.warnings || errorViewFile.validationResult.warnings.length === 0))) && (
+              <div className="text-center text-muted-foreground py-8">
+                <AlertTriangle className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p>No detailed error information available.</p>
+                <p className="text-sm mt-2">Try re-uploading and validating the file.</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => errorViewFile && handleDownloadErrorReport(errorViewFile)}>
+              Download Error Report
+            </Button>
+            <Button onClick={() => setErrorViewFile(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Field Mapping Dialog */}
       <Dialog open={showMappingDialog} onOpenChange={setShowMappingDialog}>

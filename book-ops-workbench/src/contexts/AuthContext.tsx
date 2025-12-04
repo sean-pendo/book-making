@@ -74,7 +74,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
               .insert([{
                 id: userId,
                 email: user.user.email,
-                full_name: user.user.user_metadata?.full_name || 'Admin User',
+                full_name: user.user.user_metadata?.full_name || user.user.email?.split('@')[0] || 'New User',
                 role: 'REVOPS' as UserRole,
                 region: 'GLOBAL' as UserRegion,
               }])
@@ -171,6 +171,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         password,
         options: {
           emailRedirectTo: `${window.location.origin}/`,
+          data: {
+            full_name: profileData.full_name,
+            role: profileData.role?.toUpperCase(),
+            region: profileData.region,
+          },
         },
       });
 
@@ -183,14 +188,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         return { error };
       }
 
-      // Create profile
+      // Create profile with uppercase role
       if (data.user) {
+        const normalizedProfileData = {
+          ...profileData,
+          role: profileData.role?.toUpperCase() as UserRole,
+        };
+        
         const { error: profileError } = await supabase
           .from('profiles')
           .insert([{
             id: data.user.id,
             email: data.user.email,
-            ...profileData,
+            ...normalizedProfileData,
           }]);
 
         if (profileError) {

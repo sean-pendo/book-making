@@ -7,9 +7,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Users, AlertTriangle, Search, Edit, CheckCircle, FileText, Target, Settings, UserCheck, UserX, RefreshCw, Download, RotateCcw, Play, Loader2, Wrench, Eye, Info } from 'lucide-react';
+import { Users, AlertTriangle, Search, Edit, CheckCircle, FileText, Target, Settings, UserCheck, UserX, RefreshCw, Download, RotateCcw, Play, Loader2, Wrench, Eye, Info, ChevronDown, MoreHorizontal } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/components/ui/use-toast';
 import { useAssignmentEngine } from '@/hooks/useAssignmentEngine';
 import { useNavigate } from 'react-router-dom';
@@ -37,6 +39,7 @@ import { ImbalanceWarningDialog } from '@/components/ImbalanceWarningDialog';
 import { AssignmentSuccessDialog } from '@/components/AssignmentSuccessDialog';
 import { fixOwnerAssignments } from '@/utils/fixOwnerAssignments';
 import { QuickResetButton } from '@/components/QuickResetButton';
+import { FullAssignmentConfig } from '@/components/FullAssignmentConfig';
 
 interface Account {
   sfdc_account_id: string;
@@ -103,6 +106,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [appliedAssignmentCount, setAppliedAssignmentCount] = useState(0);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const [showConfigDialog, setShowConfigDialog] = useState(false);
+  const [isConfigured, setIsConfigured] = useState(false);
+  const [checkingConfig, setCheckingConfig] = useState(true);
   const [showAssignmentProgress, setShowAssignmentProgress] = useState(false);
   const [assignmentProgress, setAssignmentProgress] = useState({
     isRunning: false,
@@ -185,6 +191,30 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     const count = assignmentResult?.proposals.length || 0;
     onPendingProposalsChange?.(hasPending, count);
   }, [assignmentResult, onPendingProposalsChange]);
+
+  // Check if assignment configuration exists for this build
+  useEffect(() => {
+    const checkConfiguration = async () => {
+      if (!buildId) return;
+      setCheckingConfig(true);
+      try {
+        const { data, error } = await supabase
+          .from('assignment_configuration')
+          .select('id, updated_at')
+          .eq('build_id', buildId)
+          .maybeSingle();
+        
+        // Consider configured if record exists and has been updated (not just default)
+        setIsConfigured(!!data && !!data.updated_at);
+      } catch (err) {
+        console.error('Error checking config:', err);
+        setIsConfigured(false);
+      } finally {
+        setCheckingConfig(false);
+      }
+    };
+    checkConfiguration();
+  }, [buildId, showConfigDialog]); // Re-check when dialog closes
 
   // Fetch opportunities for Net ARR calculation
   const { data: opportunities = [] } = useQuery({
@@ -366,6 +396,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       await queryClient.invalidateQueries({ queryKey: ['enhanced-balancing', buildId] });
       await queryClient.invalidateQueries({ queryKey: ['workload-balance', buildId] });
       await queryClient.invalidateQueries({ queryKey: ['build-sales-reps', buildId] });
+      
+      // CRITICAL: Invalidate build data summary - this triggers Stage 2 unlock animation in BuildDetail
+      await queryClient.invalidateQueries({ queryKey: ['build-data-summary', buildId] });
       
       setDataFlowSteps(prev => prev.map(step => 
         step.id === 'cache' ? { ...step, status: 'completed', timestamp: new Date() } :
@@ -706,26 +739,32 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       setSophisticatedAssignmentResult(null);
       
       console.log('[Execute] ✅ Assignment execution completed successfully');
-      
-      // Show success dialog with animated confirmation
-      setAppliedAssignmentCount(proposalCount);
-      setShowSuccessDialog(true);
 
-      // Force refresh all data after execution
+      // Force refresh all data FIRST - before showing success
       console.log('[Execute] 🔄 Triggering final data refresh...');
       await refreshAllData();
       
-      console.log('[Execute] 🎉 Complete execution and refresh cycle finished');
+      // Wait for data propagation to ensure stage 2 unlock animation triggers
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      console.log('[Execute] 🎉 Data refresh complete, showing success dialog');
+      
+      // NOW show success dialog with animated confirmation
+      setAppliedAssignmentCount(proposalCount);
+      setShowSuccessDialog(true);
       
       // Check if AI optimization is available AFTER execution with real data
       const needsOptimization = checkIfOptimizationAvailable(resultToExecute);
       
       if (needsOptimization) {
-        toast({
-          title: "💡 AI Optimization Available",
-          description: `${aiOptimizerProblemReps.length} rep(s) below $1M ARR. Would you like to optimize?`,
-        });
-        setShowAIOptimizer(true);
+        // Delay this toast so it doesn't overlap with success dialog
+        setTimeout(() => {
+          toast({
+            title: "💡 AI Optimization Available",
+            description: `${aiOptimizerProblemReps.length} rep(s) below $1M ARR. Would you like to optimize?`,
+          });
+          setShowAIOptimizer(true);
+        }, 2000);
       }
       
     } catch (error) {
@@ -1643,147 +1682,124 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
               Apply {assignmentResult.proposals.length} Proposals
             </Button>
           )}
-          <QuickResetButton 
-            buildId={buildId} 
-            onComplete={() => handleRefresh()}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleRefresh()}
-            disabled={isLoading}
-            className="flex items-center gap-2"
-          >
-            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-            Refresh Data
-          </Button>
         </div>
       </div>
 
       {/* Controls */}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Settings className="h-5 w-5" />
-            Assignment Controls
-          </CardTitle>
-          <CardDescription>
-            Generate, preview, and execute territory assignments
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Row 1: Configuration */}
+        <CardContent className="py-4">
           <div className="flex items-center gap-3">
-            <Button
-              onClick={() => navigate(`/assignment-config/${buildId}`)}
-              variant="outline"
-              className="flex items-center gap-2"
-            >
-              <Settings className="h-4 w-4" />
-              Configure Assignment Targets
-            </Button>
-          </div>
+            {/* Configure - with subtle attention ring when not configured */}
+            <div className={`relative ${!isConfigured ? 'before:absolute before:-inset-1 before:rounded-lg before:border-2 before:border-primary/40 before:animate-pulse' : ''}`}>
+              <Button
+                onClick={() => setShowConfigDialog(true)}
+                variant={isConfigured ? "outline" : "default"}
+                className={`gap-2 relative z-10 ${isConfigured 
+                  ? 'border-green-500/50 text-green-700 dark:text-green-400' 
+                  : ''
+                }`}
+              >
+                <Settings className={`h-4 w-4 ${!isConfigured ? 'animate-spin' : ''}`} style={{ animationDuration: '3s' }} />
+                {isConfigured ? '✓ Configure' : 'Configure'}
+              </Button>
+            </div>
 
-          {/* Row 2: Generation Actions */}
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm text-muted-foreground font-medium min-w-[60px]">Generate:</span>
-            <Button
-              onClick={() => onGenerateAssignments('all')}
-              disabled={isGenerating || isLoading}
-              className="flex items-center gap-2"
-            >
-              {isGenerating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Target className="h-4 w-4" />
+            {/* Generate - with tooltip when disabled */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button 
+                        disabled={isGenerating || isLoading || !isConfigured} 
+                        className="gap-2"
+                      >
+                        {isGenerating ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Target className="h-4 w-4" />
+                        )}
+                        Generate
+                        <ChevronDown className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onClick={() => onGenerateAssignments('all')}>
+                        <Target className="h-4 w-4 mr-2" />
+                        All Assignments
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => onGenerateAssignments('customers')}>
+                        <UserCheck className="h-4 w-4 mr-2" />
+                        Customers Only
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => onGenerateAssignments('prospects')}>
+                        <Users className="h-4 w-4 mr-2" />
+                        Prospects Only
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </TooltipTrigger>
+              {!isConfigured && (
+                <TooltipContent side="bottom">
+                  <p>Configure assignment targets first</p>
+                </TooltipContent>
               )}
-              All Assignments
-            </Button>
-            <Button
-              onClick={() => onGenerateAssignments('customers')}
-              disabled={isGenerating || isLoading}
-              variant="outline"
-              className="flex items-center gap-2"
-            >
-              {isGenerating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Target className="h-4 w-4" />
-              )}
-              Customers Only
-            </Button>
-            <Button
-              onClick={() => onGenerateAssignments('prospects')}
-              disabled={isGenerating || isLoading}
-              variant="outline"
-              className="flex items-center gap-2"
-            >
-              {isGenerating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Target className="h-4 w-4" />
-              )}
-              Prospects Only
-            </Button>
-          </div>
+            </Tooltip>
 
-          {/* Row 3: Preview & Reset */}
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm text-muted-foreground font-medium min-w-[60px]">Actions:</span>
+            {/* Export */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button 
+                  variant="outline" 
+                  disabled={isExporting} 
+                  className="gap-2"
+                >
+                  <Download className="h-4 w-4" />
+                  Export
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onClick={() => handleExportAssignments('customers')}>
+                  Customers
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleExportAssignments('prospects')}>
+                  Prospects
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => handleExportAssignments('all')}>
+                  All
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Spacer */}
+            <div className="flex-1" />
+
+            {/* Secondary actions */}
             {(activeTab === 'customers' || activeTab === 'prospects') && (
               <Button
                 onClick={onPreviewAssignments}
-                variant="outline"
+                variant="ghost"
+                size="sm"
                 disabled={isLoading}
-                className="flex items-center gap-2"
+                className="gap-2"
               >
                 <Eye className="h-4 w-4" />
-                Preview {activeTab === 'customers' ? 'Customer' : 'Prospect'} Assignments
+                Preview
               </Button>
             )}
+            
             <Button
               onClick={handleResetAssignments}
               disabled={isResetting || isLoading}
-              variant="destructive"
-              className="flex items-center gap-2"
+              variant="ghost"
+              size="sm"
+              className="gap-2 text-muted-foreground hover:text-destructive"
             >
               <RotateCcw className="h-4 w-4" />
-              {isResetting ? 'Resetting...' : 'Reset All'}
-            </Button>
-          </div>
-
-          {/* Row 4: Export Controls */}
-          <div className="flex flex-wrap items-center gap-3 pt-3 border-t">
-            <span className="text-sm text-muted-foreground font-medium min-w-[60px]">Export:</span>
-            <Button
-              onClick={() => handleExportAssignments('customers')}
-              disabled={isExporting}
-              variant="outline"
-              size="sm"
-              className="flex items-center gap-2"
-            >
-              <Download className="h-4 w-4" />
-              Customers
-            </Button>
-            <Button
-              onClick={() => handleExportAssignments('prospects')}
-              disabled={isExporting}
-              variant="outline"
-              size="sm"
-              className="flex items-center gap-2"
-            >
-              <Download className="h-4 w-4" />
-              Prospects
-            </Button>
-            <Button
-              onClick={() => handleExportAssignments('all')}
-              disabled={isExporting}
-              variant="outline"
-              size="sm"
-              className="flex items-center gap-2"
-            >
-              <Download className="h-4 w-4" />
-              All
+              Reset
             </Button>
           </div>
         </CardContent>
@@ -2094,7 +2110,39 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
               Understanding the waterfall logic and assignment rules
             </DialogDescription>
           </DialogHeader>
-          <WaterfallLogicExplainer buildId={buildId} />
+          <WaterfallLogicExplainer 
+            buildId={buildId} 
+            onConfigureClick={() => {
+              setShowHowItWorks(false);
+              setShowConfigDialog(true);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      {/* Configuration Dialog */}
+      <Dialog open={showConfigDialog} onOpenChange={setShowConfigDialog}>
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Settings className="h-5 w-5" />
+              Assignment Configuration
+            </DialogTitle>
+            <DialogDescription>
+              Configure thresholds, territory mapping, and capacity settings
+            </DialogDescription>
+          </DialogHeader>
+          <FullAssignmentConfig 
+            buildId={buildId || ''} 
+            onClose={() => setShowConfigDialog(false)}
+            onConfigurationComplete={() => {
+              setIsConfigured(true);
+              toast({
+                title: "Configuration Complete",
+                description: "You can now generate assignments"
+              });
+            }}
+          />
         </DialogContent>
       </Dialog>
 
