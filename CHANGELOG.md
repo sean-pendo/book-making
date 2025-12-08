@@ -12,16 +12,24 @@ Comprehensive analysis of the current waterfall assignment algorithm to understa
 - Balance score is used as tie-breaker only, not primary decision factor
 
 ### New Artifacts Created
+
+**Documentation:**
 - `docs/core/waterfall-optimization-analysis.md` - Full analysis with improvement roadmap
-- `src/services/assignmentQualityService.ts` - Quality metrics service to measure assignment outcomes
+- `docs/core/lp-formulation-guide.md` - Educational guide on LP problem formulation
+- `docs/core/optimization-frameworks.md` - Comparison of free LP frameworks
+
+**Experiments (standalone, not integrated):**
+- `experiments/lp-test.js` - Runnable LP experiment script (`node experiments/lp-test.js`)
+- `experiments/lpOptimizationService.ts` - Reference implementation for future integration
+
+**Quality Measurement:**
+- `src/services/assignmentQualityService.ts` - Quality metrics service (for future integration)
 
 ### Proposed Improvement Path
-1. **Phase 1**: Define and measure quality metrics (ARR CV, CRE distribution, compliance rates)
-2. **Phase 2**: Quick wins (weighted scoring, difficulty-based sorting)
-3. **Phase 3**: Two-pass algorithm with rebalancing
+1. **Phase 1**: Understand LP formulation (use experiments/lp-test.js)
+2. **Phase 2**: Define and measure quality metrics (ARR CV, CRE distribution, compliance rates)
+3. **Phase 3**: Quick wins (weighted scoring, difficulty-based sorting)
 4. **Phase 4**: True optimization (LP/CSP approach)
-
-**Files**: `waterfall-optimization-analysis.md`, `assignmentQualityService.ts`
 
 ---
 
