@@ -1,5 +1,18 @@
 # Changelog
 
+# v1.3.0 - Development Branch
+
+*Beta testers: Continue using https://book-ops-v1-2-beta.vercel.app (pinned to v1.2.0)*
+
+## [2025-12-08] - Setup: Version 1.3.0 Development Start
+
+### Changes
+- Bumped version to 1.3.0 to begin new development cycle
+- Created beta alias `book-ops-v1-2-beta.vercel.app` pinned to v1.2.0 for beta testers
+- Production URL (`book-ops-workbench-eosin.vercel.app`) will receive v1.3.0+ updates
+
+---
+
 # v1.2.0 - Major UI Enhancements Release
 
 ## [2025-12-06] - Fix: Renewal Quarter Display & Remove HQ Location

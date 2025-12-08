@@ -124,8 +124,11 @@ Push to GitHub when:
 - **Account**: `seanxmuses-projects` (personal Vercel - CLI deployments only)
 - **Project**: `book-ops-workbench`
 - **Production URL**: `https://book-ops-workbench-eosin.vercel.app`
+- **Beta URL (v1.2)**: `https://book-ops-v1-2-beta.vercel.app` (pinned deployment for beta testers)
 - **Deploy Command**: `vercel --prod` (from `book-ops-workbench` directory)
 - **Environment Variables**: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+
+**Note**: Beta URL requires Deployment Protection to be disabled in Vercel Settings for public access.
 
 ### GitHub (Separate from Vercel)
 - **Repo**: `https://github.com/sean-pendo/book-making` (work GitHub)
