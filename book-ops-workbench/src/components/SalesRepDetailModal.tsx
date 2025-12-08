@@ -58,6 +58,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
+import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
 
 interface SalesRepDetailModalProps {
   open: boolean;
@@ -103,6 +104,7 @@ interface ExtendedAccountDetail extends AccountDetail {
   geo?: string;
   expansion_tier?: string;
   initial_sale_tier?: string;
+  renewal_quarter?: string | null;
   cre_count?: number;
   current_owner_id?: string;
   current_owner_name?: string;
@@ -111,6 +113,7 @@ interface ExtendedAccountDetail extends AccountDetail {
   new_owner_name?: string;
   new_owner_id?: string;
   has_split_ownership?: boolean;
+  assignment_rationale?: string;
 }
 
   // Reset state when modal closes or rep changes
@@ -140,6 +143,20 @@ interface ExtendedAccountDetail extends AccountDetail {
         return;
       }
 
+      // Fetch assignment rationales for these accounts
+      const accountIds = (ownedAccounts || []).map((a: any) => a.sfdc_account_id);
+      const { data: assignmentsData } = await supabase
+        .from('assignments')
+        .select('sfdc_account_id, rationale')
+        .eq('build_id', buildId)
+        .in('sfdc_account_id', accountIds);
+      
+      // Create a map of account_id -> rationale
+      const rationaleMap = new Map<string, string>();
+      (assignmentsData || []).forEach((a: any) => {
+        rationaleMap.set(a.sfdc_account_id, a.rationale || '');
+      });
+
       const mappedAccounts: ExtendedAccountDetail[] = (ownedAccounts || []).map((account: any) => ({
         sfdc_account_id: account.sfdc_account_id,
         account_name: account.account_name,
@@ -167,7 +184,8 @@ interface ExtendedAccountDetail extends AccountDetail {
         sales_territory: account.sales_territory,
         hq_country: account.hq_country,
         cre_risk_count: 0,
-        has_split_ownership: account.has_split_ownership || false
+        has_split_ownership: account.has_split_ownership || false,
+        assignment_rationale: rationaleMap.get(account.sfdc_account_id) || ''
       }));
 
       setAccounts(mappedAccounts as AccountDetail[]);
@@ -220,6 +238,21 @@ interface ExtendedAccountDetail extends AccountDetail {
           return;
         }
 
+        // Fetch rationales for child accounts
+        const childIds = (childrenData || []).map((c: any) => c.sfdc_account_id);
+        let childRationaleMap = new Map<string, string>();
+        if (childIds.length > 0) {
+          const { data: childAssignments } = await supabase
+            .from('assignments')
+            .select('sfdc_account_id, rationale')
+            .eq('build_id', buildId)
+            .in('sfdc_account_id', childIds);
+          
+          (childAssignments || []).forEach((a: any) => {
+            childRationaleMap.set(a.sfdc_account_id, a.rationale || '');
+          });
+        }
+
         const childrenByParent: Record<string, ExtendedAccountDetail[]> = {};
         
         (childrenData || []).forEach((child: any) => {
@@ -255,7 +288,8 @@ interface ExtendedAccountDetail extends AccountDetail {
             sales_territory: child.sales_territory,
             hq_country: child.hq_country,
             cre_risk_count: 0,
-            has_split_ownership: child.has_split_ownership || false
+            has_split_ownership: child.has_split_ownership || false,
+            assignment_rationale: childRationaleMap.get(child.sfdc_account_id) || ''
           });
         });
 
@@ -677,7 +711,7 @@ interface ExtendedAccountDetail extends AccountDetail {
                         <TableHead>Type</TableHead>
                         <TableHead className="text-right">
                           <Tooltip>
-                            <TooltipTrigger className="cursor-help">ARR / Net ARR</TooltipTrigger>
+                            <TooltipTrigger className="cursor-help">ARR</TooltipTrigger>
                             <TooltipContent>
                               <p><strong>Customers:</strong> ARR</p>
                               <p><strong>Prospects:</strong> Net ARR from opps</p>
@@ -695,16 +729,18 @@ interface ExtendedAccountDetail extends AccountDetail {
                         </TableHead>
                         <TableHead className="text-center">CRE</TableHead>
                         <TableHead>Tier</TableHead>
+                        <TableHead>Renewal</TableHead>
                         <TableHead>Geo</TableHead>
                         <TableHead>Previous Owner</TableHead>
                         <TableHead>New Owner</TableHead>
-                        <TableHead>Actions</TableHead>
+                        <TableHead className="min-w-[180px]">Reason</TableHead>
+                        <TableHead className="w-[80px]">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredAccounts.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
+                          <TableCell colSpan={12} className="text-center text-muted-foreground py-8">
                             No accounts found matching your criteria
                           </TableCell>
                         </TableRow>
@@ -767,13 +803,16 @@ interface ExtendedAccountDetail extends AccountDetail {
                                     </Badge>
                                   </TableCell>
                                   <TableCell className="text-right">
-                                    {account.is_customer ? (
-                                      `$${getAccountARR(account).toLocaleString()}`
-                                    ) : (
-                                      <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
-                                        {formatNetARR(getNetARR(account.sfdc_account_id))}
+                                    <div className="flex flex-col items-end">
+                                      <span className={getAccountARR(account) > 0 ? "text-green-600" : "text-muted-foreground"}>
+                                        ${getAccountARR(account).toLocaleString()}
                                       </span>
-                                    )}
+                                      {!account.is_customer && getNetARR(account.sfdc_account_id) > 0 && (
+                                        <span className={`text-xs ${getNetARRColorClass(getNetARR(account.sfdc_account_id))}`}>
+                                          Net: {formatNetARR(getNetARR(account.sfdc_account_id))}
+                                        </span>
+                                      )}
+                                    </div>
                                   </TableCell>
                                   <TableCell className="text-right">
                                     {account.is_customer ? (
@@ -792,6 +831,9 @@ interface ExtendedAccountDetail extends AccountDetail {
                                       <span className="text-muted-foreground">-</span>
                                     )}
                                   </TableCell>
+                                  <TableCell>
+                                    <RenewalQuarterBadge renewalQuarter={extAccount.renewal_quarter} />
+                                  </TableCell>
                                   <TableCell>{extAccount.geo || 'N/A'}</TableCell>
                                   <TableCell className="text-sm">{account.owner_name || 'N/A'}</TableCell>
                                   <TableCell className="text-sm">
@@ -799,6 +841,9 @@ interface ExtendedAccountDetail extends AccountDetail {
                                     {account.new_owner_name && account.owner_name && account.new_owner_name !== account.owner_name && (
                                       <Badge variant="outline" className="ml-2 text-xs">Changed</Badge>
                                     )}
+                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={extAccount.assignment_rationale || ''}>
+                                    {extAccount.assignment_rationale || '-'}
                                   </TableCell>
                                   <TableCell>
                                     {/* Actions handled via checkbox selection */}
@@ -869,13 +914,16 @@ interface ExtendedAccountDetail extends AccountDetail {
                                         )}
                                       </TableCell>
                                       <TableCell className="text-right text-sm">
-                                        {child.is_customer ? (
-                                          `$${(child.arr || 0).toLocaleString()}`
-                                        ) : (
-                                          <span className={getNetARRColorClass(getNetARR(child.sfdc_account_id))}>
-                                            {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                        <div className="flex flex-col items-end">
+                                          <span className={(child.arr || 0) > 0 ? "text-green-600" : "text-muted-foreground"}>
+                                            ${(child.arr || 0).toLocaleString()}
                                           </span>
-                                        )}
+                                          {!child.is_customer && getNetARR(child.sfdc_account_id) > 0 && (
+                                            <span className={`text-xs ${getNetARRColorClass(getNetARR(child.sfdc_account_id))}`}>
+                                              Net: {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                            </span>
+                                          )}
+                                        </div>
                                       </TableCell>
                                       <TableCell className="text-right text-sm">
                                         {child.is_customer ? (
@@ -894,6 +942,9 @@ interface ExtendedAccountDetail extends AccountDetail {
                                           <span className="text-muted-foreground">-</span>
                                         )}
                                       </TableCell>
+                                      <TableCell>
+                                        <RenewalQuarterBadge renewalQuarter={extChild.renewal_quarter} />
+                                      </TableCell>
                                       <TableCell className="text-sm">{extChild.geo || 'N/A'}</TableCell>
                                       <TableCell className="text-sm">{child.owner_name || 'N/A'}</TableCell>
                                       <TableCell className="text-sm">
@@ -901,6 +952,9 @@ interface ExtendedAccountDetail extends AccountDetail {
                                         {child.new_owner_name && child.owner_name && child.new_owner_name !== child.owner_name && (
                                           <Badge variant="outline" className="ml-2 text-xs">Changed</Badge>
                                         )}
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground max-w-[180px] truncate" title={extChild.assignment_rationale || ''}>
+                                        {extChild.assignment_rationale || '-'}
                                       </TableCell>
                                       <TableCell>
                                         <DropdownMenu>

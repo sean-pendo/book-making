@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Search, Building2, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight } from 'lucide-react';
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
+import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
 
 interface SalesRepDetailDialogProps {
   open: boolean;
@@ -46,6 +47,7 @@ interface AccountWithHierarchy {
   sales_territory: string | null;
   expansion_tier: string | null;
   initial_sale_tier: string | null;
+  renewal_quarter: string | null;
   cre_risk: boolean;
   risk_flag: boolean;
   owner_id: string;
@@ -132,6 +134,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
             sales_territory,
             expansion_tier,
             initial_sale_tier,
+            renewal_quarter,
             cre_risk,
             risk_flag,
             owner_id,
@@ -203,6 +206,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
         parentAccounts.forEach(parent => {
           hierarchicalAccounts.push({
             ...parent,
+            renewal_quarter: parent.renewal_quarter || null,
             children: [],
             isParent: true
           });
@@ -251,6 +255,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
             sales_territory: null,
             expansion_tier: null,
             initial_sale_tier: null,
+            renewal_quarter: null,
             cre_risk: false,
             risk_flag: false,
             owner_id: childOwnerId,
@@ -260,6 +265,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
             hq_country: null,
             children: children.map(child => ({
               ...child,
+              renewal_quarter: child.renewal_quarter || null,
               children: [],
               isParent: false
             })),
@@ -318,8 +324,33 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
           initial_sale_tier: a.initial_sale_tier
         })));
 
+        // Fetch assignment rationales for all accounts
+        const allAccountIds = accounts.map(a => a.sfdc_account_id);
+        let rationaleMap = new Map<string, string>();
+        if (allAccountIds.length > 0) {
+          const { data: assignmentsData } = await supabase
+            .from('assignments')
+            .select('sfdc_account_id, rationale')
+            .eq('build_id', buildId)
+            .in('sfdc_account_id', allAccountIds);
+          
+          (assignmentsData || []).forEach((a: any) => {
+            rationaleMap.set(a.sfdc_account_id, a.rationale || '');
+          });
+        }
+
+        // Add assignment_rationale to filtered accounts and their children
+        const accountsWithRationale = filteredAccounts.map(account => ({
+          ...account,
+          assignment_rationale: rationaleMap.get(account.sfdc_account_id) || '',
+          children: (account.children || []).map((child: any) => ({
+            ...child,
+            assignment_rationale: rationaleMap.get(child.sfdc_account_id) || ''
+          }))
+        }));
+
         return {
-          accounts: filteredAccounts,
+          accounts: accountsWithRationale,
           summary,
           industries: [...new Set(accounts.map(a => a.industry).filter(Boolean))],
           geos: [...new Set(accounts.map(a => a.geo).filter(Boolean))],
@@ -625,20 +656,21 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                         <TableRow>
                           <TableHead style={{ width: '200px' }}>Account</TableHead>
                           <TableHead style={{ width: '150px' }} className="bg-blue-50 dark:bg-blue-950/30">Previous Owner</TableHead>
-                          <TableHead style={{ width: '120px' }} className="bg-green-50 dark:bg-green-950/30">HQ Location</TableHead>
                           <TableHead style={{ width: '100px' }}>Type</TableHead>
                           <TableHead style={{ width: '140px' }}>Industry</TableHead>
                           <TableHead style={{ width: '120px' }}>Region</TableHead>
                           <TableHead style={{ width: '80px' }}>Tier</TableHead>
-                          <TableHead style={{ width: '120px' }}>ARR / Net ARR</TableHead>
+                          <TableHead style={{ width: '80px' }}>Renewal</TableHead>
+                          <TableHead style={{ width: '120px' }}>ARR</TableHead>
                           <TableHead style={{ width: '120px' }}>ATR / Close</TableHead>
                           <TableHead style={{ width: '100px' }}>CRE Risk</TableHead>
+                          <TableHead style={{ width: '180px' }}>Reason</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                       {isLoading ? (
                         <TableRow>
-                           <TableCell colSpan={10} className="text-center py-8">
+                           <TableCell colSpan={11} className="text-center py-8">
                              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
                            </TableCell>
                          </TableRow>
@@ -671,7 +703,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                      {getPreviousOwnerInfo(account)}
                                    </Badge>
                                  </TableCell>
-                                 <TableCell className="text-sm bg-green-50 dark:bg-green-950/30">{account.hq_country || '-'}</TableCell>
                                 <TableCell>
                                 <div className="flex flex-col gap-1">
                                   {(() => {
@@ -693,6 +724,9 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                               <TableCell>
                                 {getTierBadge(account.expansion_tier || account.initial_sale_tier)}
                               </TableCell>
+                              <TableCell>
+                                <RenewalQuarterBadge renewalQuarter={account.renewal_quarter} />
+                              </TableCell>
                               <TableCell className="text-sm font-medium">
                                 {(() => {
                                   // Use hierarchy-based customer/prospect logic
@@ -700,13 +734,21 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                   const hierarchyAccounts = repDetail?.accountsByParent?.get(parentId) || [];
                                   const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
                                   const isCustomer = hierarchyARR > 0;
+                                  const accountARR = getAccountARR(account);
+                                  const netARR = getNetARR(account.sfdc_account_id);
                                   
-                                  if (isCustomer) {
-                                    return <span className="text-green-600">{formatCurrency(getAccountARR(account))}</span>;
-                                  } else {
-                                    const netARR = getNetARR(account.sfdc_account_id);
-                                    return <span className={getNetARRColorClass(netARR)}>{formatNetARR(netARR)}</span>;
-                                  }
+                                  return (
+                                    <div className="flex flex-col">
+                                      <span className={accountARR > 0 ? "text-green-600" : "text-muted-foreground"}>
+                                        {formatCurrency(accountARR)}
+                                      </span>
+                                      {!isCustomer && netARR > 0 && (
+                                        <span className={`text-xs ${getNetARRColorClass(netARR)}`}>
+                                          Net: {formatNetARR(netARR)}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
                                 })()}
                               </TableCell>
                               <TableCell className="text-sm font-medium">
@@ -744,6 +786,9 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                   }
                                 })()}
                               </TableCell>
+                              <TableCell className="text-xs text-muted-foreground max-w-[180px] truncate" title={(account as any).assignment_rationale || ''}>
+                                {(account as any).assignment_rationale || '-'}
+                              </TableCell>
                             </TableRow>
                             
                             {/* Child accounts */}
@@ -762,7 +807,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                       {getPreviousOwnerInfo(child)}
                                     </Badge>
                                   </TableCell>
-                                  <TableCell className="text-sm pl-12">{child.hq_country || '-'}</TableCell>
                                   <TableCell>
                                   {(() => {
                                     // Use hierarchy-based customer/prospect logic for children too - SAME AS SalesRepsTable
@@ -782,6 +826,9 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                 <TableCell>
                                   {getTierBadge(child.expansion_tier || child.initial_sale_tier)}
                                 </TableCell>
+                                <TableCell>
+                                  <RenewalQuarterBadge renewalQuarter={child.renewal_quarter} />
+                                </TableCell>
                                 <TableCell className="text-sm font-medium">
                                   {(() => {
                                     // Use hierarchy-based customer/prospect logic
@@ -789,13 +836,21 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                     const hierarchyAccounts = repDetail?.accountsByParent?.get(parentId) || [];
                                     const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
                                     const isCustomer = hierarchyARR > 0;
+                                    const childARR = getAccountARR(child);
+                                    const netARR = getNetARR(child.sfdc_account_id);
                                     
-                                    if (isCustomer) {
-                                      return <span className="text-green-600">{formatCurrency(getAccountARR(child))}</span>;
-                                    } else {
-                                      const netARR = getNetARR(child.sfdc_account_id);
-                                      return <span className={getNetARRColorClass(netARR)}>{formatNetARR(netARR)}</span>;
-                                    }
+                                    return (
+                                      <div className="flex flex-col">
+                                        <span className={childARR > 0 ? "text-green-600" : "text-muted-foreground"}>
+                                          {formatCurrency(childARR)}
+                                        </span>
+                                        {!isCustomer && netARR > 0 && (
+                                          <span className={`text-xs ${getNetARRColorClass(netARR)}`}>
+                                            Net: {formatNetARR(netARR)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
                                   })()}
                                 </TableCell>
                                   <TableCell className="text-sm font-medium">
@@ -832,6 +887,9 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                                       return <Badge variant="destructive" className="text-xs">{childCRECount} CRE</Badge>;
                                     }
                                   })()}
+                                 </TableCell>
+                                 <TableCell className="text-xs text-muted-foreground max-w-[180px] truncate" title={(child as any).assignment_rationale || ''}>
+                                   {(child as any).assignment_rationale || '-'}
                                  </TableCell>
                               </TableRow>
                             ))}

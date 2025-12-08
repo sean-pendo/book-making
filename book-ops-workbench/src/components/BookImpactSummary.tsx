@@ -20,6 +20,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useProspectOpportunities, formatNetARR } from '@/hooks/useProspectOpportunities';
+import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
 
 interface BookImpactSummaryProps {
   buildId: string;
@@ -274,7 +275,8 @@ export default function BookImpactSummary({
                   <TableRow>
                     <TableHead>Account Name</TableHead>
                     <TableHead>Type</TableHead>
-                    <TableHead className="text-right">ARR / Net ARR</TableHead>
+                    <TableHead>Renewal</TableHead>
+                    <TableHead className="text-right">ARR</TableHead>
                     <TableHead>Coming From</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -287,14 +289,20 @@ export default function BookImpactSummary({
                           {account.is_customer ? 'Customer' : 'Prospect'}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        <RenewalQuarterBadge renewalQuarter={(account as any).renewal_quarter} />
+                      </TableCell>
                       <TableCell className="text-right font-semibold">
-                        {account.is_customer ? (
-                          <span className="text-green-600">{formatImpactCurrency(account.arr)}</span>
-                        ) : (
-                          <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
-                            {formatNetARR(getNetARR(account.sfdc_account_id))}
+                        <div className="flex flex-col items-end">
+                          <span className={account.arr > 0 ? "text-green-600" : "text-muted-foreground"}>
+                            {formatImpactCurrency(account.arr)}
                           </span>
-                        )}
+                          {!account.is_customer && getNetARR(account.sfdc_account_id) > 0 && (
+                            <span className={`text-xs ${getNetARRColorClass(getNetARR(account.sfdc_account_id))}`}>
+                              Net: {formatNetARR(getNetARR(account.sfdc_account_id))}
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {account.from_owner_name || 'Unassigned'}
@@ -330,7 +338,8 @@ export default function BookImpactSummary({
                   <TableRow>
                     <TableHead>Account Name</TableHead>
                     <TableHead>Type</TableHead>
-                    <TableHead className="text-right">ARR / Net ARR</TableHead>
+                    <TableHead>Renewal</TableHead>
+                    <TableHead className="text-right">ARR</TableHead>
                     <TableHead>Going To</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -343,14 +352,20 @@ export default function BookImpactSummary({
                           {account.is_customer ? 'Customer' : 'Prospect'}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        <RenewalQuarterBadge renewalQuarter={(account as any).renewal_quarter} />
+                      </TableCell>
                       <TableCell className="text-right font-semibold">
-                        {account.is_customer ? (
-                          <span className="text-red-600">{formatImpactCurrency(account.arr)}</span>
-                        ) : (
-                          <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
-                            {formatNetARR(getNetARR(account.sfdc_account_id))}
+                        <div className="flex flex-col items-end">
+                          <span className={account.arr > 0 ? "text-red-600" : "text-muted-foreground"}>
+                            {formatImpactCurrency(account.arr)}
                           </span>
-                        )}
+                          {!account.is_customer && getNetARR(account.sfdc_account_id) > 0 && (
+                            <span className={`text-xs ${getNetARRColorClass(getNetARR(account.sfdc_account_id))}`}>
+                              Net: {formatNetARR(getNetARR(account.sfdc_account_id))}
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-xs">

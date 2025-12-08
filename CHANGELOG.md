@@ -1,5 +1,215 @@
 # Changelog
 
+# v1.2.0 - Major UI Enhancements Release
+
+## [2025-12-06] - Fix: Renewal Quarter Display & Remove HQ Location
+
+### Changes
+- **Fixed**: Added `renewal_quarter` to the assignment changes query so the Renewal column now shows data in the "All Account Moves" table
+- **Removed**: HQ Location column from SalesRepDetailDialog (was showing blank values)
+- **Removed**: Location column from FLMDetailDialog accounts table
+
+### Note on Renewal Data
+The Renewal Quarter badges will only display if your imported account data has the `renewal_quarter` field populated. If you're not seeing renewal data, check your CSV import mappings.
+
+---
+
+## [2025-12-06] - Fix: Imbalance Warning Not Blocking Assignment Execution
+
+### Issue
+When clicking "Apply" on assignments, the imbalance warning dialog appeared but assignments were still being applied regardless of user choice. This led to a confusing UX where both the warning and success dialogs would appear together.
+
+### Root Cause
+`handleExecuteAssignments()` returned silently when showing the imbalance warning, but `onExecuteAssignments()` continued to the success path anyway (showing success dialog, refreshing data, etc.).
+
+### Fix (Part 1)
+- Updated `handleExecuteAssignments()` to return a boolean indicating if execution actually happened
+- Updated `executeAssignmentsInternal()` to return `false` when blocked by imbalance warning
+- Updated `onExecuteAssignments()` in AssignmentEngine.tsx to check the return value and exit early if execution was blocked
+- Moved the "Executing Assignments" toast to only show after the imbalance check passes
+
+### Fix (Part 2) - "Apply Anyway" Success Confirmation
+- When user clicks "Apply Anyway" on the imbalance warning, execution now properly shows the success dialog
+- Created `onImbalanceConfirm` wrapper in AssignmentEngine.tsx that:
+  - Shows "Applying Assignments" toast
+  - Calls the hook's confirm handler
+  - Refreshes data on success
+  - Shows the success dialog with correct count
+
+### Files Changed
+- `src/hooks/useAssignmentEngine.ts`
+- `src/pages/AssignmentEngine.tsx`
+
+---
+
+## [2025-12-05] - Feature: Book Impact by Manager (Before/After View)
+
+### Overview
+Added a comprehensive "Book Impact by Manager" section to the Impact Analysis tab in ComprehensiveReview. Provides RevOps with clear visibility into which accounts are leaving and joining each FLM's book.
+
+### Changes
+- **New Section**: "Book Impact by Manager (Before → After)" in Impact Analysis tab
+- Shows each FLM with cross-team account movements
+- **Before/After Summary**: Total accounts and ARR before vs after the build
+- **Net Impact**: Clearly highlighted gain/loss with color coding (red for losses, green for gains)
+- **Leaving Details**: Lists accounts leaving with destination owner and FLM
+- **Gaining Details**: Lists accounts being gained with source owner and FLM
+- Sorted by net impact (biggest losses shown first)
+
+### Visual Design
+- Red/green color coding for net losses/gains
+- Card-based layout per FLM with expandable details
+- Shows ARR values in millions format
+- Scrollable lists for managers with many account changes
+
+---
+
+## [2025-12-05] - Feature: Renewal Quarter Badges
+
+### Overview
+Added color-coded renewal quarter badges (Q1-Q4) to all account tables across the application, providing visual indication of when accounts are up for renewal.
+
+### Changes
+- **New Component**: Created `RenewalQuarterBadge.tsx` with color-coded badges:
+  - Q1 (Feb-Apr): Blue
+  - Q2 (May-Jul): Green
+  - Q3 (Aug-Oct): Amber
+  - Q4 (Nov-Jan): Purple
+- **ComprehensiveReview**: Added Renewal column to All Account Moves table
+- **SalesRepDetailDialog**: Added Renewal column to account tables (parents and children)
+- **FLMDetailDialog**: Added Renewal column to accounts table
+- **SalesRepDetailModal**: Added Renewal column to account tables
+- **ManagerHierarchyView**: Added Renewal column to account tables
+- **BookImpactSummary**: Added Renewal column to gained/lost accounts modals
+- **UnassignedAccountsModal**: Added Renewal column to unassigned accounts table
+- **AccountsLeavingView**: Added Renewal column to leaving accounts table
+
+### Technical Details
+- Updated interfaces to include `renewal_quarter: string | null`
+- Modified database queries to fetch `renewal_quarter` field
+- Component handles normalization of quarter values (Q1, q1, 1 → Q1)
+
+---
+
+## [2025-12-04] - Feature: Reason Column in SalesRepDetailDialog (Review Page)
+
+### Overview
+Added "Reason" column to the SalesRepDetailDialog used in the Comprehensive Review page to show why accounts were assigned.
+
+### Changes
+- Added "Reason" column to the Account Portfolio table
+- Fetches assignment rationale from assignments table
+- Shows reason for both parent and child accounts
+
+---
+
+## [2025-12-04] - Fix: Geo-Alignment Calculation in Comprehensive Review
+
+### Overview
+Fixed the geo-alignment percentage calculation which was showing 0% incorrectly.
+
+### Changes
+- Changed from comparing `sales_territory` (e.g., "AUSTIN - HOUSTON") to using `geo` field (e.g., "South East")
+- The `geo` field matches the rep's `region` field naming convention
+- Added flexible matching: exact match, or either contains the other (case-insensitive)
+
+---
+
+## [2025-12-04] - Feature: Accounts Leaving View for SLM/FLM
+
+### Overview
+Added a dedicated "Accounts Leaving" view so SLMs and FLMs can clearly see which accounts are being reassigned OUT of their team's books.
+
+### Changes
+- **New Component**: `AccountsLeavingView.tsx` - Shows accounts leaving with grouping by rep
+- **FLMDetailDialog**: Added "Accounts Leaving" tab (3rd tab alongside Reps and Accounts)
+- **ManagerHierarchyView**: Added "Accounts Leaving Your Team" section below the hierarchy view
+
+### Features
+- Summary cards showing: Total accounts leaving, ARR leaving, Reps affected
+- Grouped by rep losing the account with collapsible sections
+- Shows previous owner, destination (new owner), account type, location, tier, and ARR impact
+- Search/filter functionality
+- CSV export capability (includes previous owner)
+- Only shows accounts going OUTSIDE the manager's hierarchy (not internal transfers)
+
+---
+
+## [2025-12-04] - Feature: Show Assignment Reason in Balancing & Review Views
+
+### Overview
+Added "Reason" column to show why accounts were assigned/reassigned in both the Balancing Dashboard (via SalesRepDetailModal) and ComprehensiveReview (All Account Moves tab).
+
+### Changes
+- **SalesRepDetailModal**: Added "Reason" column showing assignment rationale from assignments table
+- **SalesRepDetailModal**: Child accounts now also show assignment rationale
+- **ComprehensiveReview - All Account Moves**: Added "Reason" column with assignment rationale
+- Data is fetched by joining with the `assignments` table to get `rationale` field
+- Reason is shown as truncated text with full text on hover (title attribute)
+- Fixed column layout: Reason column has min-width, Actions column has fixed width to prevent overlap
+
+---
+
+## [2025-12-04] - Feature: Manager Status Tab in Review & Notes
+
+### Overview
+Added a new "Manager Status" tab to the Review & Notes page so RevOps can see which managers have reviewed and accepted their assignments.
+
+### Changes
+- Added new tab showing all manager reviews for the selected build
+- Displays manager name, level (FLM/SLM), status (Pending/In Review/Accepted), sent date, and reviewed date
+- RevOps can now track manager acceptance without needing access to the Manager Dashboard
+
+---
+
+## [2025-12-04] - Fix: Separate ARR and Net ARR Display
+
+### Overview
+Changed "ARR / Net ARR" column to show ARR clearly, with Net ARR as a sub-field for prospects only.
+
+### Changes
+- Header changed from "ARR / Net ARR" to just "ARR"
+- For prospects with $0 ARR, shows "$0" in muted text
+- Net ARR from opportunities now shows as a smaller sub-line labeled "Net: $X"
+- Updated across all dialogs: SalesRepDetailDialog, FLMDetailDialog, BookImpactSummary, UnassignedAccountsModal, ManagerHierarchyView, SalesRepDetailModal
+
+---
+
+## [2025-12-04] - Fix: Remove Territory Status Warning from Balancing Dashboard
+
+### Overview
+Removed the "Territory Status: Unbalanced" warning banner from the Balancing Dashboard.
+
+### Changes
+- Removed the red alert banner showing territory rebalancing status
+- Cleaned up unused `shouldShowWarning()` function
+
+---
+
+## [2025-12-04] - Fix: Demote Manager Field from High Priority in Rep Import
+
+### Overview
+The `manager` field on sales reps was incorrectly marked as "high priority" in the import UI, even though it's a legacy field that's never been mapped or used.
+
+### Changes
+- Changed `manager` field from `priority: 'high'` to `priority: 'secondary'`
+- Updated description to indicate it's a legacy field (use FLM/SLM instead)
+- Field will no longer appear in the "important fields" section during rep import
+
+---
+
+## [2025-12-04] - Feature: Net ARR Column Sorting for Prospects
+
+### Overview
+Added sorting capability to the Net ARR column in the Prospects table.
+
+### Changes
+- Net ARR column header is now clickable with sort indicator
+- Sorting calculates Net ARR from linked opportunities in real-time
+- Supports ascending and descending order
+
+---
+
 ## [2025-12-04] - Fix: Sample CSV Headers Match Field Mappings
 
 ### Overview

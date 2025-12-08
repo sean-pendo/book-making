@@ -192,20 +192,6 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
   const repMetrics: RepMetrics[] = data.repMetrics;
   const beforeMetrics = data.beforeMetrics;
 
-  // Determine if warning is actually necessary - only show when imbalance is significant
-  const shouldShowWarning = () => {
-    // Don't show warning if regional alignment is good (>= 60%)
-    if (balanceMetrics.avgRegionalAlignment >= 60) {
-      return false;
-    }
-    
-    // Only show warning if variance is significant (>30%) OR there are actually overloaded/underloaded reps
-    const hasSignificantVariance = balanceMetrics.maxArrVariance > 30;
-    const hasImbalancedReps = repMetrics.some(rep => rep.status === 'Overloaded' || rep.status === 'Light');
-    
-    return balanceMetrics.arrBalance === 'Unbalanced' && (hasSignificantVariance || hasImbalancedReps);
-  };
-
   const getBalanceStatusColor = (status: string) => {
     switch (status) {
       case 'Balanced': return 'bg-green-500';
@@ -320,17 +306,6 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
             </Button>
           </div>
         </div>
-
-        {/* Balance Status Alert - Only show warning when imbalance is significant */}
-        {shouldShowWarning() && (
-          <Alert className="border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30">
-            <TrendingUp className="h-4 w-4" />
-            <AlertDescription className="text-red-900 dark:text-red-200">
-              <strong>Territory Status:</strong> {balanceMetrics.arrBalance}
-              <span className="ml-2 text-sm">Territory rebalancing may be needed for optimal distribution.</span>
-            </AlertDescription>
-          </Alert>
-        )}
 
         {/* Summary Cards */}
         <div className="grid gap-4 md:grid-cols-6">

@@ -720,19 +720,29 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
         buildId
       });
 
-      // Show progress feedback
-      toast({
-        title: "🔄 Executing Assignments",
-        description: `Applying ${proposalCount} assignment${proposalCount !== 1 ? 's' : ''}...`,
-      });
-
       // Execute using the hook's function but pass the correct result
       if (sophisticatedAssignmentResult) {
         console.log('[Execute] 🎯 Executing sophisticated assignments...');
+        // Show progress feedback for sophisticated assignments
+        toast({
+          title: "🔄 Executing Assignments",
+          description: `Applying ${proposalCount} assignment${proposalCount !== 1 ? 's' : ''}...`,
+        });
         await executeSophisticatedAssignments(sophisticatedAssignmentResult);
       } else {
         console.log('[Execute] 🎯 Executing regular assignments...');
-        await handleExecuteAssignments();
+        const executed = await handleExecuteAssignments();
+        if (!executed) {
+          // Execution was blocked by imbalance warning - don't continue to success
+          // User will see the warning dialog and can choose to proceed or go back
+          console.log('[Execute] ⚠️ Execution blocked by imbalance warning');
+          return;
+        }
+        // Show progress feedback only after imbalance check passes
+        toast({
+          title: "🔄 Applying Assignments",
+          description: `Saved ${proposalCount} assignment${proposalCount !== 1 ? 's' : ''} to database...`,
+        });
       }
       
       setShowPreviewDialog(false);
@@ -788,6 +798,45 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     
     // Refresh data to show the updated balance (AI optimizer already updated the database)
     await refreshAllData();
+  };
+
+  // Wrapper for imbalance confirmation that shows success dialog after execution
+  const onImbalanceConfirm = async () => {
+    const resultToExecute = sophisticatedAssignmentResult || assignmentResult;
+    const proposalCount = resultToExecute?.proposals?.length || 0;
+    
+    console.log('[Imbalance Confirm] 🚀 User clicked Apply Anyway, executing...');
+    
+    toast({
+      title: "🔄 Applying Assignments",
+      description: `Saving ${proposalCount} assignment${proposalCount !== 1 ? 's' : ''} to database...`,
+    });
+    
+    const success = await handleImbalanceConfirm();
+    
+    if (success) {
+      console.log('[Imbalance Confirm] ✅ Execution succeeded, showing success dialog');
+      
+      setShowPreviewDialog(false);
+      setSophisticatedAssignmentResult(null);
+      
+      // Force refresh all data
+      await refreshAllData();
+      
+      // Wait for data propagation
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      // Show success dialog
+      setAppliedAssignmentCount(proposalCount);
+      setShowSuccessDialog(true);
+    } else {
+      console.log('[Imbalance Confirm] ❌ Execution failed');
+      toast({
+        title: "❌ Assignment Failed",
+        description: "There was an error applying assignments. Check console for details.",
+        variant: "destructive"
+      });
+    }
   };
 
   // Helper function for retrying database operations with exponential backoff
@@ -2356,7 +2405,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
           repARR={imbalanceWarning.repARR}
           targetARR={imbalanceWarning.targetARR}
           overloadPercent={imbalanceWarning.overloadPercent}
-          onConfirm={handleImbalanceConfirm}
+          onConfirm={onImbalanceConfirm}
           onDismiss={handleImbalanceDismiss}
         />
       )}

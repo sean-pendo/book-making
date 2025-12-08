@@ -748,15 +748,18 @@ export const useAssignmentEngine = (buildId?: string) => {
   };
 
   // Main execute function - delegates to internal with imbalance check
-  const handleExecuteAssignments = async () => {
-    await executeAssignmentsInternal(false);
+  // Returns true if execution happened, false if blocked by imbalance warning
+  const handleExecuteAssignments = async (): Promise<boolean> => {
+    const result = await executeAssignmentsInternal(false);
+    return result === true;
   };
 
   // Internal execution function that can skip the imbalance check
-  const executeAssignmentsInternal = async (skipImbalanceCheck: boolean = false) => {
+  // Returns true if execution succeeded, false if blocked or failed
+  const executeAssignmentsInternal = async (skipImbalanceCheck: boolean = false): Promise<boolean> => {
     if (!buildId || !assignmentResult) {
       console.warn('[Assignment Execute] ❌ Missing buildId or assignmentResult');
-      return;
+      return false;
     }
 
     // Phase 3: Balance Verification Pre-flight Check (unless skipping)
@@ -788,7 +791,7 @@ export const useAssignmentEngine = (buildId?: string) => {
           targetARR: avgARR,
           overloadPercent: Math.round((maxARR / avgARR - 1) * 100)
         });
-        return; // Wait for user confirmation via the dialog
+        return false; // Execution blocked - wait for user confirmation via the dialog
       }
     }
 
@@ -979,10 +982,12 @@ export const useAssignmentEngine = (buildId?: string) => {
   };
 
   // Handle imbalance warning confirmation - proceed with execution
-  const handleImbalanceConfirm = async () => {
+  // Returns true if execution succeeded, false if it failed
+  const handleImbalanceConfirm = async (): Promise<boolean> => {
     setImbalanceWarning(null);
     // Re-run execution without the imbalance check (force flag)
-    await executeAssignmentsInternal(true);
+    const result = await executeAssignmentsInternal(true);
+    return result === true;
   };
 
   // Handle imbalance warning cancellation

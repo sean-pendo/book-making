@@ -758,12 +758,14 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'rep_id', required: true, mapped: false, priority: 'essential', description: 'Unique sales rep identifier (User ID, SFDC ID)' },
     { csvField: '', schemaField: 'name', required: true, mapped: false, priority: 'essential', description: 'Sales representative full name' },
     
-    // High priority fields - Important for management hierarchy (but not blocking)
+    // High priority fields - Important for territory assignment and hierarchy (but not blocking)
     { csvField: '', schemaField: 'team', required: false, mapped: false, priority: 'high', description: 'Sales team assignment' },
-    { csvField: '', schemaField: 'manager', required: false, mapped: false, priority: 'high', description: 'Direct manager name' },
     { csvField: '', schemaField: 'flm', required: false, mapped: false, priority: 'high', description: 'First Level Manager' },
     { csvField: '', schemaField: 'slm', required: false, mapped: false, priority: 'high', description: 'Second Level Manager' },
-    { csvField: '', schemaField: 'region', required: false, mapped: false, priority: 'high', description: 'Geographic region assignment' }
+    { csvField: '', schemaField: 'region', required: false, mapped: false, priority: 'high', description: 'Geographic region assignment' },
+    
+    // Secondary fields - Optional/legacy
+    { csvField: '', schemaField: 'manager', required: false, mapped: false, priority: 'secondary', description: 'Legacy manager field (use FLM/SLM instead)' }
   ]);
 
   const csvFields = [

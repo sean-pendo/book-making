@@ -8,12 +8,14 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
-import { Building2, TrendingUp, AlertTriangle, Users, Eye, Send, ChevronDown, ChevronRight, Search, UserCheck, UserX } from 'lucide-react';
+import { Building2, TrendingUp, AlertTriangle, Users, Eye, Send, ChevronDown, ChevronRight, Search, UserCheck, UserX, LogOut } from 'lucide-react';
 import { SalesRepDetailDialog } from '@/components/data-tables/SalesRepDetailDialog';
 import { formatCurrency } from '@/utils/accountCalculations';
 import { AccountDetailDialog } from '@/components/AccountDetailDialog';
 import SendToManagerDialog from './SendToManagerDialog';
+import AccountsLeavingView from './AccountsLeavingView';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
+import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
 
 interface FLMDetailDialogProps {
   open: boolean;
@@ -48,6 +50,7 @@ interface AccountWithChildren {
   cre_risk: boolean;
   expansion_tier: string;
   initial_sale_tier: string;
+  renewal_quarter: string | null;
   owner_name: string;
   new_owner_name: string;
   owner_id: string;
@@ -438,7 +441,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
           </DialogHeader>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-            <TabsList className="grid w-full grid-cols-2">
+            <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="reps" className="flex items-center gap-2">
                 <Users className="h-4 w-4" />
                 Sales Reps ({flmRepsData?.length ?? (flmData?.data.activeReps instanceof Set 
@@ -448,6 +451,10 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
               <TabsTrigger value="accounts" className="flex items-center gap-2">
                 <Building2 className="h-4 w-4" />
                 Parent Accounts ({flmAccountsData?.accounts?.length || '...'})
+              </TabsTrigger>
+              <TabsTrigger value="leaving" className="flex items-center gap-2">
+                <LogOut className="h-4 w-4" />
+                Accounts Leaving
               </TabsTrigger>
             </TabsList>
 
@@ -720,9 +727,9 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                             <TableHead className="w-[300px]">Account</TableHead>
                             <TableHead>Type</TableHead>
                             <TableHead>Owner</TableHead>
-                            <TableHead>Location</TableHead>
                             <TableHead>Tier</TableHead>
-                            <TableHead className="text-right">ARR / Net ARR</TableHead>
+                            <TableHead>Renewal</TableHead>
+                            <TableHead className="text-right">ARR</TableHead>
                             <TableHead className="text-right">ATR / Close</TableHead>
                             <TableHead>Risk</TableHead>
                           </TableRow>
@@ -772,20 +779,25 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                                   <TableCell className="text-sm">
                                     {account.new_owner_name || account.owner_name || 'Unassigned'}
                                   </TableCell>
-                                  <TableCell className="text-sm">{account.hq_country || '-'}</TableCell>
                                   <TableCell>
                                     <Badge variant="outline" className="text-xs">
                                       {account.expansion_tier || account.initial_sale_tier || '-'}
                                     </Badge>
                                   </TableCell>
+                                  <TableCell>
+                                    <RenewalQuarterBadge renewalQuarter={account.renewal_quarter} />
+                                  </TableCell>
                                   <TableCell className="text-right font-medium">
-                                    {account.is_customer ? (
-                                      <span className="text-green-600">{formatCurrency(getARR(account))}</span>
-                                    ) : (
-                                      <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
-                                        {formatNetARR(getNetARR(account.sfdc_account_id))}
+                                    <div className="flex flex-col items-end">
+                                      <span className={getARR(account) > 0 ? "text-green-600" : "text-muted-foreground"}>
+                                        {formatCurrency(getARR(account))}
                                       </span>
-                                    )}
+                                      {!account.is_customer && getNetARR(account.sfdc_account_id) > 0 && (
+                                        <span className={`text-xs ${getNetARRColorClass(getNetARR(account.sfdc_account_id))}`}>
+                                          Net: {formatNetARR(getNetARR(account.sfdc_account_id))}
+                                        </span>
+                                      )}
+                                    </div>
                                   </TableCell>
                                   <TableCell className="text-right font-medium">
                                     {account.is_customer ? (
@@ -830,20 +842,25 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                                     <TableCell className="text-sm">
                                       {child.new_owner_name || child.owner_name || 'Unassigned'}
                                     </TableCell>
-                                    <TableCell className="text-sm">{child.hq_country || '-'}</TableCell>
                                     <TableCell>
                                       <Badge variant="outline" className="text-xs">
                                         {child.expansion_tier || child.initial_sale_tier || '-'}
                                       </Badge>
                                     </TableCell>
+                                    <TableCell>
+                                      <RenewalQuarterBadge renewalQuarter={child.renewal_quarter} />
+                                    </TableCell>
                                     <TableCell className="text-right text-sm">
-                                      {child.is_customer ? (
-                                        <span className="text-green-600">{formatCurrency(getARR(child))}</span>
-                                      ) : (
-                                        <span className={getNetARRColorClass(getNetARR(child.sfdc_account_id))}>
-                                          {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                      <div className="flex flex-col items-end">
+                                        <span className={getARR(child) > 0 ? "text-green-600" : "text-muted-foreground"}>
+                                          {formatCurrency(getARR(child))}
                                         </span>
-                                      )}
+                                        {!child.is_customer && getNetARR(child.sfdc_account_id) > 0 && (
+                                          <span className={`text-xs ${getNetARRColorClass(getNetARR(child.sfdc_account_id))}`}>
+                                            Net: {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                          </span>
+                                        )}
+                                      </div>
                                     </TableCell>
                                     <TableCell className="text-right text-sm">
                                       {child.is_customer ? (
@@ -875,6 +892,15 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* ACCOUNTS LEAVING TAB */}
+            <TabsContent value="leaving" className="space-y-4">
+              <AccountsLeavingView
+                buildId={buildId}
+                managerLevel="FLM"
+                managerName={flmData.flm}
+              />
             </TabsContent>
           </Tabs>
         </DialogContent>

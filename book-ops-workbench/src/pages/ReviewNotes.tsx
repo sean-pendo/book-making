@@ -144,6 +144,25 @@ export default function ReviewNotes() {
     enabled: !!selectedBuildId,
   });
 
+  // Fetch manager reviews for this build (to show approval status)
+  const { data: managerReviews } = useQuery({
+    queryKey: ['manager-reviews-status', selectedBuildId],
+    queryFn: async () => {
+      if (!selectedBuildId) return [];
+
+      const { data, error } = await supabase
+        .from('manager_reviews')
+        .select('*')
+        .eq('build_id', selectedBuildId)
+        .order('manager_level', { ascending: true })
+        .order('manager_name', { ascending: true });
+
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!selectedBuildId,
+  });
+
   // Detect conflicts: multiple proposals for the same account (within this build)
   const conflictMap = useMemo(() => {
     if (!reassignments) return new Map<string, number>();
@@ -553,11 +572,12 @@ export default function ReviewNotes() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="pending">Pending ({pendingCount})</TabsTrigger>
           <TabsTrigger value="approved">Approved ({approvedCount})</TabsTrigger>
           <TabsTrigger value="rejected">Rejected ({rejectedCount})</TabsTrigger>
           <TabsTrigger value="notes">Notes ({notes?.length || 0})</TabsTrigger>
+          <TabsTrigger value="manager-status">Manager Status ({managerReviews?.length || 0})</TabsTrigger>
         </TabsList>
 
         {/* Filter Controls */}
@@ -839,6 +859,75 @@ export default function ReviewNotes() {
                     ))}
                   </div>
                 </ScrollArea>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="manager-status" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle className="w-5 h-5" />
+                Manager Review Status
+              </CardTitle>
+              <CardDescription>
+                Track which managers have reviewed and accepted their assignments
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {!managerReviews || managerReviews.length === 0 ? (
+                <p className="text-center text-muted-foreground py-12">No manager reviews sent for this build yet</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Manager</TableHead>
+                      <TableHead>Level</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Sent Date</TableHead>
+                      <TableHead>Reviewed Date</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {managerReviews.map((review: any) => (
+                      <TableRow key={review.id}>
+                        <TableCell className="font-medium">{review.manager_name}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={review.manager_level === 'SLM' ? 'bg-purple-50 text-purple-700' : 'bg-blue-50 text-blue-700'}>
+                            {review.manager_level}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {review.status === 'accepted' ? (
+                            <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                              Accepted
+                            </Badge>
+                          ) : review.status === 'in_review' ? (
+                            <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                              <Edit2 className="w-3 h-3 mr-1" />
+                              In Review
+                            </Badge>
+                          ) : review.status === 'pending' ? (
+                            <Badge variant="outline" className="bg-gray-50 text-gray-600">
+                              <Clock className="w-3 h-3 mr-1" />
+                              Pending
+                            </Badge>
+                          ) : (
+                            <Badge variant="secondary">{review.status}</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {review.sent_at ? new Date(review.sent_at).toLocaleDateString() : '-'}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {review.reviewed_at ? new Date(review.reviewed_at).toLocaleDateString() : '-'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               )}
             </CardContent>
           </Card>

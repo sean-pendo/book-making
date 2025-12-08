@@ -24,6 +24,7 @@ import { toast } from '@/hooks/use-toast';
 import { generateSimplifiedAssignments } from '@/services/simplifiedAssignmentEngine';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
 import { formatCurrency } from '@/utils/accountCalculations';
+import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
 
 interface UnassignedAccount {
   sfdc_account_id: string;
@@ -33,6 +34,7 @@ interface UnassignedAccount {
   sales_territory?: string;
   hq_country?: string;
   owner_name?: string;
+  renewal_quarter?: string | null;
 }
 
 interface UnassignedAccountsModalProps {
@@ -410,7 +412,8 @@ export const UnassignedAccountsModal = ({
                   </TableHead>
                   <TableHead>Account Name</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead className="text-right">ARR / Net ARR</TableHead>
+                  <TableHead>Renewal</TableHead>
+                  <TableHead className="text-right">ARR</TableHead>
                   <TableHead>Territory</TableHead>
                   <TableHead>Previous Owner</TableHead>
                 </TableRow>
@@ -445,14 +448,20 @@ export const UnassignedAccountsModal = ({
                           {account.is_customer ? 'Customer' : 'Prospect'}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        <RenewalQuarterBadge renewalQuarter={account.renewal_quarter} />
+                      </TableCell>
                       <TableCell className="text-right">
-                        {account.is_customer ? (
-                          formatCurrency(account.calculated_arr || 0)
-                        ) : (
-                          <span className={getNetARRColorClass(getNetARR(account.sfdc_account_id))}>
-                            {formatNetARR(getNetARR(account.sfdc_account_id))}
+                        <div className="flex flex-col items-end">
+                          <span className={(account.calculated_arr || 0) > 0 ? "text-green-600" : "text-muted-foreground"}>
+                            {formatCurrency(account.calculated_arr || 0)}
                           </span>
-                        )}
+                          {!account.is_customer && getNetARR(account.sfdc_account_id) > 0 && (
+                            <span className={`text-xs ${getNetARRColorClass(getNetARR(account.sfdc_account_id))}`}>
+                              Net: {formatNetARR(getNetARR(account.sfdc_account_id))}
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>{account.sales_territory || 'N/A'}</TableCell>
                       <TableCell className="text-muted-foreground">

@@ -11,13 +11,14 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Progress } from '@/components/ui/progress';
-import { Download, CheckCircle, AlertCircle, ArrowRight, FileText, Users, TrendingUp, Info, HelpCircle, Send, Undo2, Lock, ArrowLeft, RotateCcw, Loader2, Building, Building2, Target } from 'lucide-react';
+import { Download, CheckCircle, AlertCircle, ArrowRight, FileText, Users, TrendingUp, Info, HelpCircle, Send, Undo2, Lock, ArrowLeft, RotateCcw, Loader2, Building, Building2, Target, ArrowDown, ArrowUp, LogOut, LogIn } from 'lucide-react';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useToast } from '@/components/ui/use-toast';
 import { useBuildDataRelationships } from '@/hooks/useBuildData';
 import { AccountDetailDialog } from '@/components/AccountDetailDialog';
 import { FLMDetailDialog } from '@/components/FLMDetailDialog';
 import SendToManagerDialog from '@/components/SendToManagerDialog';
+import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
 import { formatDistanceToNow } from 'date-fns';
 
 interface ComprehensiveReviewProps {
@@ -223,7 +224,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
           cre_status,
           risk_flag,
           cre_count,
-          expansion_tier
+          expansion_tier,
+          renewal_quarter
         `)
         .eq('build_id', buildId)
         .eq('is_parent', true)
@@ -233,11 +235,35 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       if (error) throw error;
       
       // Filter to only accounts where ownership changed (current owner != new owner)
-      return (data || []).filter(account => {
+      const changedAccounts = (data || []).filter(account => {
         const hasNewOwner = account.new_owner_id && account.new_owner_id.trim() !== '';
         const ownerChanged = account.owner_id !== account.new_owner_id;
         return hasNewOwner && ownerChanged;
       });
+
+      // Fetch assignment rationales for these accounts
+      if (changedAccounts.length > 0) {
+        const accountIds = changedAccounts.map(a => a.sfdc_account_id);
+        const { data: assignmentsData } = await supabase
+          .from('assignments')
+          .select('sfdc_account_id, rationale')
+          .eq('build_id', buildId)
+          .in('sfdc_account_id', accountIds);
+        
+        // Create a map of account_id -> rationale
+        const rationaleMap = new Map<string, string>();
+        (assignmentsData || []).forEach((a: any) => {
+          rationaleMap.set(a.sfdc_account_id, a.rationale || '');
+        });
+
+        // Add rationale to each account
+        return changedAccounts.map(acc => ({
+          ...acc,
+          assignment_rationale: rationaleMap.get(acc.sfdc_account_id) || ''
+        }));
+      }
+
+      return changedAccounts;
     },
     enabled: !!buildId
   });
@@ -391,17 +417,25 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
     // Get sales rep data from the Map
     const salesRepsMap = buildData.salesRepsByRepId;
     
-    // Calculate regional alignment - accounts where territory matches rep's region
+    // Calculate regional alignment - accounts where geo matches rep's region
     let regionallyAligned = 0;
     let totalWithTerritory = 0;
     parentAccounts.forEach(acc => {
-      const territory = acc.sales_territory || acc.geo;
-      if (territory) {
+      // Use geo field for regional alignment (more consistent naming)
+      const accountGeo = acc.geo;
+      if (accountGeo) {
         totalWithTerritory++;
         const ownerId = acc.new_owner_id || acc.owner_id;
         const ownerRep = salesRepsMap.get(ownerId);
-        if (ownerRep?.region && territory.toLowerCase().includes(ownerRep.region.toLowerCase())) {
-          regionallyAligned++;
+        if (ownerRep?.region) {
+          // Normalize and compare: "South East" matches "South East", case-insensitive
+          const normalizedGeo = accountGeo.toLowerCase().trim();
+          const normalizedRegion = ownerRep.region.toLowerCase().trim();
+          if (normalizedGeo === normalizedRegion || 
+              normalizedGeo.includes(normalizedRegion) || 
+              normalizedRegion.includes(normalizedGeo)) {
+            regionallyAligned++;
+          }
         }
       }
     });
@@ -1468,8 +1502,10 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                        <TableHead>Account ID</TableHead>
                        <TableHead>ARR</TableHead>
                        <TableHead>Tier</TableHead>
+                       <TableHead>Renewal</TableHead>
                        <TableHead>Current Owner</TableHead>
                        <TableHead>New Owner</TableHead>
+                       <TableHead>Reason</TableHead>
                        <TableHead>Risk Status</TableHead>
                      </TableRow>
                    </TableHeader>
@@ -1490,26 +1526,32 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
                            <TableCell className="font-medium">{change.account_name}</TableCell>
                            <TableCell className="font-mono text-sm">{change.sfdc_account_id}</TableCell>
                            <TableCell className="font-medium">${((parseFloat(change.hierarchy_bookings_arr_converted) || parseFloat(change.calculated_arr) || parseFloat(change.arr) || 0) / 1000000).toFixed(1)}M</TableCell>
-                           <TableCell>
-                             <Badge variant={change.expansion_tier === 'Tier 1' ? 'default' : 'secondary'}>
-                               {change.expansion_tier || 'Unassigned'}
-                             </Badge>
-                           </TableCell>
-                           <TableCell>{change.owner_name || 'Unassigned'}</TableCell>
-                           <TableCell className="font-medium">{change.new_owner_name}</TableCell>
-                          <TableCell>
-                            {creStatus ? (
-                              <Badge 
-                                variant={creStatus === 'Confirmed Churn' || creStatus === 'At Risk' ? 'destructive' : 'secondary'}
-                                className="text-xs"
-                              >
-                                {creStatus}
-                              </Badge>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">None</span>
-                            )}
+<TableCell>
+                            <Badge variant={change.expansion_tier === 'Tier 1' ? 'default' : 'secondary'}>
+                              {change.expansion_tier || 'Unassigned'}
+                            </Badge>
                           </TableCell>
-                        </TableRow>
+                          <TableCell>
+                            <RenewalQuarterBadge renewalQuarter={change.renewal_quarter} />
+                          </TableCell>
+                         <TableCell>{change.owner_name || 'Unassigned'}</TableCell>
+                          <TableCell className="font-medium">{change.new_owner_name}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={(change as any).assignment_rationale || ''}>
+                            {(change as any).assignment_rationale || '-'}
+                          </TableCell>
+                         <TableCell>
+                           {creStatus ? (
+                             <Badge 
+                               variant={creStatus === 'Confirmed Churn' || creStatus === 'At Risk' ? 'destructive' : 'secondary'}
+                               className="text-xs"
+                             >
+                               {creStatus}
+                             </Badge>
+                           ) : (
+                             <span className="text-xs text-muted-foreground">None</span>
+                           )}
+                         </TableCell>
+                       </TableRow>
                       );
                     })}
                    </TableBody>
@@ -1775,6 +1817,230 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
               </CardContent>
             </Card>
           </div>
+
+          {/* Book Impact by Manager - Before/After View */}
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Users className="h-5 w-5" />
+                Book Impact by Manager (Before → After)
+              </CardTitle>
+              <CardDescription>
+                Clear view of which accounts are leaving and joining each manager's book
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {assignmentChanges && allActiveSalesReps && allAccounts && (
+                <div className="space-y-4">
+                  {(() => {
+                    // Build FLM impact data
+                    const flmImpact = new Map<string, {
+                      slm: string;
+                      beforeAccounts: number;
+                      beforeARR: number;
+                      afterAccounts: number;
+                      afterARR: number;
+                      leaving: { account_name: string; arr: number; new_owner_name: string; new_flm: string }[];
+                      gaining: { account_name: string; arr: number; from_owner_name: string; from_flm: string }[];
+                    }>();
+
+                    // Get all FLMs and their SLMs
+                    const flmToSlm = new Map<string, string>();
+                    allActiveSalesReps.forEach(rep => {
+                      if (rep.flm && rep.slm) {
+                        flmToSlm.set(rep.flm, rep.slm);
+                      }
+                    });
+
+                    // Initialize FLM data
+                    flmToSlm.forEach((slm, flm) => {
+                      flmImpact.set(flm, {
+                        slm,
+                        beforeAccounts: 0,
+                        beforeARR: 0,
+                        afterAccounts: 0,
+                        afterARR: 0,
+                        leaving: [],
+                        gaining: []
+                      });
+                    });
+
+                    // Calculate before state (original owner) and after state (new owner)
+                    allAccounts.forEach(acc => {
+                      const arr = parseFloat(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr) || 0;
+                      
+                      // Find original owner's FLM
+                      const originalRep = allActiveSalesReps.find(r => r.rep_id === acc.owner_id);
+                      const originalFLM = originalRep?.flm;
+                      
+                      // Find new owner's FLM
+                      const newRep = allActiveSalesReps.find(r => r.rep_id === (acc.new_owner_id || acc.owner_id));
+                      const newFLM = newRep?.flm;
+                      
+                      // Count before state
+                      if (originalFLM && flmImpact.has(originalFLM)) {
+                        const data = flmImpact.get(originalFLM)!;
+                        data.beforeAccounts++;
+                        data.beforeARR += arr;
+                      }
+                      
+                      // Count after state
+                      if (newFLM && flmImpact.has(newFLM)) {
+                        const data = flmImpact.get(newFLM)!;
+                        data.afterAccounts++;
+                        data.afterARR += arr;
+                      }
+                      
+                      // Track leaving (owner changed and moving to different FLM)
+                      if (acc.new_owner_id && acc.new_owner_id !== acc.owner_id && originalFLM && newFLM && originalFLM !== newFLM) {
+                        const originalData = flmImpact.get(originalFLM);
+                        if (originalData) {
+                          originalData.leaving.push({
+                            account_name: acc.account_name,
+                            arr,
+                            new_owner_name: acc.new_owner_name || 'Unknown',
+                            new_flm: newFLM
+                          });
+                        }
+                        
+                        // Track gaining for the new FLM
+                        const newData = flmImpact.get(newFLM);
+                        if (newData) {
+                          newData.gaining.push({
+                            account_name: acc.account_name,
+                            arr,
+                            from_owner_name: acc.owner_name || 'Unknown',
+                            from_flm: originalFLM
+                          });
+                        }
+                      }
+                    });
+
+                    // Sort by net impact (biggest losses first)
+                    const sortedFLMs = Array.from(flmImpact.entries())
+                      .filter(([_, data]) => data.leaving.length > 0 || data.gaining.length > 0)
+                      .sort((a, b) => {
+                        const aNet = (a[1].afterARR - a[1].beforeARR);
+                        const bNet = (b[1].afterARR - b[1].beforeARR);
+                        return aNet - bNet; // Most negative first
+                      });
+
+                    if (sortedFLMs.length === 0) {
+                      return (
+                        <p className="text-center text-muted-foreground py-8">
+                          No cross-team account movements in this build
+                        </p>
+                      );
+                    }
+
+                    return sortedFLMs.map(([flm, data]) => {
+                      const netARR = data.afterARR - data.beforeARR;
+                      const netAccounts = data.afterAccounts - data.beforeAccounts;
+                      const isNetLoss = netARR < 0;
+
+                      return (
+                        <div key={flm} className="border rounded-lg overflow-hidden">
+                          {/* FLM Header */}
+                          <div className={`p-4 ${isNetLoss ? 'bg-red-50 dark:bg-red-950/20' : 'bg-green-50 dark:bg-green-950/20'}`}>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="font-semibold text-lg">{flm}</div>
+                                <div className="text-sm text-muted-foreground">SLM: {data.slm}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className={`text-lg font-bold ${isNetLoss ? 'text-red-600' : 'text-green-600'}`}>
+                                  {isNetLoss ? '' : '+'}{netAccounts} accounts
+                                </div>
+                                <div className={`text-sm font-medium ${isNetLoss ? 'text-red-600' : 'text-green-600'}`}>
+                                  {isNetLoss ? '-' : '+'}${Math.abs(netARR / 1000000).toFixed(2)}M ARR
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* Before/After Summary */}
+                            <div className="mt-3 grid grid-cols-3 gap-4 text-sm">
+                              <div className="bg-white/50 dark:bg-black/20 rounded p-2">
+                                <div className="text-muted-foreground">Before</div>
+                                <div className="font-medium">{data.beforeAccounts} accounts</div>
+                                <div className="text-muted-foreground">${(data.beforeARR / 1000000).toFixed(2)}M</div>
+                              </div>
+                              <div className="flex items-center justify-center">
+                                <ArrowRight className="h-5 w-5 text-muted-foreground" />
+                              </div>
+                              <div className="bg-white/50 dark:bg-black/20 rounded p-2">
+                                <div className="text-muted-foreground">After</div>
+                                <div className="font-medium">{data.afterAccounts} accounts</div>
+                                <div className="text-muted-foreground">${(data.afterARR / 1000000).toFixed(2)}M</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Leaving/Gaining Details */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x">
+                            {/* Leaving */}
+                            {data.leaving.length > 0 && (
+                              <div className="p-4 bg-red-50/50 dark:bg-red-950/10">
+                                <div className="flex items-center gap-2 mb-3 text-red-700 dark:text-red-400">
+                                  <LogOut className="h-4 w-4" />
+                                  <span className="font-medium">Leaving ({data.leaving.length})</span>
+                                </div>
+                                <div className="space-y-2 max-h-48 overflow-y-auto">
+                                  {data.leaving.slice(0, 10).map((acc, idx) => (
+                                    <div key={idx} className="text-sm flex justify-between items-center bg-white/50 dark:bg-black/20 rounded p-2">
+                                      <div className="truncate flex-1 mr-2">
+                                        <div className="font-medium truncate">{acc.account_name}</div>
+                                        <div className="text-xs text-muted-foreground">→ {acc.new_owner_name} ({acc.new_flm})</div>
+                                      </div>
+                                      <div className="text-red-600 font-medium whitespace-nowrap">
+                                        -${(acc.arr / 1000000).toFixed(2)}M
+                                      </div>
+                                    </div>
+                                  ))}
+                                  {data.leaving.length > 10 && (
+                                    <div className="text-xs text-muted-foreground text-center">
+                                      +{data.leaving.length - 10} more accounts
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Gaining */}
+                            {data.gaining.length > 0 && (
+                              <div className="p-4 bg-green-50/50 dark:bg-green-950/10">
+                                <div className="flex items-center gap-2 mb-3 text-green-700 dark:text-green-400">
+                                  <LogIn className="h-4 w-4" />
+                                  <span className="font-medium">Gaining ({data.gaining.length})</span>
+                                </div>
+                                <div className="space-y-2 max-h-48 overflow-y-auto">
+                                  {data.gaining.slice(0, 10).map((acc, idx) => (
+                                    <div key={idx} className="text-sm flex justify-between items-center bg-white/50 dark:bg-black/20 rounded p-2">
+                                      <div className="truncate flex-1 mr-2">
+                                        <div className="font-medium truncate">{acc.account_name}</div>
+                                        <div className="text-xs text-muted-foreground">← {acc.from_owner_name} ({acc.from_flm})</div>
+                                      </div>
+                                      <div className="text-green-600 font-medium whitespace-nowrap">
+                                        +${(acc.arr / 1000000).toFixed(2)}M
+                                      </div>
+                                    </div>
+                                  ))}
+                                  {data.gaining.length > 10 && (
+                                    <div className="text-xs text-muted-foreground text-center">
+                                      +{data.gaining.length - 10} more accounts
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="reviews" className="space-y-6">

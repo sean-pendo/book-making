@@ -98,7 +98,7 @@ export const VirtualizedAccountTable = ({
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingLocks, setPendingLocks] = useState<Set<string>>(new Set());
-  const [sortField, setSortField] = useState<keyof Account | null>(null);
+  const [sortField, setSortField] = useState<keyof Account | 'net_arr' | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [childrenData, setChildrenData] = useState<Map<string, Account[]>>(new Map());
@@ -140,7 +140,7 @@ export const VirtualizedAccountTable = ({
     }
   }, [expandedRows, childrenData, buildId]);
 
-  const handleSort = useCallback((field: keyof Account) => {
+  const handleSort = useCallback((field: keyof Account | 'net_arr') => {
     if (sortField === field) {
       setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
@@ -150,7 +150,7 @@ export const VirtualizedAccountTable = ({
     setCurrentPage(1); // Reset to first page when sorting
   }, [sortField]);
 
-  const SortIcon = ({ field }: { field: keyof Account }) => {
+  const SortIcon = ({ field }: { field: keyof Account | 'net_arr' }) => {
     if (sortField !== field) return <ChevronUp className="h-3 w-3 opacity-30" />;
     return sortDirection === 'asc' 
       ? <ChevronUp className="h-3 w-3" /> 
@@ -298,8 +298,8 @@ export const VirtualizedAccountTable = ({
     // Apply sorting
     if (sortField) {
       result = [...result].sort((a, b) => {
-        let aVal = a[sortField];
-        let bVal = b[sortField];
+        let aVal: any = sortField !== 'net_arr' ? a[sortField as keyof Account] : null;
+        let bVal: any = sortField !== 'net_arr' ? b[sortField as keyof Account] : null;
         
         // Handle special cases for calculated values
         if (sortField === 'arr') {
@@ -308,6 +308,12 @@ export const VirtualizedAccountTable = ({
         } else if (sortField === 'calculated_atr') {
           aVal = getAccountATR(a);
           bVal = getAccountATR(b);
+        } else if (sortField === 'net_arr') {
+          // Calculate Net ARR from opportunities inline
+          aVal = opportunities?.filter(opp => opp.sfdc_account_id === a.sfdc_account_id)
+            .reduce((sum, opp) => sum + (opp.net_arr || 0), 0) || 0;
+          bVal = opportunities?.filter(opp => opp.sfdc_account_id === b.sfdc_account_id)
+            .reduce((sum, opp) => sum + (opp.net_arr || 0), 0) || 0;
         }
         
         // Handle nulls
@@ -331,7 +337,7 @@ export const VirtualizedAccountTable = ({
     }
 
     return result;
-  }, [accounts, searchTerm, currentOwnerFilter, newOwnerFilter, lockStatusFilter, assignmentProposals, sortField, sortDirection]);
+  }, [accounts, searchTerm, currentOwnerFilter, newOwnerFilter, lockStatusFilter, assignmentProposals, sortField, sortDirection, opportunities]);
 
   // Memoized pagination calculation
   const paginatedData = useMemo(() => {
@@ -489,7 +495,15 @@ export const VirtualizedAccountTable = ({
                 </div>
               </TableHead>
               {accountType === 'prospect' ? (
-                <TableHead className="min-w-[120px]">Net ARR</TableHead>
+                <TableHead 
+                  className="min-w-[120px] cursor-pointer hover:bg-muted/50"
+                  onClick={() => handleSort('net_arr')}
+                >
+                  <div className="flex items-center gap-1">
+                    Net ARR
+                    <SortIcon field="net_arr" />
+                  </div>
+                </TableHead>
               ) : (
                 <>
                   <TableHead 

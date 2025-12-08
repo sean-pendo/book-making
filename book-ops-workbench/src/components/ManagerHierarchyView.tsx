@@ -14,6 +14,7 @@ import { ChevronDown, ChevronRight, MessageSquare, Edit2, Undo2 } from 'lucide-r
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import ManagerNotesDialog from './ManagerNotesDialog';
+import AccountsLeavingView from './AccountsLeavingView';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -23,6 +24,7 @@ import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
 import { downloadFile } from '@/utils/exportUtils';
 import { notifyProposalRejected } from '@/services/slackNotificationService';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
+import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
 
 // Interface for hierarchical account display
 interface AccountWithHierarchy {
@@ -47,6 +49,7 @@ interface AccountWithHierarchy {
   cre_count: number | null;
   cre_risk: boolean | null;
   cre_status: string | null;
+  renewal_quarter: string | null;
   ultimate_parent_id: string | null;
   has_split_ownership: boolean | null;
   children?: AccountWithHierarchy[];
@@ -163,7 +166,7 @@ export default function ManagerHierarchyView({
       const accountsPromises = repIds.map(repId => 
         supabase
           .from('accounts')
-          .select('sfdc_account_id, account_name, build_id, is_parent, is_customer, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, calculated_atr, arr, atr, hierarchy_bookings_arr_converted, expansion_tier, geo, sales_territory, hq_country, cre_count, cre_risk, cre_status, ultimate_parent_id, has_split_ownership')
+          .select('sfdc_account_id, account_name, build_id, is_parent, is_customer, owner_id, owner_name, new_owner_id, new_owner_name, calculated_arr, calculated_atr, arr, atr, hierarchy_bookings_arr_converted, expansion_tier, geo, sales_territory, hq_country, cre_count, cre_risk, cre_status, renewal_quarter, ultimate_parent_id, has_split_ownership')
           .eq('build_id', buildId)
           .or(`new_owner_id.eq.${repId},and(owner_id.eq.${repId},new_owner_id.is.null)`)
       );
@@ -521,6 +524,7 @@ export default function ManagerHierarchyView({
         cre_count: 0,
         cre_risk: false,
         cre_status: null,
+        renewal_quarter: null,
         ultimate_parent_id: null,
         has_split_ownership: true,
         children: children.map(child => ({
@@ -1669,7 +1673,7 @@ export default function ManagerHierarchyView({
                                       <TableHead className="text-right">
                                         <Tooltip>
                                           <TooltipTrigger className="cursor-help">
-                                            ARR / Net ARR
+                                            ARR
                                           </TooltipTrigger>
                                           <TooltipContent>
                                             <p><strong>Customers:</strong> ARR (Annual Recurring Revenue)</p>
@@ -1689,6 +1693,7 @@ export default function ManagerHierarchyView({
                                         </Tooltip>
                                       </TableHead>
                                       <TableHead>Location</TableHead>
+                                      <TableHead>Renewal</TableHead>
                                       <TableHead className="w-[150px]">Actions</TableHead>
                                     </TableRow>
                                   </TableHeader>
@@ -1818,6 +1823,9 @@ export default function ManagerHierarchyView({
                                             <TableCell>
                                               {!account.isVirtualParent && (account.hq_country || account.sales_territory || account.geo || 'N/A')}
                                             </TableCell>
+                                            <TableCell>
+                                              {!account.isVirtualParent && <RenewalQuarterBadge renewalQuarter={account.renewal_quarter} />}
+                                            </TableCell>
                                             <TableCell onClick={(e) => e.stopPropagation()}>
                                               {!account.isVirtualParent && (
                                                 <div className="flex gap-2">
@@ -1939,13 +1947,16 @@ export default function ManagerHierarchyView({
                                                     })()}
                                                   </TableCell>
                                                   <TableCell className="text-right text-sm">
-                                                    {child.is_customer ? (
-                                                      formatCurrency(getAccountARR(child))
-                                                    ) : (
-                                                      <span className={getNetARRColorClass(getNetARR(child.sfdc_account_id))}>
-                                                        {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                                    <div className="flex flex-col items-end">
+                                                      <span className={getAccountARR(child) > 0 ? "text-green-600" : "text-muted-foreground"}>
+                                                        {formatCurrency(getAccountARR(child))}
                                                       </span>
-                                                    )}
+                                                      {!child.is_customer && getNetARR(child.sfdc_account_id) > 0 && (
+                                                        <span className={`text-xs ${getNetARRColorClass(getNetARR(child.sfdc_account_id))}`}>
+                                                          Net: {formatNetARR(getNetARR(child.sfdc_account_id))}
+                                                        </span>
+                                                      )}
+                                                    </div>
                                                   </TableCell>
                                                   <TableCell className="text-right text-sm">
                                                     {child.is_customer ? (
@@ -1956,6 +1967,9 @@ export default function ManagerHierarchyView({
                                                   </TableCell>
                                                   <TableCell className="text-sm">
                                                     {child.hq_country || child.sales_territory || child.geo || 'N/A'}
+                                                  </TableCell>
+                                                  <TableCell>
+                                                    <RenewalQuarterBadge renewalQuarter={child.renewal_quarter} />
                                                   </TableCell>
                                                   <TableCell>
                                                     <div className="flex gap-2">
@@ -2031,6 +2045,23 @@ export default function ManagerHierarchyView({
               })
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Accounts Leaving Section - Global View for Managers */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-red-700 dark:text-red-400">
+            <AlertTriangle className="w-5 h-5" />
+            Accounts Leaving Your Team
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <AccountsLeavingView
+            buildId={buildId}
+            managerLevel={managerLevel}
+            managerName={managerName}
+          />
         </CardContent>
       </Card>
 
