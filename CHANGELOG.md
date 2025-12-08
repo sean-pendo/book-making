@@ -1,5 +1,30 @@
 # Changelog
 
+## [2025-12-08] - Analysis: Waterfall Optimization Logic Review
+
+### Overview
+Comprehensive analysis of the current waterfall assignment algorithm to understand if it produces "true optimization" for good output metrics.
+
+### Key Findings
+- Current engine is a **greedy heuristic**, not mathematical optimization
+- Processes accounts sequentially with no backtracking
+- Prioritizes business rules (continuity, geography) over pure balance
+- Balance score is used as tie-breaker only, not primary decision factor
+
+### New Artifacts Created
+- `docs/core/waterfall-optimization-analysis.md` - Full analysis with improvement roadmap
+- `src/services/assignmentQualityService.ts` - Quality metrics service to measure assignment outcomes
+
+### Proposed Improvement Path
+1. **Phase 1**: Define and measure quality metrics (ARR CV, CRE distribution, compliance rates)
+2. **Phase 2**: Quick wins (weighted scoring, difficulty-based sorting)
+3. **Phase 3**: Two-pass algorithm with rebalancing
+4. **Phase 4**: True optimization (LP/CSP approach)
+
+**Files**: `waterfall-optimization-analysis.md`, `assignmentQualityService.ts`
+
+---
+
 ## [2025-12-04] - Fix: Sample CSV Headers Match Field Mappings
 
 ### Overview
