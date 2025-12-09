@@ -7,6 +7,8 @@ import { Loader2, Users, Building, TrendingUp, AlertTriangle, RotateCcw, Lock, A
 import { useEnhancedBalancing, RepMetrics } from '@/hooks/useEnhancedBalancing';
 import { useEnhancedAccountCalculations } from '@/hooks/useEnhancedAccountCalculations';
 import { SalesRepDetailModal } from '@/components/SalesRepDetailModal';
+import { OptimizationMetricsPanel, OptimizationMetrics } from '@/components/OptimizationMetricsPanel';
+import { ARRDistributionChart } from '@/components/ARRDistributionChart';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
@@ -59,6 +61,28 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
     
     fetchThresholds();
   }, [buildId]);
+
+  // Calculate current metrics from data (read-only analytics)
+  const currentMetrics: OptimizationMetrics | null = data ? {
+    arrBalanceScore: 100 - (data.customerMetrics.maxVariance || 0),
+    geoAlignmentPct: data.retentionMetrics.avgRegionalAlignment || 0,
+    continuityPct: data.retentionMetrics.ownerRetentionRate || 0,
+    p1Rate: 0, // Will be tracked when priority-level engine is integrated
+    p2Rate: 0,
+    p3bRate: 0,
+    p4Rate: 0,
+    repsInBand: data.repMetrics.filter(r => r.status === 'Balanced').length,
+    repsOverMax: data.repMetrics.filter(r => r.status === 'Overloaded').length,
+    repsTotal: data.repMetrics.length,
+    crossRegionCount: Math.round(data.customerMetrics.totalAccounts * (1 - data.retentionMetrics.avgRegionalAlignment / 100)),
+    creVariance: 0,
+    avgArrPerRep: data.customerMetrics.avgARRPerRep || 0,
+    minArrPerRep: data.repMetrics.length > 0 ? Math.min(...data.repMetrics.map(r => r.customerARR)) : 0,
+    maxArrPerRep: data.repMetrics.length > 0 ? Math.max(...data.repMetrics.map(r => r.customerARR)) : 0,
+    targetArr: thresholds?.customer_target_arr || 1900000,
+    totalAccounts: data.customerMetrics.totalAccounts,
+    totalCustomerArr: data.customerMetrics.totalARR,
+  } : null;
 
   const handleRefresh = async () => {
     if (!buildId) return;
@@ -283,6 +307,21 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
     return warnings;
   };
 
+  // Prepare ARR distribution data for the chart
+  const arrDistributionData = data?.repMetrics.map(rep => ({
+    repId: rep.rep_id,
+    repName: rep.name,
+    region: rep.region,
+    arr: rep.customerARR,
+    accountCount: rep.customerAccounts,
+  })) || [];
+
+  const targetArr = thresholds?.customer_target_arr || 1900000;
+  const variancePercent = thresholds?.capacity_variance_percent || 10;
+  const preferredMax = targetArr * (1 + variancePercent / 100);
+  const minThreshold = targetArr * (1 - variancePercent / 100);
+  const hardCap = thresholds?.customer_max_arr || 2900000;
+
   return (
     <>
       <div className="p-6 space-y-6">
@@ -306,6 +345,26 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
             </Button>
           </div>
         </div>
+
+        {/* Success Metrics Panel - Read-only analytics at top */}
+        {currentMetrics && (
+          <OptimizationMetricsPanel
+            metrics={currentMetrics}
+            title="Assignment Quality Metrics"
+          />
+        )}
+
+        {/* ARR Distribution Chart - Visual analytics */}
+        {arrDistributionData.length > 0 && (
+          <ARRDistributionChart
+            data={arrDistributionData}
+            targetArr={targetArr}
+            minThreshold={minThreshold}
+            preferredMax={preferredMax}
+            hardCap={hardCap}
+            title="ARR Distribution by Rep"
+          />
+        )}
 
         {/* Summary Cards */}
         <div className="grid gap-4 md:grid-cols-6">

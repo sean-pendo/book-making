@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "13.0.4"
+    PostgrestVersion: "13.0.5"
   }
   public: {
     Tables: {
@@ -23,6 +23,7 @@ export type Database = {
           build_id: string | null
           calculated_arr: number | null
           calculated_atr: number | null
+          child_count: number | null
           cre_count: number | null
           cre_risk: boolean | null
           cre_status: string | null
@@ -56,7 +57,6 @@ export type Database = {
           owners_lifetime_count: number | null
           parent_id: string | null
           previous_owner_id: string | null
-          previous_parent_id: string | null
           renewal_date: string | null
           renewal_quarter: string | null
           risk_flag: boolean | null
@@ -74,6 +74,7 @@ export type Database = {
           build_id?: string | null
           calculated_arr?: number | null
           calculated_atr?: number | null
+          child_count?: number | null
           cre_count?: number | null
           cre_risk?: boolean | null
           cre_status?: string | null
@@ -107,7 +108,6 @@ export type Database = {
           owners_lifetime_count?: number | null
           parent_id?: string | null
           previous_owner_id?: string | null
-          previous_parent_id?: string | null
           renewal_date?: string | null
           renewal_quarter?: string | null
           risk_flag?: boolean | null
@@ -125,6 +125,7 @@ export type Database = {
           build_id?: string | null
           calculated_arr?: number | null
           calculated_atr?: number | null
+          child_count?: number | null
           cre_count?: number | null
           cre_risk?: boolean | null
           cre_status?: string | null
@@ -158,7 +159,6 @@ export type Database = {
           owners_lifetime_count?: number | null
           parent_id?: string | null
           previous_owner_id?: string | null
-          previous_parent_id?: string | null
           renewal_date?: string | null
           renewal_quarter?: string | null
           risk_flag?: boolean | null
@@ -180,7 +180,7 @@ export type Database = {
       }
       assignment_configuration: {
         Row: {
-          account_scope: string | null
+          account_scope: string
           assign_prospects: boolean | null
           atr_max: number | null
           atr_max_override: number | null
@@ -203,10 +203,7 @@ export type Database = {
           customer_min_arr: number | null
           customer_target_arr: number | null
           description: string
-          field_conditions: Json | null
-          final_distribution_strategy: string | null
           id: string
-          intelligence_level: string | null
           last_calculated_at: string | null
           max_cre_per_rep: number | null
           max_tier1_per_rep: number | null
@@ -216,6 +213,7 @@ export type Database = {
           prospect_max_arr: number | null
           prospect_min_arr: number | null
           prospect_target_arr: number | null
+          prospect_variance_percent: number | null
           q1_renewal_max: number | null
           q1_renewal_max_override: number | null
           q1_renewal_min: number | null
@@ -234,7 +232,6 @@ export type Database = {
           q4_renewal_target: number | null
           renewal_concentration_max: number | null
           renewal_concentration_max_override: number | null
-          rep_matching_rules: Json | null
           territory_mappings: Json | null
           tier1_max: number | null
           tier1_max_override: number | null
@@ -248,10 +245,9 @@ export type Database = {
           tier2_variance: number | null
           updated_at: string | null
           use_ai_optimization: boolean | null
-          value_mappings: Json | null
         }
         Insert: {
-          account_scope?: string | null
+          account_scope?: string
           assign_prospects?: boolean | null
           atr_max?: number | null
           atr_max_override?: number | null
@@ -274,10 +270,7 @@ export type Database = {
           customer_min_arr?: number | null
           customer_target_arr?: number | null
           description?: string
-          field_conditions?: Json | null
-          final_distribution_strategy?: string | null
           id?: string
-          intelligence_level?: string | null
           last_calculated_at?: string | null
           max_cre_per_rep?: number | null
           max_tier1_per_rep?: number | null
@@ -287,6 +280,7 @@ export type Database = {
           prospect_max_arr?: number | null
           prospect_min_arr?: number | null
           prospect_target_arr?: number | null
+          prospect_variance_percent?: number | null
           q1_renewal_max?: number | null
           q1_renewal_max_override?: number | null
           q1_renewal_min?: number | null
@@ -305,7 +299,6 @@ export type Database = {
           q4_renewal_target?: number | null
           renewal_concentration_max?: number | null
           renewal_concentration_max_override?: number | null
-          rep_matching_rules?: Json | null
           territory_mappings?: Json | null
           tier1_max?: number | null
           tier1_max_override?: number | null
@@ -319,10 +312,9 @@ export type Database = {
           tier2_variance?: number | null
           updated_at?: string | null
           use_ai_optimization?: boolean | null
-          value_mappings?: Json | null
         }
         Update: {
-          account_scope?: string | null
+          account_scope?: string
           assign_prospects?: boolean | null
           atr_max?: number | null
           atr_max_override?: number | null
@@ -345,10 +337,7 @@ export type Database = {
           customer_min_arr?: number | null
           customer_target_arr?: number | null
           description?: string
-          field_conditions?: Json | null
-          final_distribution_strategy?: string | null
           id?: string
-          intelligence_level?: string | null
           last_calculated_at?: string | null
           max_cre_per_rep?: number | null
           max_tier1_per_rep?: number | null
@@ -358,6 +347,7 @@ export type Database = {
           prospect_max_arr?: number | null
           prospect_min_arr?: number | null
           prospect_target_arr?: number | null
+          prospect_variance_percent?: number | null
           q1_renewal_max?: number | null
           q1_renewal_max_override?: number | null
           q1_renewal_min?: number | null
@@ -376,7 +366,6 @@ export type Database = {
           q4_renewal_target?: number | null
           renewal_concentration_max?: number | null
           renewal_concentration_max_override?: number | null
-          rep_matching_rules?: Json | null
           territory_mappings?: Json | null
           tier1_max?: number | null
           tier1_max_override?: number | null
@@ -390,13 +379,12 @@ export type Database = {
           tier2_variance?: number | null
           updated_at?: string | null
           use_ai_optimization?: boolean | null
-          value_mappings?: Json | null
         }
         Relationships: [
           {
             foreignKeyName: "assignment_configuration_build_id_fkey"
             columns: ["build_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "builds"
             referencedColumns: ["id"]
           },
@@ -802,61 +790,61 @@ export type Database = {
       }
       import_metadata: {
         Row: {
-          id: string
+          auto_mapping_summary: Json | null
           build_id: string | null
-          data_type: 'accounts' | 'opportunities' | 'sales_reps'
-          import_status: 'pending' | 'mapped' | 'validated' | 'completed' | 'error'
+          created_at: string | null
+          data_type: string
+          error_count: number | null
+          field_mappings: Json | null
+          id: string
+          import_status: string
           imported_at: string | null
           imported_by: string | null
-          total_rows: number | null
-          valid_rows: number | null
-          error_count: number | null
-          warning_count: number | null
-          field_mappings: Json | null
-          auto_mapping_summary: Json | null
-          validation_summary: Json | null
-          original_filename: string | null
           original_file_size: number | null
-          created_at: string | null
+          original_filename: string | null
+          total_rows: number | null
           updated_at: string | null
+          valid_rows: number | null
+          validation_summary: Json | null
+          warning_count: number | null
         }
         Insert: {
-          id?: string
+          auto_mapping_summary?: Json | null
           build_id?: string | null
-          data_type: 'accounts' | 'opportunities' | 'sales_reps'
-          import_status?: 'pending' | 'mapped' | 'validated' | 'completed' | 'error'
+          created_at?: string | null
+          data_type: string
+          error_count?: number | null
+          field_mappings?: Json | null
+          id?: string
+          import_status?: string
           imported_at?: string | null
           imported_by?: string | null
-          total_rows?: number | null
-          valid_rows?: number | null
-          error_count?: number | null
-          warning_count?: number | null
-          field_mappings?: Json | null
-          auto_mapping_summary?: Json | null
-          validation_summary?: Json | null
-          original_filename?: string | null
           original_file_size?: number | null
-          created_at?: string | null
+          original_filename?: string | null
+          total_rows?: number | null
           updated_at?: string | null
+          valid_rows?: number | null
+          validation_summary?: Json | null
+          warning_count?: number | null
         }
         Update: {
-          id?: string
+          auto_mapping_summary?: Json | null
           build_id?: string | null
-          data_type?: 'accounts' | 'opportunities' | 'sales_reps'
-          import_status?: 'pending' | 'mapped' | 'validated' | 'completed' | 'error'
+          created_at?: string | null
+          data_type?: string
+          error_count?: number | null
+          field_mappings?: Json | null
+          id?: string
+          import_status?: string
           imported_at?: string | null
           imported_by?: string | null
-          total_rows?: number | null
-          valid_rows?: number | null
-          error_count?: number | null
-          warning_count?: number | null
-          field_mappings?: Json | null
-          auto_mapping_summary?: Json | null
-          validation_summary?: Json | null
-          original_filename?: string | null
           original_file_size?: number | null
-          created_at?: string | null
+          original_filename?: string | null
+          total_rows?: number | null
           updated_at?: string | null
+          valid_rows?: number | null
+          validation_summary?: Json | null
+          warning_count?: number | null
         }
         Relationships: [
           {
@@ -871,29 +859,41 @@ export type Database = {
       manager_notes: {
         Row: {
           build_id: string
+          category: string | null
           created_at: string
           id: string
           manager_user_id: string
           note_text: string
+          reassignment_id: string | null
           sfdc_account_id: string
+          status: string | null
+          tags: string[] | null
           updated_at: string
         }
         Insert: {
           build_id: string
+          category?: string | null
           created_at?: string
           id?: string
           manager_user_id: string
           note_text: string
+          reassignment_id?: string | null
           sfdc_account_id: string
+          status?: string | null
+          tags?: string[] | null
           updated_at?: string
         }
         Update: {
           build_id?: string
+          category?: string | null
           created_at?: string
           id?: string
           manager_user_id?: string
           note_text?: string
+          reassignment_id?: string | null
           sfdc_account_id?: string
+          status?: string | null
+          tags?: string[] | null
           updated_at?: string
         }
         Relationships: [
@@ -902,6 +902,20 @@ export type Database = {
             columns: ["build_id"]
             isOneToOne: false
             referencedRelation: "builds"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "manager_notes_manager_user_id_profiles_fkey"
+            columns: ["manager_user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "manager_notes_reassignment_id_fkey"
+            columns: ["reassignment_id"]
+            isOneToOne: false
+            referencedRelation: "manager_reassignments"
             referencedColumns: ["id"]
           },
         ]
@@ -918,8 +932,9 @@ export type Database = {
           current_owner_id: string
           current_owner_name: string
           id: string
+          is_late_submission: boolean | null
           manager_user_id: string
-          proposed_owner_id: string
+          proposed_owner_id: string | null
           proposed_owner_name: string
           rationale: string | null
           revops_approved_at: string | null
@@ -941,8 +956,9 @@ export type Database = {
           current_owner_id: string
           current_owner_name: string
           id?: string
+          is_late_submission?: boolean | null
           manager_user_id: string
-          proposed_owner_id: string
+          proposed_owner_id?: string | null
           proposed_owner_name: string
           rationale?: string | null
           revops_approved_at?: string | null
@@ -964,8 +980,9 @@ export type Database = {
           current_owner_id?: string
           current_owner_name?: string
           id?: string
+          is_late_submission?: boolean | null
           manager_user_id?: string
-          proposed_owner_id?: string
+          proposed_owner_id?: string | null
           proposed_owner_name?: string
           rationale?: string | null
           revops_approved_at?: string | null
@@ -986,6 +1003,71 @@ export type Database = {
           },
         ]
       }
+      manager_review_analytics: {
+        Row: {
+          approved_count: number | null
+          avg_turnaround_hours: number | null
+          build_id: string
+          concern_notes: number | null
+          created_at: string | null
+          first_reviewed_at: string | null
+          id: string
+          last_activity_at: string | null
+          manager_level: string | null
+          manager_user_id: string
+          open_notes: number | null
+          pending_count: number | null
+          rejected_count: number | null
+          total_notes: number | null
+          total_reassignments: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          approved_count?: number | null
+          avg_turnaround_hours?: number | null
+          build_id: string
+          concern_notes?: number | null
+          created_at?: string | null
+          first_reviewed_at?: string | null
+          id?: string
+          last_activity_at?: string | null
+          manager_level?: string | null
+          manager_user_id: string
+          open_notes?: number | null
+          pending_count?: number | null
+          rejected_count?: number | null
+          total_notes?: number | null
+          total_reassignments?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          approved_count?: number | null
+          avg_turnaround_hours?: number | null
+          build_id?: string
+          concern_notes?: number | null
+          created_at?: string | null
+          first_reviewed_at?: string | null
+          id?: string
+          last_activity_at?: string | null
+          manager_level?: string | null
+          manager_user_id?: string
+          open_notes?: number | null
+          pending_count?: number | null
+          rejected_count?: number | null
+          total_notes?: number | null
+          total_reassignments?: number | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manager_review_analytics_build_id_fkey"
+            columns: ["build_id"]
+            isOneToOne: false
+            referencedRelation: "builds"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       manager_reviews: {
         Row: {
           build_id: string
@@ -997,8 +1079,10 @@ export type Database = {
           reviewed_at: string | null
           sent_at: string
           sent_by: string
+          shared_scope: string | null
           status: string
           updated_at: string
+          visible_flms: string[] | null
         }
         Insert: {
           build_id: string
@@ -1010,8 +1094,10 @@ export type Database = {
           reviewed_at?: string | null
           sent_at?: string
           sent_by: string
+          shared_scope?: string | null
           status?: string
           updated_at?: string
+          visible_flms?: string[] | null
         }
         Update: {
           build_id?: string
@@ -1023,8 +1109,10 @@ export type Database = {
           reviewed_at?: string | null
           sent_at?: string
           sent_by?: string
+          shared_scope?: string | null
           status?: string
           updated_at?: string
+          visible_flms?: string[] | null
         }
         Relationships: [
           {
@@ -1279,6 +1367,65 @@ export type Database = {
           },
         ]
       }
+      sandbox_runs: {
+        Row: {
+          assignments: Json | null
+          baseline_metrics: Json | null
+          build_id: string | null
+          config: Json
+          created_at: string | null
+          created_by: string | null
+          description: string | null
+          error_message: string | null
+          id: string
+          name: string
+          optimized_metrics: Json | null
+          solve_time_ms: number | null
+          status: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          assignments?: Json | null
+          baseline_metrics?: Json | null
+          build_id?: string | null
+          config?: Json
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          error_message?: string | null
+          id?: string
+          name: string
+          optimized_metrics?: Json | null
+          solve_time_ms?: number | null
+          status?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          assignments?: Json | null
+          baseline_metrics?: Json | null
+          build_id?: string | null
+          config?: Json
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          error_message?: string | null
+          id?: string
+          name?: string
+          optimized_metrics?: Json | null
+          solve_time_ms?: number | null
+          status?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sandbox_runs_build_id_fkey"
+            columns: ["build_id"]
+            isOneToOne: false
+            referencedRelation: "builds"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -1316,6 +1463,7 @@ export type Database = {
           sfdc_account_id: string
         }[]
       }
+      delete_build_cascade: { Args: { p_build_id: string }; Returns: Json }
       disable_opportunity_trigger: { Args: never; Returns: undefined }
       enable_opportunity_trigger: { Args: never; Returns: undefined }
       fix_account_owner_assignments: {
@@ -1332,6 +1480,7 @@ export type Database = {
       }
       get_current_user_region: { Args: never; Returns: string }
       get_current_user_role: { Args: never; Returns: string }
+      get_customer_arr_total: { Args: { p_build_id: string }; Returns: number }
       get_orphaned_accounts: {
         Args: { p_build_id: string }
         Returns: {
@@ -1358,26 +1507,16 @@ export type Database = {
           total_arr: number
         }[]
       }
+      get_prospect_pipeline_total: {
+        Args: { p_build_id: string }
+        Returns: number
+      }
       mark_split_ownership: { Args: { p_build_id: string }; Returns: undefined }
       recalculate_account_values_db: {
         Args: { p_build_id: string }
         Returns: {
           accounts_updated: number
           processing_time_seconds: number
-        }[]
-      }
-      recover_opportunity_owners: {
-        Args: { p_build_id: string }
-        Returns: {
-          updated_count: number
-        }[]
-      }
-      reset_build_assignments: {
-        Args: { p_build_id: string }
-        Returns: {
-          accounts_reset: number
-          assignments_deleted: number
-          opportunities_reset: number
         }[]
       }
       reset_build_assignments_bulk: {
@@ -1387,22 +1526,6 @@ export type Database = {
           assignments_deleted: number
           opportunities_reset: number
           processing_time_seconds: number
-        }[]
-      }
-      reset_build_assignments_optimized: {
-        Args: { p_build_id: string }
-        Returns: {
-          accounts_reset: number
-          assignments_deleted: number
-          opportunities_reset: number
-          processing_time_seconds: number
-        }[]
-      }
-      reset_parent_child_relationships: {
-        Args: { p_build_id: string }
-        Returns: {
-          restored_children: number
-          updated_parents: number
         }[]
       }
       sync_missing_assignments: {
@@ -1428,18 +1551,6 @@ export type Database = {
       update_account_calculated_values_batch: {
         Args: { p_batch_size?: number; p_build_id: string }
         Returns: undefined
-      }
-      validate_account_classification: {
-        Args: { p_build_id: string }
-        Returns: {
-          all_parent_accounts_found: boolean
-          classification_sync_issues: number
-          customers_by_flag: number
-          customers_by_hierarchy_arr: number
-          prospects_by_flag: number
-          prospects_by_hierarchy_arr: number
-          total_parent_accounts: number
-        }[]
       }
       validate_owner_assignment: {
         Args: { p_build_id: string; p_owner_id: string }

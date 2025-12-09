@@ -257,10 +257,12 @@ export const BuildDetail = () => {
                     </div>}
                 </div>
               </div>
-              <div className="text-right">
-                <div className="text-sm text-muted-foreground mb-1">Created</div>
-                <div className="font-medium">
-                  {new Date(build.created_at).toLocaleDateString()}
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <div className="text-sm text-muted-foreground mb-1">Created</div>
+                  <div className="font-medium">
+                    {new Date(build.created_at).toLocaleDateString()}
+                  </div>
                 </div>
               </div>
             </div>

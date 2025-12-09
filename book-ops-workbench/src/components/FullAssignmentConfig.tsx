@@ -31,6 +31,7 @@ interface ConfigState {
   prospect_target_arr: number;
   prospect_max_arr: number;
   capacity_variance_percent: number;
+  prospect_variance_percent: number;
   territory_mappings: Record<string, string>;
   // Balance limits (using actual DB column names)
   max_cre_per_rep: number;
@@ -53,6 +54,7 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
     prospect_target_arr: 2000000,
     prospect_max_arr: 3000000,
     capacity_variance_percent: 10,
+    prospect_variance_percent: 10,
     territory_mappings: {},
     // Balance limits defaults
     max_cre_per_rep: 3,
@@ -106,6 +108,7 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             prospect_target_arr: data.prospect_target_arr || 2000000,
             prospect_max_arr: data.prospect_max_arr || 3000000,
             capacity_variance_percent: data.capacity_variance_percent || 10,
+            prospect_variance_percent: data.prospect_variance_percent || 10,
             territory_mappings: (data.territory_mappings as Record<string, string>) || {},
             // Balance limits
             max_cre_per_rep: data.max_cre_per_rep || 3,
@@ -615,27 +618,102 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
 
           <div className="space-y-2">
             <Label className="flex items-center justify-between">
-              Maximum ARR per Rep
+              <span className="flex items-center gap-2">
+                Capacity Variance %
+                <Tooltip>
+                  <TooltipTrigger>
+                    <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">
+                    <p className="font-medium">How close should reps be to each other?</p>
+                    <p className="mt-2">This controls how evenly ARR is distributed across reps.</p>
+                    <p className="mt-2">• <strong>Lower %</strong> (e.g., 10%) = Reps must be very close to each other in ARR. Tighter balance, but may break geographic assignments.</p>
+                    <p className="mt-1">• <strong>Higher %</strong> (e.g., 25%) = More spread allowed between reps. Better geo matching, but less equal books.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </span>
               <span className="text-muted-foreground font-normal">
-                {formatCurrency(config.customer_max_arr)}
+                {config.capacity_variance_percent}%
               </span>
             </Label>
             <div className="flex items-center gap-4">
               <Slider
-                value={[config.customer_max_arr]}
-                onValueChange={([value]) => handleChange('customer_max_arr', value)}
-                min={1000000}
-                max={Math.round(customerSliderMax * 1.5)}
-                step={100000}
+                value={[config.capacity_variance_percent]}
+                onValueChange={([value]) => handleChange('capacity_variance_percent', value)}
+                min={5}
+                max={30}
+                step={1}
                 className="flex-1"
               />
               <Input
-                type="text"
-                value={formatNumber(config.customer_max_arr)}
-                onChange={(e) => handleChange('customer_max_arr', parseInt(e.target.value.replace(/,/g, '')) || 0)}
-                className="w-36"
+                type="number"
+                value={config.capacity_variance_percent}
+                onChange={(e) => handleChange('capacity_variance_percent', parseInt(e.target.value) || 10)}
+                className="w-20"
+                min={5}
+                max={30}
               />
             </div>
+            <p className="text-xs text-muted-foreground">
+              Band: {formatCurrency(config.customer_target_arr * (1 - config.capacity_variance_percent / 100))} – {formatCurrency(config.customer_target_arr * (1 + config.capacity_variance_percent / 100))}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {(() => {
+              // Calculate the minimum allowed Maximum ARR (must be >= preferred max from variance band)
+              const preferredMax = Math.round(config.customer_target_arr * (1 + config.capacity_variance_percent / 100));
+              const minMaxARR = Math.max(preferredMax, 1000000); // At least the preferred max or $1M
+              
+              // Auto-adjust if current max is below the minimum
+              if (config.customer_max_arr < minMaxARR) {
+                // Use setTimeout to avoid state update during render
+                setTimeout(() => handleChange('customer_max_arr', minMaxARR), 0);
+              }
+              
+              return (
+                <>
+                  <Label className="flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      Maximum ARR per Rep
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs">
+                          <p>Hard cap that reps cannot exceed. Must be at least {formatCurrency(preferredMax)} (the preferred max from your variance band).</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </span>
+                    <span className="text-muted-foreground font-normal">
+                      {formatCurrency(config.customer_max_arr)}
+                    </span>
+                  </Label>
+                  <div className="flex items-center gap-4">
+                    <Slider
+                      value={[Math.max(config.customer_max_arr, minMaxARR)]}
+                      onValueChange={([value]) => handleChange('customer_max_arr', value)}
+                      min={minMaxARR}
+                      max={Math.round(customerSliderMax * 2)}
+                      step={100000}
+                      className="flex-1"
+                    />
+                    <Input
+                      type="text"
+                      value={formatNumber(config.customer_max_arr)}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value.replace(/,/g, '')) || minMaxARR;
+                        handleChange('customer_max_arr', Math.max(value, minMaxARR));
+                      }}
+                      className="w-36"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Must be ≥ {formatCurrency(preferredMax)} (preferred max from variance band)
+                  </p>
+                </>
+              );
+            })()}
           </div>
         </CardContent>
       </Card>
@@ -682,29 +760,106 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             </div>
           </div>
 
+          {/* Prospect Variance % - separate from customers */}
           <div className="space-y-2">
             <Label className="flex items-center justify-between">
-              Maximum Pipeline per Rep
+              <span className="flex items-center gap-2">
+                Capacity Variance %
+                <Tooltip>
+                  <TooltipTrigger>
+                    <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">
+                    <p className="font-medium">How close should reps be to each other?</p>
+                    <p className="mt-2">Controls how evenly pipeline is distributed across reps.</p>
+                    <p className="mt-2">• <strong>Lower %</strong> = Tighter balance, reps closer together</p>
+                    <p className="mt-1">• <strong>Higher %</strong> = More spread allowed between reps</p>
+                  </TooltipContent>
+                </Tooltip>
+              </span>
               <span className="text-muted-foreground font-normal">
-                ${formatNumber(config.prospect_max_arr)}
+                {config.prospect_variance_percent}%
               </span>
             </Label>
             <div className="flex items-center gap-4">
               <Slider
-                value={[config.prospect_max_arr]}
-                onValueChange={([value]) => handleChange('prospect_max_arr', value)}
-                min={0}
-                max={Math.round(prospectSliderMax * 1.5)}
-                step={10000}
+                value={[config.prospect_variance_percent]}
+                onValueChange={([value]) => handleChange('prospect_variance_percent', value)}
+                min={5}
+                max={30}
+                step={1}
                 className="flex-1"
               />
               <Input
-                type="text"
-                value={formatNumber(config.prospect_max_arr)}
-                onChange={(e) => handleChange('prospect_max_arr', parseInt(e.target.value.replace(/,/g, '')) || 0)}
-                className="w-36"
+                type="number"
+                value={config.prospect_variance_percent}
+                onChange={(e) => handleChange('prospect_variance_percent', parseInt(e.target.value) || 10)}
+                className="w-20"
+                min={5}
+                max={30}
               />
             </div>
+            <p className="text-xs text-muted-foreground">
+              Band: ${formatNumber(Math.round(config.prospect_target_arr * (1 - config.prospect_variance_percent / 100)))} – ${formatNumber(Math.round(config.prospect_target_arr * (1 + config.prospect_variance_percent / 100)))}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {(() => {
+              // Calculate the minimum allowed Maximum Pipeline (must be >= preferred max from variance band)
+              const preferredMax = Math.round(config.prospect_target_arr * (1 + config.prospect_variance_percent / 100));
+              const minMaxPipeline = Math.max(preferredMax, 0);
+              
+              // Auto-adjust if current max is below the minimum
+              if (config.prospect_max_arr < minMaxPipeline && config.prospect_target_arr > 0) {
+                setTimeout(() => handleChange('prospect_max_arr', minMaxPipeline), 0);
+              }
+              
+              return (
+                <>
+                  <Label className="flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      Maximum Pipeline per Rep
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs">
+                          <p>Hard cap that reps cannot exceed. Must be at least ${formatNumber(preferredMax)} (the preferred max from your variance band).</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </span>
+                    <span className="text-muted-foreground font-normal">
+                      ${formatNumber(config.prospect_max_arr)}
+                    </span>
+                  </Label>
+                  <div className="flex items-center gap-4">
+                    <Slider
+                      value={[Math.max(config.prospect_max_arr, minMaxPipeline)]}
+                      onValueChange={([value]) => handleChange('prospect_max_arr', value)}
+                      min={minMaxPipeline}
+                      max={Math.round(prospectSliderMax * 2)}
+                      step={10000}
+                      className="flex-1"
+                    />
+                    <Input
+                      type="text"
+                      value={formatNumber(config.prospect_max_arr)}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value.replace(/,/g, '')) || minMaxPipeline;
+                        handleChange('prospect_max_arr', Math.max(value, minMaxPipeline));
+                      }}
+                      className="w-36"
+                    />
+                  </div>
+                  {config.prospect_target_arr > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Must be ≥ ${formatNumber(preferredMax)} (preferred max from variance band)
+                    </p>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </CardContent>
       </Card>

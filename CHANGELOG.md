@@ -4,6 +4,87 @@
 
 *Beta testers: Continue using https://book-ops-v1-2-beta.vercel.app (pinned to v1.2.0)*
 
+## [2025-12-09] - Unified Assignment Engine with Priority-Level Optimization
+
+### Architecture Change
+Integrated the PriorityLevelOptimizer directly into the Assignment Engine. Now all assignments (customers and prospects) use the priority-level batch optimization approach.
+
+**What Changed:**
+- `generateSimplifiedAssignments()` now uses `PriorityLevelOptimizer` instead of `WaterfallAssignmentEngine`
+- Assignments process ALL accounts at each priority level before moving to the next
+- Priority order: P1 (Continuity+Geo) → P2 (Geo Match) → P3b (Continuity Any-Geo) → P4 (Fallback)
+
+**Role Clarification:**
+- **Balancing Dashboard** = Analytics only (metrics panel, ARR distribution chart, rep details)
+- **Assignment Engine** = Uses priority-level batch optimization
+
+### Result
+More optimal ARR distribution across reps while maintaining geographic alignment and continuity preferences.
+
+---
+
+## [2025-12-09] - Feature: Priority-Level Optimization in Balancing Dashboard
+
+### New Feature
+Integrated priority-level batch optimization directly into the Territory Balancing Dashboard. This replaces the standalone sandbox with an embedded optimization workflow that provides real-time metrics comparison and ARR distribution visualization.
+
+### Key Components Added
+
+**OptimizationMetricsPanel** - Success metrics dashboard at top of Balancing view:
+- ARR Balance Score (100 - coefficient of variation)
+- Geographic Alignment % 
+- Continuity Rate %
+- Priority 1 Assignment Rate %
+- Priority distribution bar chart (P1/P2/P3b/P4 breakdown)
+- Collapsible secondary metrics (reps in band, cross-region count, CRE variance)
+
+**PriorityLevelOptimizer** - New optimization engine:
+- Processes ALL accounts at each priority level before moving to next
+- P1: Continuity + Geography (batch optimize for balance)
+- P2: Geography Match (balance ARR across geo-matched reps)
+- P3b: Continuity Any-Geo (keep with current owner)
+- P4: Fallback (best available rep)
+- Sorts accounts by ARR descending for stability
+- Tracks workloads per rep in real-time
+
+**OptimizationControls** - Configuration panel:
+- Target ARR slider
+- Capacity Variance % slider (with band calculation)
+- Max ARR Hard Cap slider (auto-enforced ≥ preferred max)
+- Max CRE per Rep slider
+- Run Optimization / Apply Results / Reset buttons
+
+**ARRDistributionChart** - Visual comparison:
+- Horizontal bar chart showing ARR per rep
+- Color-coded: amber (below min), green (in band), red (over max)
+- Reference lines for minimum, target, and preferred max
+- Tooltip with rep details on hover
+
+### Files Added
+- `src/components/OptimizationMetricsPanel.tsx`
+- `src/components/OptimizationControls.tsx`
+- `src/components/ARRDistributionChart.tsx`
+- `src/services/priorityLevelOptimizer.ts`
+
+### Files Modified
+- `src/components/EnhancedBalancingDashboard.tsx` - Added tabs (Overview/Optimize), integrated all new components
+
+### Files Removed
+- `src/pages/OptimizationSandbox.tsx` - Standalone sandbox replaced by integrated view
+- Removed `/build/:id/sandbox` route from `App.tsx`
+- Removed Sandbox button from `BuildDetail.tsx`
+
+### Database
+- `sandbox_runs` table kept for historical comparison (not removed)
+
+### Also Fixed (Earlier Today)
+- **Capacity Variance % Slider**: Added the missing slider to the main Assignment Configuration dialog
+- **Prospect Variance % Slider**: Added separate variance slider for Prospect Pipeline
+- **Maximum ARR/Pipeline Validation**: Maximum sliders now auto-enforce minimum ≥ preferred max
+- **Assignment Apply Bug (CRITICAL)**: Fixed "Duplicate assignment detected" error using proper upsert
+
+---
+
 ## [2025-12-08] - Setup: Version 1.3.0 Development Start
 
 ### Changes

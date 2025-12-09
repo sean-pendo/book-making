@@ -1144,17 +1144,14 @@ class AssignmentService {
         updated_at: new Date().toISOString()
       }));
 
-      // Delete existing assignments first, then insert new ones
-      const accountIds = assignmentRecords.map(r => r.sfdc_account_id);
-      await supabase
-        .from('assignments')
-        .delete()
-        .eq('build_id', buildId)
-        .in('sfdc_account_id', accountIds);
-      
+      // Use proper upsert with ON CONFLICT to handle existing records
+      // The unique constraint is on (build_id, sfdc_account_id)
       const { error: assignmentError } = await supabase
         .from('assignments')
-        .insert(assignmentRecords);
+        .upsert(assignmentRecords, { 
+          onConflict: 'build_id,sfdc_account_id',
+          ignoreDuplicates: false 
+        });
 
       if (assignmentError) {
         console.error('[AssignmentService] Assignment upsert error:', assignmentError);

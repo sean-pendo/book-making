@@ -284,22 +284,61 @@ export class WaterfallAssignmentEngine {
 
     const proposals: AssignmentProposal[] = [];
 
-    for (const account of sortedAccounts) {
-      try {
-        const proposal = this.assignSingleAccount(account, reps);
-        proposals.push(proposal);
-        this.updateWorkload(proposal.proposedRep.rep_id, account);
-      } catch (error) {
-        console.error(`Failed to assign ${account.account_name}:`, error);
-        this.warnings.push({
-          severity: 'high',
-          type: 'unassigned',
-          accountOrRep: account.account_name,
-          reason: (error as Error).message,
-          details: `No eligible reps available for this account`
-        });
-      }
+    // PRIORITY-LEVEL BATCH OPTIMIZATION
+    // Process ALL accounts at each priority level before moving to next
+    // This prevents greedy assignments where early accounts "steal" capacity
+    
+    console.log(`🔄 Starting Priority-Level Batch Optimization...`);
+    
+    // Track remaining accounts to process at each level
+    let remainingAccounts = [...sortedAccounts];
+    
+    // ========== PRIORITY 1: Continuity + Geography ==========
+    console.log(`\n=== P1: Continuity + Geography (${remainingAccounts.length} candidates) ===`);
+    const p1Results = this.batchAssignPriority1(remainingAccounts, reps);
+    proposals.push(...p1Results.assigned);
+    remainingAccounts = p1Results.remaining;
+    console.log(`✅ P1 Complete: ${p1Results.assigned.length} assigned, ${remainingAccounts.length} remaining`);
+    
+    // ========== PRIORITY 2: Geography Match ==========
+    console.log(`\n=== P2: Geography Match (${remainingAccounts.length} candidates) ===`);
+    const p2Results = this.batchAssignPriority2(remainingAccounts, reps);
+    proposals.push(...p2Results.assigned);
+    remainingAccounts = p2Results.remaining;
+    console.log(`✅ P2 Complete: ${p2Results.assigned.length} assigned, ${remainingAccounts.length} remaining`);
+    
+    // ========== PRIORITY 3b: Continuity Any-Geography ==========
+    console.log(`\n=== P3b: Continuity Any-Geo (${remainingAccounts.length} candidates) ===`);
+    const p3bResults = this.batchAssignPriority3b(remainingAccounts, reps);
+    proposals.push(...p3bResults.assigned);
+    remainingAccounts = p3bResults.remaining;
+    console.log(`✅ P3b Complete: ${p3bResults.assigned.length} assigned, ${remainingAccounts.length} remaining`);
+    
+    // ========== PRIORITY 4: Fallback ==========
+    console.log(`\n=== P4: Fallback (${remainingAccounts.length} candidates) ===`);
+    const p4Results = this.batchAssignPriority4(remainingAccounts, reps);
+    proposals.push(...p4Results.assigned);
+    remainingAccounts = p4Results.remaining;
+    console.log(`✅ P4 Complete: ${p4Results.assigned.length} assigned, ${remainingAccounts.length} remaining`);
+    
+    // Any remaining accounts couldn't be assigned
+    for (const account of remainingAccounts) {
+      this.warnings.push({
+        severity: 'high',
+        type: 'unassigned',
+        accountOrRep: account.account_name,
+        reason: 'No eligible reps available',
+        details: `Account could not be assigned at any priority level`
+      });
     }
+    
+    console.log(`\n📊 Priority-Level Summary:
+  - P1 (Continuity+Geo): ${p1Results.assigned.length}
+  - P2 (Geo Match): ${p2Results.assigned.length}
+  - P3b (Continuity): ${p3bResults.assigned.length}
+  - P4 (Fallback): ${p4Results.assigned.length}
+  - Unassigned: ${remainingAccounts.length}
+  - Total: ${proposals.length}`);
 
     // Post-process: Check for warnings
     this.checkPostAssignmentWarnings(reps);
@@ -307,6 +346,326 @@ export class WaterfallAssignmentEngine {
     console.log(`✅ Generated ${proposals.length} proposals with ${this.warnings.length} warnings`);
     return { proposals, warnings: this.warnings };
   }
+
+  // ========== PRIORITY-LEVEL BATCH METHODS ==========
+
+  /**
+   * P1: Batch assign accounts to current owner if in same geography AND has capacity
+   * Processes all eligible accounts at this priority before moving to next
+   */
+  private batchAssignPriority1(accounts: Account[], allReps: SalesRep[]): { assigned: AssignmentProposal[], remaining: Account[] } {
+    const assigned: AssignmentProposal[] = [];
+    const remaining: Account[] = [];
+    
+    // First pass: identify all candidates for P1
+    const candidates: { account: Account; currentOwner: SalesRep }[] = [];
+    
+    for (const account of accounts) {
+      // Skip strategic accounts - they have their own logic
+      if (this.isStrategicAccount(account)) {
+        // Handle strategic accounts immediately (they always go to strategic reps)
+        const proposal = this.assignStrategicAccount(account, allReps);
+        if (proposal) {
+          assigned.push(proposal);
+          this.updateWorkload(proposal.proposedRep.rep_id, account);
+        } else {
+          remaining.push(account);
+        }
+        continue;
+      }
+      
+      if (!account.owner_id) {
+        remaining.push(account);
+        continue;
+      }
+      
+      const currentOwner = this.repMap.get(account.owner_id);
+      if (!currentOwner || currentOwner.is_strategic_rep) {
+        remaining.push(account);
+        continue;
+      }
+      
+      const isSameGeo = this.isSameGeography(account, currentOwner);
+      if (isSameGeo) {
+        candidates.push({ account, currentOwner });
+      } else {
+        remaining.push(account);
+      }
+    }
+    
+    // Sort candidates by ARR descending (prioritize larger accounts for stability)
+    candidates.sort((a, b) => {
+      const arrA = a.account.calculated_arr || a.account.arr || 0;
+      const arrB = b.account.calculated_arr || b.account.arr || 0;
+      return arrB - arrA;
+    });
+    
+    // Second pass: assign candidates while checking capacity
+    for (const { account, currentOwner } of candidates) {
+      const accountARR = account.calculated_arr || account.arr || 0;
+      
+      if (this.hasCapacity(currentOwner.rep_id, accountARR, account.cre_count, account, currentOwner)) {
+        const proposal: AssignmentProposal = {
+          account,
+          proposedRep: currentOwner,
+          currentOwner,
+          rationale: 'Account Continuity + Geography Match',
+          warnings: [],
+          ruleApplied: 'Priority 1: Continuity + Geography',
+          arr: accountARR
+        };
+        assigned.push(proposal);
+        this.updateWorkload(currentOwner.rep_id, account);
+      } else {
+        remaining.push(account);
+      }
+    }
+    
+    return { assigned, remaining };
+  }
+
+  /**
+   * P2: Batch assign accounts to any rep in same geography with best balance
+   */
+  private batchAssignPriority2(accounts: Account[], allReps: SalesRep[]): { assigned: AssignmentProposal[], remaining: Account[] } {
+    const assigned: AssignmentProposal[] = [];
+    const remaining: Account[] = [];
+    
+    // Sort accounts by ARR descending
+    const sortedAccounts = [...accounts].sort((a, b) => {
+      const arrA = a.calculated_arr || a.arr || 0;
+      const arrB = b.calculated_arr || b.arr || 0;
+      return arrB - arrA;
+    });
+    
+    for (const account of sortedAccounts) {
+      const accountARR = account.calculated_arr || account.arr || 0;
+      const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
+      
+      // Find all eligible reps in same geography
+      const eligibleReps = allReps.filter(rep =>
+        rep.is_active &&
+        rep.include_in_assignments &&
+        !rep.is_strategic_rep &&
+        this.isSameGeography(account, rep) &&
+        this.hasCapacity(rep.rep_id, accountARR, account.cre_count, account, rep)
+      );
+      
+      if (eligibleReps.length === 0) {
+        remaining.push(account);
+        continue;
+      }
+      
+      // Select rep with best balance (lowest ARR, prioritizing those below minimum)
+      const bestRep = this.findMostCapacityRep(eligibleReps);
+      
+      const accountWarnings: AssignmentWarning[] = [];
+      if (currentOwner && currentOwner.rep_id !== bestRep.rep_id) {
+        accountWarnings.push({
+          severity: 'medium',
+          type: 'continuity_broken',
+          accountOrRep: account.account_name,
+          reason: `Changed from ${currentOwner.name} to ${bestRep.name}`,
+          details: `Current owner at capacity or doesn't match geography`
+        });
+      }
+      
+      const proposal: AssignmentProposal = {
+        account,
+        proposedRep: bestRep,
+        currentOwner,
+        rationale: 'Geography Match - Balanced Distribution',
+        warnings: accountWarnings,
+        ruleApplied: 'Priority 2: Geography Match',
+        arr: accountARR
+      };
+      assigned.push(proposal);
+      this.updateWorkload(bestRep.rep_id, account);
+    }
+    
+    return { assigned, remaining };
+  }
+
+  /**
+   * P3b: Batch assign accounts to current owner regardless of geography if has capacity
+   */
+  private batchAssignPriority3b(accounts: Account[], allReps: SalesRep[]): { assigned: AssignmentProposal[], remaining: Account[] } {
+    const assigned: AssignmentProposal[] = [];
+    const remaining: Account[] = [];
+    
+    for (const account of accounts) {
+      if (!account.owner_id) {
+        remaining.push(account);
+        continue;
+      }
+      
+      const currentOwner = this.repMap.get(account.owner_id);
+      if (!currentOwner || currentOwner.is_strategic_rep) {
+        remaining.push(account);
+        continue;
+      }
+      
+      const accountARR = account.calculated_arr || account.arr || 0;
+      
+      if (this.hasCapacity(currentOwner.rep_id, accountARR, account.cre_count, account, currentOwner)) {
+        const accountWarnings: AssignmentWarning[] = [];
+        
+        // Warn about cross-region assignment
+        if (!this.isSameGeography(account, currentOwner)) {
+          accountWarnings.push({
+            severity: 'low',
+            type: 'cross_region',
+            accountOrRep: account.account_name,
+            reason: `Account territory ${account.sales_territory || 'unknown'} assigned to ${currentOwner.region || 'unknown'} rep`,
+            details: `Maintaining continuity with current owner despite geography mismatch`
+          });
+        }
+        
+        const proposal: AssignmentProposal = {
+          account,
+          proposedRep: currentOwner,
+          currentOwner,
+          rationale: 'Current/Past Owner - Any Geography',
+          warnings: accountWarnings,
+          ruleApplied: 'Priority 3b: Continuity Any-Geo',
+          arr: accountARR
+        };
+        assigned.push(proposal);
+        this.updateWorkload(currentOwner.rep_id, account);
+      } else {
+        remaining.push(account);
+      }
+    }
+    
+    return { assigned, remaining };
+  }
+
+  /**
+   * P4: Batch assign accounts to any rep with capacity (fallback)
+   */
+  private batchAssignPriority4(accounts: Account[], allReps: SalesRep[]): { assigned: AssignmentProposal[], remaining: Account[] } {
+    const assigned: AssignmentProposal[] = [];
+    const remaining: Account[] = [];
+    
+    // Sort accounts by ARR descending
+    const sortedAccounts = [...accounts].sort((a, b) => {
+      const arrA = a.calculated_arr || a.arr || 0;
+      const arrB = b.calculated_arr || b.arr || 0;
+      return arrB - arrA;
+    });
+    
+    for (const account of sortedAccounts) {
+      const accountARR = account.calculated_arr || account.arr || 0;
+      const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
+      
+      // Find all eligible reps with capacity
+      const eligibleReps = allReps.filter(rep =>
+        rep.is_active &&
+        rep.include_in_assignments &&
+        !rep.is_strategic_rep &&
+        this.hasCapacity(rep.rep_id, accountARR, account.cre_count, account, rep)
+      );
+      
+      if (eligibleReps.length === 0) {
+        remaining.push(account);
+        continue;
+      }
+      
+      // Select rep with best balance
+      const bestRep = this.findMostCapacityRep(eligibleReps);
+      
+      const accountWarnings: AssignmentWarning[] = [];
+      accountWarnings.push({
+        severity: 'low',
+        type: 'cross_region',
+        accountOrRep: account.account_name,
+        reason: `Account territory ${account.sales_territory || 'unknown'} assigned to ${bestRep.region || 'unknown'} rep`,
+        details: `No capacity in account's home region; Changed from ${currentOwner?.name || 'unknown'} to ${bestRep.name}`
+      });
+      
+      if (currentOwner && currentOwner.rep_id !== bestRep.rep_id) {
+        accountWarnings.push({
+          severity: 'medium',
+          type: 'continuity_broken',
+          accountOrRep: account.account_name,
+          reason: `Changed from ${currentOwner.name} to ${bestRep.name}`,
+          details: `Current owner at capacity, assigned to best available rep`
+        });
+      }
+      
+      const proposal: AssignmentProposal = {
+        account,
+        proposedRep: bestRep,
+        currentOwner,
+        rationale: 'Fallback - Best Available Rep',
+        warnings: accountWarnings,
+        ruleApplied: 'Priority 4: Fallback',
+        arr: accountARR
+      };
+      assigned.push(proposal);
+      this.updateWorkload(bestRep.rep_id, account);
+    }
+    
+    return { assigned, remaining };
+  }
+
+  /**
+   * Helper to assign strategic accounts (separate pool)
+   */
+  private assignStrategicAccount(account: Account, allReps: SalesRep[]): AssignmentProposal | null {
+    const accountARR = account.calculated_arr || account.arr || 0;
+    const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
+    
+    const strategicReps = allReps.filter(rep => 
+      rep.is_active && 
+      rep.include_in_assignments &&
+      rep.is_strategic_rep
+    );
+    
+    if (strategicReps.length === 0) {
+      this.warnings.push({
+        severity: 'high',
+        type: 'strategic_overflow',
+        accountOrRep: account.account_name,
+        reason: 'No active strategic reps available',
+        details: 'Strategic account cannot be assigned'
+      });
+      return null;
+    }
+    
+    // Keep with current owner if they're a strategic rep
+    if (currentOwner && currentOwner.is_strategic_rep) {
+      return {
+        account,
+        proposedRep: currentOwner,
+        currentOwner,
+        rationale: 'Strategic Account Continuity',
+        warnings: [],
+        ruleApplied: 'Strategic Pool: Continuity',
+        arr: accountARR
+      };
+    }
+    
+    // Distribute evenly among strategic reps
+    const bestStrategicRep = this.findMostCapacityRep(strategicReps);
+    return {
+      account,
+      proposedRep: bestStrategicRep,
+      currentOwner,
+      rationale: 'Strategic Account - Even Distribution',
+      warnings: currentOwner ? [{
+        severity: 'medium' as const,
+        type: 'continuity_broken' as const,
+        accountOrRep: account.account_name,
+        reason: `Strategic account reassigned from ${currentOwner.name} to ${bestStrategicRep.name}`,
+        details: 'Maintaining even distribution across strategic rep pool'
+      }] : [],
+      ruleApplied: 'Strategic Pool: Even Distribution',
+      arr: accountARR
+    };
+  }
+
+  // ========== LEGACY SINGLE ACCOUNT METHOD (kept for reference) ==========
 
   private assignSingleAccount(account: Account, allReps: SalesRep[]): AssignmentProposal {
     const accountARR = account.calculated_arr || account.arr || 0;
@@ -954,6 +1313,87 @@ export async function generateSimplifiedAssignments(
   config: AssignmentConfiguration,
   opportunities?: Array<{sfdc_account_id: string, net_arr: number}>
 ): Promise<{ proposals: AssignmentProposal[], warnings: AssignmentWarning[] }> {
-  const engine = new WaterfallAssignmentEngine(buildId, assignmentType, config, opportunities);
-  return engine.generateAssignments(accounts, reps);
+  // Use Priority-Level Optimizer for batch optimization at each priority level
+  const { PriorityLevelOptimizer } = await import('./priorityLevelOptimizer');
+  
+  // Transform accounts and reps to match optimizer interface
+  const optimizerAccounts = accounts.map(acc => ({
+    id: acc.id,
+    sfdc_account_id: acc.sfdc_account_id,
+    account_name: acc.account_name,
+    arr: acc.arr || 0,
+    calculated_arr: acc.calculated_arr,
+    sales_territory: acc.sales_territory,
+    geo: acc.geo,
+    owner_id: acc.owner_id,
+    owner_name: acc.owner_name,
+    is_customer: acc.is_customer,
+    cre_count: acc.cre_count || 0,
+    expansion_tier: acc.expansion_tier,
+  }));
+
+  const optimizerReps = reps.map(rep => ({
+    id: rep.id,
+    rep_id: rep.rep_id,
+    name: rep.name,
+    region: rep.region,
+    is_active: rep.is_active ?? true,
+    is_strategic_rep: rep.is_strategic_rep ?? false,
+    include_in_assignments: rep.include_in_assignments ?? true,
+  }));
+
+  const optimizer = new PriorityLevelOptimizer(
+    optimizerAccounts,
+    optimizerReps,
+    {
+      customer_target_arr: config.customer_target_arr,
+      customer_max_arr: config.customer_max_arr,
+      prospect_target_arr: config.prospect_target_arr,
+      prospect_max_arr: config.prospect_max_arr,
+      capacity_variance_percent: config.capacity_variance_percent ?? 10,
+      prospect_variance_percent: config.prospect_variance_percent ?? config.capacity_variance_percent ?? 10,
+      max_cre_per_rep: config.max_cre_per_rep ?? 3,
+      territory_mappings: config.territory_mappings,
+    },
+    assignmentType
+  );
+
+  const result = await optimizer.optimize();
+
+  // Transform optimizer proposals back to expected format
+  const proposals: AssignmentProposal[] = result.proposals.map(p => {
+    const account = accounts.find(a => a.sfdc_account_id === p.accountId)!;
+    const proposedRep = reps.find(r => r.rep_id === p.proposedOwnerId)!;
+    const currentOwner = p.currentOwnerId ? reps.find(r => r.rep_id === p.currentOwnerId) || null : null;
+
+    return {
+      account,
+      proposedRep,
+      currentOwner,
+      rationale: p.rationale,
+      warnings: [],
+      ruleApplied: `Priority ${p.priority}: ${p.rationale}`,
+      arr: p.arr,
+    };
+  });
+
+  // Create warnings for unassigned accounts
+  const warnings: AssignmentWarning[] = [];
+  const assignedIds = new Set(result.proposals.map(p => p.accountId));
+  
+  for (const acc of accounts) {
+    if (!assignedIds.has(acc.sfdc_account_id)) {
+      warnings.push({
+        severity: 'high',
+        type: 'unassigned',
+        accountOrRep: acc.account_name,
+        reason: 'No eligible rep found across all priorities',
+        details: `Account ${acc.account_name} could not be assigned due to capacity constraints`
+      });
+    }
+  }
+
+  console.log(`[AssignmentEngine] Priority-Level Optimizer complete:`, result.summary);
+
+  return { proposals, warnings };
 }
