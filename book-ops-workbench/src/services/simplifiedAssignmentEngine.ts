@@ -66,6 +66,7 @@ interface AssignmentConfiguration {
   prospect_max_arr: number;
   max_cre_per_rep: number;
   capacity_variance_percent?: number;
+  prospect_variance_percent?: number;
   max_tier1_per_rep?: number;
   max_tier2_per_rep?: number;
   territory_mappings?: Record<string, string> | null;
