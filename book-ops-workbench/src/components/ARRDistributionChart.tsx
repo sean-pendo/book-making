@@ -1,24 +1,17 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
-import { cn } from '@/lib/utils';
-import { BarChart3, TrendingDown, TrendingUp, Minus } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
-interface RepARRData {
+interface ARRDistributionData {
   repId: string;
   repName: string;
-  region: string | null;
-  arr: number;
-  accountCount: number;
+  customerARR: number;
+  region?: string;
+  status?: 'Balanced' | 'Overloaded' | 'Light';
 }
 
 interface ARRDistributionChartProps {
-  data: RepARRData[];
+  data: ARRDistributionData[];
   targetArr: number;
   minThreshold: number;
   preferredMax: number;
@@ -26,14 +19,14 @@ interface ARRDistributionChartProps {
   title?: string;
 }
 
-const formatCurrency = (value: number): string => {
-  if (value >= 1000000) {
-    return `$${(value / 1000000).toFixed(1)}M`;
+const formatCurrency = (amount: number) => {
+  if (amount >= 1000000) {
+    return `$${(amount / 1000000).toFixed(1)}M`;
   }
-  if (value >= 1000) {
-    return `$${(value / 1000).toFixed(0)}K`;
+  if (amount >= 1000) {
+    return `$${(amount / 1000).toFixed(0)}K`;
   }
-  return `$${value.toFixed(0)}`;
+  return `$${amount.toFixed(0)}`;
 };
 
 export const ARRDistributionChart: React.FC<ARRDistributionChartProps> = ({
@@ -42,173 +35,141 @@ export const ARRDistributionChart: React.FC<ARRDistributionChartProps> = ({
   minThreshold,
   preferredMax,
   hardCap,
-  title = 'ARR Distribution by Rep'
+  title = "ARR Distribution by Rep"
 }) => {
-  const sortedData = useMemo(() => {
-    return [...data].sort((a, b) => b.arr - a.arr);
-  }, [data]);
-
-  const maxARR = useMemo(() => {
-    return Math.max(...data.map(d => d.arr), hardCap);
-  }, [data, hardCap]);
-
-  const stats = useMemo(() => {
-    const arrValues = data.map(d => d.arr);
-    const total = arrValues.reduce((a, b) => a + b, 0);
-    const avg = total / arrValues.length;
-    const min = Math.min(...arrValues);
-    const max = Math.max(...arrValues);
-    
-    const belowMin = data.filter(d => d.arr < minThreshold).length;
-    const inBand = data.filter(d => d.arr >= minThreshold && d.arr <= preferredMax).length;
-    const overMax = data.filter(d => d.arr > preferredMax).length;
-
-    return { total, avg, min, max, belowMin, inBand, overMax };
-  }, [data, minThreshold, preferredMax]);
-
-  const getBarColor = (arr: number): string => {
-    if (arr < minThreshold) return 'bg-amber-500';
-    if (arr > preferredMax) return 'bg-red-500';
-    return 'bg-green-500';
+  // Sort by ARR descending
+  const sortedData = [...data].sort((a, b) => b.customerARR - a.customerARR);
+  
+  // Calculate the maximum for scaling (use hardCap or max value, whichever is higher)
+  const maxValue = Math.max(hardCap, ...sortedData.map(d => d.customerARR));
+  
+  // Calculate bar width as percentage
+  const getBarWidth = (arr: number) => {
+    return Math.min(100, (arr / maxValue) * 100);
+  };
+  
+  // Get bar color based on thresholds
+  const getBarColor = (arr: number) => {
+    if (arr > preferredMax) {
+      return 'bg-red-500 dark:bg-red-600'; // Over preferred max
+    }
+    if (arr >= minThreshold && arr <= preferredMax) {
+      return 'bg-green-500 dark:bg-green-600'; // Within band
+    }
+    return 'bg-blue-500 dark:bg-blue-600'; // Under minimum
+  };
+  
+  // Get status text
+  const getStatusText = (arr: number) => {
+    if (arr > preferredMax) return 'Over preferred max';
+    if (arr >= minThreshold && arr <= preferredMax) return 'Within target band';
+    return 'Below minimum';
   };
 
-  const getStatusIcon = (arr: number) => {
-    if (arr < minThreshold) return <TrendingDown className="h-3 w-3 text-amber-500" />;
-    if (arr > preferredMax) return <TrendingUp className="h-3 w-3 text-red-500" />;
-    return <Minus className="h-3 w-3 text-green-500" />;
-  };
-
-  if (data.length === 0) {
-    return (
-      <Card>
-        <CardContent className="pt-6">
-          <p className="text-muted-foreground text-center">No data available</p>
-        </CardContent>
-      </Card>
-    );
-  }
+  // Calculate summary stats
+  const withinBand = sortedData.filter(d => d.customerARR >= minThreshold && d.customerARR <= preferredMax).length;
+  const overMax = sortedData.filter(d => d.customerARR > preferredMax).length;
+  const underMin = sortedData.filter(d => d.customerARR < minThreshold).length;
 
   return (
-    <Card className="card-elevated">
+    <Card>
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-primary" />
-              {title}
-            </CardTitle>
-            <CardDescription>
-              {data.length} reps • Total: {formatCurrency(stats.total)} • Avg: {formatCurrency(stats.avg)}
-            </CardDescription>
-          </div>
-          <div className="flex gap-2">
-            <Badge variant="outline" className="text-amber-600 border-amber-300">
-              Below: {stats.belowMin}
-            </Badge>
-            <Badge variant="outline" className="text-green-600 border-green-300">
-              In Band: {stats.inBand}
-            </Badge>
-            <Badge variant="outline" className="text-red-600 border-red-300">
-              Over: {stats.overMax}
-            </Badge>
-          </div>
-        </div>
+        <CardTitle className="text-lg">{title}</CardTitle>
+        <CardDescription className="flex gap-4 text-xs">
+          <span className="flex items-center gap-1">
+            <span className="w-3 h-3 rounded bg-green-500" />
+            Within Band: {withinBand}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="w-3 h-3 rounded bg-blue-500" />
+            Under Min: {underMin}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="w-3 h-3 rounded bg-red-500" />
+            Over Max: {overMax}
+          </span>
+        </CardDescription>
       </CardHeader>
-
       <CardContent>
-        {/* Reference Lines Legend */}
-        <div className="flex items-center justify-between text-xs text-muted-foreground mb-4 px-2">
-          <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1">
-              <div className="w-2 h-2 rounded-full bg-amber-500" />
-              Below Min ({formatCurrency(minThreshold)})
-            </span>
-            <span className="flex items-center gap-1">
-              <div className="w-2 h-2 rounded-full bg-green-500" />
-              In Band
-            </span>
-            <span className="flex items-center gap-1">
-              <div className="w-2 h-2 rounded-full bg-red-500" />
-              Over Preferred ({formatCurrency(preferredMax)})
+        {/* Threshold markers */}
+        <div className="relative mb-2 h-6 flex items-center">
+          <div 
+            className="absolute border-l-2 border-blue-400 border-dashed h-full"
+            style={{ left: `${(minThreshold / maxValue) * 100}%` }}
+          >
+            <span className="absolute -top-1 left-1 text-[10px] text-blue-500 whitespace-nowrap">
+              Min {formatCurrency(minThreshold)}
             </span>
           </div>
-          <span>Target: {formatCurrency(targetArr)}</span>
-        </div>
-
-        {/* Chart Container */}
-        <div className="relative">
-          {/* Reference lines */}
           <div 
-            className="absolute h-full border-l-2 border-dashed border-amber-400 z-10"
-            style={{ left: `${(minThreshold / maxARR) * 100}%` }}
-          />
+            className="absolute border-l-2 border-green-500 h-full"
+            style={{ left: `${(targetArr / maxValue) * 100}%` }}
+          >
+            <span className="absolute -top-1 left-1 text-[10px] text-green-600 whitespace-nowrap font-medium">
+              Target {formatCurrency(targetArr)}
+            </span>
+          </div>
           <div 
-            className="absolute h-full border-l-2 border-dashed border-blue-400 z-10"
-            style={{ left: `${(targetArr / maxARR) * 100}%` }}
-          />
+            className="absolute border-l-2 border-yellow-500 border-dashed h-full"
+            style={{ left: `${(preferredMax / maxValue) * 100}%` }}
+          >
+            <span className="absolute -top-1 left-1 text-[10px] text-yellow-600 whitespace-nowrap">
+              Pref Max {formatCurrency(preferredMax)}
+            </span>
+          </div>
           <div 
-            className="absolute h-full border-l-2 border-dashed border-red-400 z-10"
-            style={{ left: `${(preferredMax / maxARR) * 100}%` }}
-          />
-
-          {/* Bars */}
-          <div className="space-y-1.5 max-h-[400px] overflow-y-auto pr-2">
-            {sortedData.map((rep) => (
-              <Tooltip key={rep.repId}>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center gap-2 group cursor-pointer">
-                    <div className="w-24 text-xs truncate text-right">
-                      <span className="group-hover:text-primary transition-colors">
-                        {rep.repName.split(' ').pop()}
-                      </span>
-                    </div>
-                    <div className="flex-1 h-6 bg-muted/30 rounded relative overflow-hidden">
-                      <div
-                        className={cn(
-                          'h-full rounded transition-all group-hover:opacity-80',
-                          getBarColor(rep.arr)
-                        )}
-                        style={{ width: `${(rep.arr / maxARR) * 100}%` }}
-                      />
-                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-medium">
-                        {formatCurrency(rep.arr)}
-                      </span>
-                    </div>
-                    <div className="w-6">
-                      {getStatusIcon(rep.arr)}
-                    </div>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="left" className="max-w-xs">
-                  <div className="space-y-1">
-                    <p className="font-medium">{rep.repName}</p>
-                    <p className="text-sm">Region: {rep.region || 'N/A'}</p>
-                    <p className="text-sm">ARR: {formatCurrency(rep.arr)}</p>
-                    <p className="text-sm">Accounts: {rep.accountCount}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {rep.arr < minThreshold && 'Below minimum threshold'}
-                      {rep.arr >= minThreshold && rep.arr <= preferredMax && 'Within target band'}
-                      {rep.arr > preferredMax && 'Over preferred maximum'}
-                    </p>
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            ))}
+            className="absolute border-l-2 border-red-500 h-full"
+            style={{ left: `${(hardCap / maxValue) * 100}%` }}
+          >
+            <span className="absolute -top-1 left-1 text-[10px] text-red-600 whitespace-nowrap">
+              Hard Cap {formatCurrency(hardCap)}
+            </span>
           </div>
         </div>
 
-        {/* X-Axis Labels */}
-        <div className="flex justify-between text-xs text-muted-foreground mt-2 pt-2 border-t">
-          <span>$0</span>
-          <span>{formatCurrency(maxARR / 4)}</span>
-          <span>{formatCurrency(maxARR / 2)}</span>
-          <span>{formatCurrency(maxARR * 3 / 4)}</span>
-          <span>{formatCurrency(maxARR)}</span>
+        {/* Bar chart */}
+        <div className="space-y-1 max-h-80 overflow-y-auto">
+          {sortedData.map((rep) => (
+            <Tooltip key={rep.repId}>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-2 group cursor-pointer">
+                  <div className="w-24 text-xs truncate text-right text-muted-foreground group-hover:text-foreground">
+                    {rep.repName.split(' ')[0]}
+                  </div>
+                  <div className="flex-1 bg-muted rounded-full h-4 relative overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${getBarColor(rep.customerARR)} group-hover:opacity-80`}
+                      style={{ width: `${getBarWidth(rep.customerARR)}%` }}
+                    />
+                    {/* Threshold lines on bar */}
+                    <div 
+                      className="absolute top-0 bottom-0 border-l border-green-300"
+                      style={{ left: `${(targetArr / maxValue) * 100}%` }}
+                    />
+                  </div>
+                  <div className="w-16 text-xs font-medium text-right">
+                    {formatCurrency(rep.customerARR)}
+                  </div>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                <div className="text-sm">
+                  <div className="font-medium">{rep.repName}</div>
+                  {rep.region && <div className="text-muted-foreground">{rep.region}</div>}
+                  <div className="mt-1">ARR: {formatCurrency(rep.customerARR)}</div>
+                  <div className={`text-xs mt-1 ${
+                    rep.customerARR > preferredMax ? 'text-red-500' : 
+                    rep.customerARR >= minThreshold ? 'text-green-500' : 'text-blue-500'
+                  }`}>
+                    {getStatusText(rep.customerARR)}
+                  </div>
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          ))}
         </div>
       </CardContent>
     </Card>
   );
 };
-
-export default ARRDistributionChart;
 

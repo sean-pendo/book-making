@@ -9,7 +9,7 @@ const DEVELOPER_SLACK_USER = "sean.muse";
 const PENDO_DOMAIN = "pendo.io";
 
 interface NotificationRequest {
-  type: "feedback" | "review_assigned" | "proposal_approved" | "proposal_rejected" | "build_status";
+  type: "feedback" | "review_assigned" | "proposal_approved" | "proposal_rejected" | "build_status" | "error";
   recipientEmail?: string;
   title: string;
   message: string;
@@ -115,6 +115,7 @@ function formatSlackMessage(req: NotificationRequest, isDeveloperFallback = fals
     proposal_approved: "✅",
     proposal_rejected: "❌",
     build_status: "🏗️",
+    error: "🚨",
   };
   
   const typeLabel: Record<string, string> = {
@@ -123,6 +124,7 @@ function formatSlackMessage(req: NotificationRequest, isDeveloperFallback = fals
     proposal_approved: "Proposal Approved",
     proposal_rejected: "Proposal Rejected",
     build_status: "Build Status",
+    error: "Error Alert",
   };
 
   const emoji = typeEmoji[req.type] || "📢";
@@ -154,6 +156,12 @@ function formatSlackMessage(req: NotificationRequest, isDeveloperFallback = fals
     
     if (contextParts.length > 0) {
       text += `\n---\n${contextParts.join(" | ")}`;
+    }
+    
+    // Add error stack trace if present
+    if (req.metadata.errorStack) {
+      const truncatedStack = req.metadata.errorStack.substring(0, 500);
+      text += `\n\n\`\`\`${truncatedStack}${req.metadata.errorStack.length > 500 ? '...' : ''}\`\`\``;
     }
   }
 
@@ -187,16 +195,16 @@ async function logNotification(
   }
 }
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
 Deno.serve(async (req: Request) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      },
-    });
+    return new Response(null, { headers: corsHeaders });
   }
 
   try {
@@ -206,7 +214,7 @@ Deno.serve(async (req: Request) => {
     if (!body.type || !body.title || !body.message) {
       return new Response(
         JSON.stringify({ error: "Missing required fields: type, title, message" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -217,8 +225,8 @@ Deno.serve(async (req: Request) => {
     let targetSlackUserId: string | null = null;
     let isFallback = false;
 
-    if (body.type === "feedback") {
-      // Developer feedback always goes to sean.muse
+    if (body.type === "feedback" || body.type === "error") {
+      // Developer feedback and errors always go to sean.muse
       targetSlackUserId = await lookupSlackUser(`${DEVELOPER_SLACK_USER}@${PENDO_DOMAIN}`);
     } else if (body.recipientEmail) {
       // System notifications go to the user
@@ -242,7 +250,7 @@ Deno.serve(async (req: Request) => {
       await logNotification(supabase, body, null, "failed", "Could not find Slack user");
       return new Response(
         JSON.stringify({ error: "Could not find Slack user", sent: false }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -262,39 +270,21 @@ Deno.serve(async (req: Request) => {
       
       return new Response(
         JSON.stringify({ success: true, sent: true, fallback: isFallback }),
-        { 
-          status: 200, 
-          headers: { 
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-          } 
-        }
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     } else {
       await logNotification(supabase, body, targetSlackUserId, "failed", result.error);
       
       return new Response(
         JSON.stringify({ error: result.error, sent: false }),
-        { 
-          status: 200, 
-          headers: { 
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-          } 
-        }
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
   } catch (error) {
     console.error("Error processing notification:", error);
     return new Response(
       JSON.stringify({ error: String(error) }),
-      { 
-        status: 500, 
-        headers: { 
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        } 
-      }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });

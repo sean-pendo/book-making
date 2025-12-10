@@ -396,7 +396,7 @@ interface ExtendedAccountDetail extends AccountDetail {
           proposed_owner_id: selectedNewOwner,
           proposed_owner_name: selectedNewOwnerData?.name || '',
           assignment_type: account?.is_customer ? 'customer' : 'prospect',
-          rationale: reassignRationale || 'Manual reassignment by RevOps manager',
+          rationale: `MANUAL_REASSIGNMENT: ${reassignRationale || 'Manual reassignment by RevOps manager'}`,
           created_by: userData.user?.id
         };
       });

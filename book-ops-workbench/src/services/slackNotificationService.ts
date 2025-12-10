@@ -13,7 +13,8 @@ export type NotificationType =
   | 'review_assigned'
   | 'proposal_approved'
   | 'proposal_rejected'
-  | 'build_status';
+  | 'build_status'
+  | 'error';
 
 interface NotificationOptions {
   type: NotificationType;

@@ -9,6 +9,7 @@ import { useEnhancedAccountCalculations } from '@/hooks/useEnhancedAccountCalcul
 import { SalesRepDetailModal } from '@/components/SalesRepDetailModal';
 import { OptimizationMetricsPanel, OptimizationMetrics } from '@/components/OptimizationMetricsPanel';
 import { ARRDistributionChart } from '@/components/ARRDistributionChart';
+import { BalancingAnalyticsRow } from '@/components/BalancingAnalyticsRow';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
@@ -69,13 +70,10 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
     continuityPct: data.retentionMetrics.ownerRetentionRate || 0,
     p1Rate: 0, // Will be tracked when priority-level engine is integrated
     p2Rate: 0,
-    p3bRate: 0,
+    p3Rate: 0,
     p4Rate: 0,
     repsInBand: data.repMetrics.filter(r => r.status === 'Balanced').length,
-    repsOverMax: data.repMetrics.filter(r => r.status === 'Overloaded').length,
-    repsTotal: data.repMetrics.length,
-    crossRegionCount: Math.round(data.customerMetrics.totalAccounts * (1 - data.retentionMetrics.avgRegionalAlignment / 100)),
-    creVariance: 0,
+    totalReps: data.repMetrics.length,
     avgArrPerRep: data.customerMetrics.avgARRPerRep || 0,
     minArrPerRep: data.repMetrics.length > 0 ? Math.min(...data.repMetrics.map(r => r.customerARR)) : 0,
     maxArrPerRep: data.repMetrics.length > 0 ? Math.max(...data.repMetrics.map(r => r.customerARR)) : 0,
@@ -312,8 +310,7 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
     repId: rep.rep_id,
     repName: rep.name,
     region: rep.region,
-    arr: rep.customerARR,
-    accountCount: rep.customerAccounts,
+    customerARR: rep.customerARR,
   })) || [];
 
   const targetArr = thresholds?.customer_target_arr || 1900000;
@@ -345,6 +342,14 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
             </Button>
           </div>
         </div>
+
+        {/* Analytics Row - Compact charts and metrics */}
+        <BalancingAnalyticsRow
+          repMetrics={repMetrics}
+          beforeMetrics={beforeMetrics}
+          buildId={buildId}
+          customerMetrics={data.customerMetrics}
+        />
 
         {/* Success Metrics Panel - Read-only analytics at top */}
         {currentMetrics && (

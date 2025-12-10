@@ -115,10 +115,19 @@ Push to GitHub when:
 - **pendo.io emails** → DM to user (extracted from email prefix)
 - **Non-pendo.io emails** → Fallback DM to @sean.muse with context
 - **Feedback widget** → Always DMs @sean.muse
+- **Error reports** → Always DMs @sean.muse (includes stack traces)
+
+### Error Reporting
+The app has global error handlers that automatically send errors to Slack:
+- Uncaught JavaScript errors
+- Unhandled Promise rejections
+- React Error Boundary catches
+All errors include: stack trace, URL, user agent, app version, timestamp.
 
 ### Supabase Project
 - **Project ID**: `lolnbotrdamhukdrrsmh`
 - **Edge Functions**: `send-slack-notification`, `gemini-territory-mapping`, etc.
+- **Required Secret**: `SLACK_BOT_TOKEN` - Must be set in Supabase Dashboard → Settings → Edge Functions for Slack notifications to work
 
 ### Vercel Deployment
 - **Account**: `seanxmuses-projects` (personal Vercel - CLI deployments only)

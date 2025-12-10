@@ -4,84 +4,130 @@
 
 *Beta testers: Continue using https://book-ops-v1-2-beta.vercel.app (pinned to v1.2.0)*
 
-## [2025-12-09] - Unified Assignment Engine with Priority-Level Optimization
+## [2025-12-10] - Feature: Balancing Analytics Row with Charts
 
-### Architecture Change
-Integrated the PriorityLevelOptimizer directly into the Assignment Engine. Now all assignments (customers and prospects) use the priority-level batch optimization approach.
+### Summary
+Added a compact analytics row to the Balancing Dashboard with average metrics, before/after comparison charts, and priority distribution pie chart. Manual reassignments are now tracked with a consistent prefix for analytics.
 
-**What Changed:**
-- `generateSimplifiedAssignments()` now uses `PriorityLevelOptimizer` instead of `WaterfallAssignmentEngine`
-- Assignments process ALL accounts at each priority level before moving to the next
-- Priority order: P1 (Continuity+Geo) → P2 (Geo Match) → P3b (Continuity Any-Geo) → P4 (Fallback)
+### Changes
+- **BalancingAnalyticsRow Component**: New component with three sections:
+  - Avg ARR/Rep and Avg ATR/Rep metric cards with gradient styling
+  - Before/After horizontal bar chart showing top 8 reps by ARR change
+  - Priority Distribution donut chart (P1-P4 + Manual) with live counts
+- **Priority Query**: Fetches assignment rationale from database and parses priority levels
+- **Manual Tracking**: Both `AssignmentEngine` and `SalesRepDetailModal` now save manual reassignments with `MANUAL_REASSIGNMENT:` prefix
+- **Live Updates**: Charts update automatically when assignments change via React Query invalidation
 
-**Role Clarification:**
-- **Balancing Dashboard** = Analytics only (metrics panel, ARR distribution chart, rep details)
-- **Assignment Engine** = Uses priority-level batch optimization
-
-### Result
-More optimal ARR distribution across reps while maintaining geographic alignment and continuity preferences.
+### Visual Design
+- Muted color palette matching theme (emerald for ARR, blue for ATR)
+- Compact ~150px height, responsive layout
+- Priority colors: P1=green, P2=blue, P3=yellow, P4=orange, Manual=purple
 
 ---
 
-## [2025-12-09] - Feature: Priority-Level Optimization in Balancing Dashboard
+## [2025-12-10] - Feature: Slack Integration for Debugging & Error Reporting
+
+### Summary
+Added global error handling that automatically sends JavaScript errors and crashes to @sean.muse via Slack DM. Also deployed the `send-slack-notification` edge function for manager notifications.
+
+### Changes
+- **ErrorBoundary Component**: React error boundary that catches component crashes and reports to Slack
+- **Global Error Handlers**: `window.onerror` and `onunhandledrejection` catch uncaught errors
+- **Error Reporting Service**: `errorReportingService.ts` sends errors with stack traces, URL, and app version
+- **Edge Function Deployed**: `send-slack-notification` now active on Supabase (v3 with CORS fix)
+- **Slack Notifications Log**: Database table tracks all notification attempts for debugging
+- **Error Type Added**: Notification service now supports `error` type alongside feedback, review_assigned, etc.
+- **CORS Fix**: Updated edge function to allow `x-client-info` and `apikey` headers from Supabase client
+- **SLACK_BOT_TOKEN**: Set as Supabase secret for authentication
+
+### Slack Bot Requirements
+The Slack bot needs these OAuth scopes to work:
+- `users:read.email` - Look up users by email
+- `im:write` - Open DM channels
+- `chat:write` - Send messages
+
+### Slack Notification Routing
+| Event Type | Recipient |
+|------------|-----------|
+| Feedback | @sean.muse |
+| Errors | @sean.muse |
+| Review Assigned | Manager's pendo.io email |
+| Proposal Approved/Rejected | Manager's pendo.io email |
+| Non-pendo.io users | Fallback to @sean.muse |
+
+### Setup Required
+The `SLACK_BOT_TOKEN` secret must be set in Supabase Dashboard → Settings → Edge Functions for Slack notifications to work.
+
+---
+
+## [2025-12-10] - Feature: Priority-Level Batch Optimization + Balancing Analytics
+
+### Summary
+Integrated advanced analytics and priority-level batch optimization into the Balancing Dashboard. The assignment engine now processes all accounts at each priority level before moving to the next, preventing greedy assignments where early accounts "steal" capacity from better matches.
+
+### Assignment Engine Improvements - HiGHS Integration
+- **Priority-Level Batching**: Engine now processes ALL accounts at each priority level (P1→P4) before cascading remainders
+- **P1**: Continuity + Geography - keeps account with current owner if same geo + has capacity (greedy check)
+- **P2**: Geography Match - **HiGHS optimized** - formulates LP problem with all geo-matched accounts/reps and solves for globally optimal assignment
+- **P3**: Continuity Any-Geo - **HiGHS optimized** - optimizes which accounts to keep with current owner when capacity is limited
+- **P4**: Fallback - **HiGHS optimized** - distributes remaining accounts optimally across all reps using LP solver
+- **Priority Tracking**: Each assignment now tracks `priorityLevel` (1-4) for analytics
+- **LP Formulation**: Variables x[account][rep]=1, maximize balance bonus + continuity bonus, subject to capacity constraints
+
+### Balancing Dashboard Enhancements
+- **OptimizationMetricsPanel**: Shows ARR balance score, geographic alignment %, continuity %, reps in band
+- **Priority Distribution**: Visualizes % of accounts assigned at each priority level (P1-P4)
+- **ARR Distribution Chart**: Horizontal bar chart showing each rep's ARR with threshold markers
+- **Biggest Movers Section**: Highlights reps who gained/lost the most ARR from reassignments
+
+### Cleanup
+- Removed standalone Optimization Sandbox page (`/build/:id/sandbox` route)
+- Removed sandbox button from Build Detail header
+- Kept `sandbox_runs` table for potential future use
+
+### Technical Notes
+- **HiGHS Solver Active**: Now used in P2 and P4 for true mathematical optimization
+- `solveWithHiGHS()` method in `simplifiedAssignmentEngine.ts` formulates MILP problem per priority level
+- Objective function: maximize (balance_bonus + continuity_bonus) per assignment
+- Constraints: each account assigned to at most 1 rep, rep ARR capacity limits
+- Dashboard metrics now conform to `OptimizationMetrics` interface
+- ARRDistributionChart shows min/target/preferredMax/hardCap thresholds
+
+---
+
+## [2025-12-09] - Feature: Optimization Sandbox with HiGHS Solver
 
 ### New Feature
-Integrated priority-level batch optimization directly into the Territory Balancing Dashboard. This replaces the standalone sandbox with an embedded optimization workflow that provides real-time metrics comparison and ARR distribution visualization.
+Added an Optimization Sandbox that uses the HiGHS mathematical optimization solver to find optimal account-to-rep assignments. This allows comparing "what-if" scenarios with true mathematical optimization vs the current heuristic waterfall engine.
 
-### Key Components Added
-
-**OptimizationMetricsPanel** - Success metrics dashboard at top of Balancing view:
-- ARR Balance Score (100 - coefficient of variation)
-- Geographic Alignment % 
-- Continuity Rate %
-- Priority 1 Assignment Rate %
-- Priority distribution bar chart (P1/P2/P3b/P4 breakdown)
-- Collapsible secondary metrics (reps in band, cross-region count, CRE variance)
-
-**PriorityLevelOptimizer** - New optimization engine:
-- Processes ALL accounts at each priority level before moving to next
-- P1: Continuity + Geography (batch optimize for balance)
-- P2: Geography Match (balance ARR across geo-matched reps)
-- P3b: Continuity Any-Geo (keep with current owner)
-- P4: Fallback (best available rep)
-- Sorts accounts by ARR descending for stability
-- Tracks workloads per rep in real-time
-
-**OptimizationControls** - Configuration panel:
-- Target ARR slider
-- Capacity Variance % slider (with band calculation)
-- Max ARR Hard Cap slider (auto-enforced ≥ preferred max)
-- Max CRE per Rep slider
-- Run Optimization / Apply Results / Reset buttons
-
-**ARRDistributionChart** - Visual comparison:
-- Horizontal bar chart showing ARR per rep
-- Color-coded: amber (below min), green (in band), red (over max)
-- Reference lines for minimum, target, and preferred max
-- Tooltip with rep details on hover
+### Technical Details
+- **HiGHS Integration**: Installed `highs` npm package (WebAssembly-compiled MILP solver)
+- **LP Model Formulation**: Accounts and reps modeled as Mixed Integer Linear Program with:
+  - Decision variables: Binary assignment variables (account → rep)
+  - Objective: Maximize weighted score (geographic match + continuity + balance)
+  - Constraints: ARR bands per rep, Max CRE per rep, strategic rep matching
+- **Metrics Calculator**: Computes success metrics for baseline vs optimized:
+  - Geographic alignment %
+  - Continuity % (accounts kept with current owner)
+  - ARR variance (coefficient of variation)
+  - Capacity utilization distribution
+  - Greedy overflow detection
 
 ### Files Added
-- `src/components/OptimizationMetricsPanel.tsx`
-- `src/components/OptimizationControls.tsx`
-- `src/components/ARRDistributionChart.tsx`
-- `src/services/priorityLevelOptimizer.ts`
+- `src/services/optimization/optimizationSolver.ts` - HiGHS wrapper and LP model
+- `src/services/optimization/sandboxMetricsCalculator.ts` - Metrics calculations
+- `src/pages/OptimizationSandbox.tsx` - Sandbox UI with config panel
+- `supabase/migrations/20251209000001_create_sandbox_runs_table.sql` - Persistence
 
-### Files Modified
-- `src/components/EnhancedBalancingDashboard.tsx` - Added tabs (Overview/Optimize), integrated all new components
+### Access
+- Navigate to any build and click the "Sandbox" button in the header
+- Route: `/build/:buildId/sandbox`
 
-### Files Removed
-- `src/pages/OptimizationSandbox.tsx` - Standalone sandbox replaced by integrated view
-- Removed `/build/:id/sandbox` route from `App.tsx`
-- Removed Sandbox button from `BuildDetail.tsx`
-
-### Database
-- `sandbox_runs` table kept for historical comparison (not removed)
-
-### Also Fixed (Earlier Today)
-- **Capacity Variance % Slider**: Added the missing slider to the main Assignment Configuration dialog
-- **Prospect Variance % Slider**: Added separate variance slider for Prospect Pipeline
-- **Maximum ARR/Pipeline Validation**: Maximum sliders now auto-enforce minimum ≥ preferred max
-- **Assignment Apply Bug (CRITICAL)**: Fixed "Duplicate assignment detected" error using proper upsert
+### Also Fixed
+- **Capacity Variance % Slider**: Added the missing slider to the main Assignment Configuration dialog (was stored in DB but had no UI). Now shows between Target ARR and Maximum ARR with tooltip explanation and calculated band display.
+- **Prospect Variance % Slider**: Added separate variance slider for Prospect Pipeline (not shared with customers). New `prospect_variance_percent` column in DB.
+- **Maximum ARR/Pipeline Validation**: Maximum sliders now auto-enforce minimum ≥ preferred max from variance band. Prevents invalid configurations.
+- **Assignment Apply Bug (CRITICAL)**: Fixed "Duplicate assignment detected" error when applying assignments. The delete-before-insert pattern failed for >1000 accounts due to PostgreSQL IN clause limits. Now uses proper upsert with `ON CONFLICT`.
 
 ---
 
