@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { X, MessageSquare, Bell, AlertCircle } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { X, MessageSquare, Bell, CheckCircle2, Search } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
-const SLACK_APP_URL = 'https://slack.com/apps'; // Replace with your actual Slack app install URL
-const DISMISSED_KEY = 'slack-app-prompt-dismissed';
+const DISMISSED_KEY = 'slack-app-prompt-dismissed-forever';
 
 interface SlackAppPromptProps {
   variant?: 'banner' | 'card';
@@ -15,31 +14,33 @@ interface SlackAppPromptProps {
 export function SlackAppPrompt({ variant = 'banner', onDismiss }: SlackAppPromptProps) {
   const { profile } = useAuth();
   const [isDismissed, setIsDismissed] = useState(true);
+  const [showModal, setShowModal] = useState(false);
 
   useEffect(() => {
-    // Check if user has dismissed this prompt before
+    // Check if user has permanently dismissed this prompt
     const dismissed = localStorage.getItem(DISMISSED_KEY);
-    const dismissedTime = dismissed ? parseInt(dismissed, 10) : 0;
-    const daysSinceDismissed = (Date.now() - dismissedTime) / (1000 * 60 * 60 * 24);
-    
-    // Show again after 7 days if dismissed
-    if (!dismissed || daysSinceDismissed > 7) {
+    if (!dismissed) {
       setIsDismissed(false);
     }
   }, []);
 
-  const handleDismiss = () => {
-    localStorage.setItem(DISMISSED_KEY, Date.now().toString());
+  const handleDismissForever = () => {
+    localStorage.setItem(DISMISSED_KEY, 'true');
     setIsDismissed(true);
+    setShowModal(false);
     onDismiss?.();
   };
 
-  const handleInstall = () => {
-    // Mark as dismissed after clicking install
-    localStorage.setItem(DISMISSED_KEY, Date.now().toString());
+  const handleOpenModal = () => {
+    setShowModal(true);
+  };
+
+  const handleGotIt = () => {
+    // Mark as dismissed forever when they click "Got it"
+    localStorage.setItem(DISMISSED_KEY, 'true');
     setIsDismissed(true);
-    // Open Slack app installation page
-    window.open(SLACK_APP_URL, '_blank');
+    setShowModal(false);
+    onDismiss?.();
   };
 
   if (isDismissed) return null;
@@ -47,87 +48,119 @@ export function SlackAppPrompt({ variant = 'banner', onDismiss }: SlackAppPrompt
   // Only show to pendo.io users
   if (!profile?.email?.endsWith('@pendo.io')) return null;
 
-  if (variant === 'banner') {
-    return (
-      <div className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-4 py-3 relative">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <MessageSquare className="h-5 w-5" />
-            <p className="text-sm font-medium">
-              Get notifications in Slack! Install the Book Builder app to receive real-time updates on reviews, approvals, and more.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button 
-              variant="secondary" 
-              size="sm" 
-              onClick={handleInstall}
-              className="bg-white text-purple-600 hover:bg-gray-100"
-            >
-              Add to Slack
-            </Button>
-            <button
-              onClick={handleDismiss}
-              className="p-1 hover:bg-white/10 rounded"
-              aria-label="Dismiss"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <Card className="border-purple-200 bg-gradient-to-br from-purple-50 to-indigo-50">
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-2 bg-purple-100 rounded-lg">
-              <MessageSquare className="h-5 w-5 text-purple-600" />
+    <>
+      {/* Banner */}
+      {variant === 'banner' && (
+        <div className="bg-gradient-to-r from-primary/90 to-primary text-primary-foreground px-4 py-3 relative">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <MessageSquare className="h-5 w-5" />
+              <p className="text-sm font-medium">
+                Get notifications in Slack! Add the Book Builder app to receive real-time updates.
+              </p>
             </div>
-            <div>
-              <CardTitle className="text-lg">Connect to Slack</CardTitle>
-              <CardDescription>Get notified about important updates</CardDescription>
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="secondary" 
+                size="sm" 
+                onClick={handleOpenModal}
+                className="bg-background text-foreground hover:bg-background/90"
+              >
+                Learn How
+              </Button>
+              <button
+                onClick={handleDismissForever}
+                className="p-1 hover:bg-white/10 rounded"
+                aria-label="Dismiss forever"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-          </div>
-          <button
-            onClick={handleDismiss}
-            className="p-1 hover:bg-purple-100 rounded text-gray-400 hover:text-gray-600"
-            aria-label="Dismiss"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2 text-sm text-gray-600">
-          <div className="flex items-center gap-2">
-            <Bell className="h-4 w-4 text-purple-500" />
-            <span>Review assignments & approvals</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 text-purple-500" />
-            <span>Build status updates</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-purple-500" />
-            <span>Direct messages from team members</span>
           </div>
         </div>
-        <Button 
-          onClick={handleInstall}
-          className="w-full bg-purple-600 hover:bg-purple-700"
-        >
-          <MessageSquare className="h-4 w-4 mr-2" />
-          Add Book Builder to Slack
-        </Button>
-        <p className="text-xs text-gray-500 text-center">
-          You can always install later from Settings
-        </p>
-      </CardContent>
-    </Card>
+      )}
+
+      {/* Instructions Modal */}
+      <Dialog open={showModal} onOpenChange={(open) => !open && setShowModal(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <MessageSquare className="h-5 w-5 text-primary" />
+              </div>
+              Add Book Builder to Slack
+            </DialogTitle>
+            <DialogDescription>
+              Get notified about reviews, approvals, and build updates
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-6 py-4">
+            {/* What you'll get */}
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-foreground">What you'll receive:</p>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span>Review assignments & approvals</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span>Build status updates</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span>Welcome messages & notifications</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Instructions */}
+            <div className="space-y-3 p-4 bg-muted/50 rounded-lg border">
+              <p className="text-sm font-medium text-foreground flex items-center gap-2">
+                <Search className="h-4 w-4" />
+                How to add the app:
+              </p>
+              <ol className="space-y-2 text-sm text-muted-foreground list-decimal list-inside">
+                <li>Open <strong>Slack</strong> on your desktop or browser</li>
+                <li>Click <strong>"Apps"</strong> in the left sidebar</li>
+                <li>Search for <strong className="text-foreground">"Book Builder"</strong></li>
+                <li>Click to add it to your workspace</li>
+              </ol>
+              
+              <div className="mt-3 p-3 bg-background rounded border-2 border-dashed border-primary/30">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                    <MessageSquare className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Book Builder</p>
+                    <p className="text-xs text-muted-foreground">Search for this in Slack Apps</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              onClick={handleDismissForever}
+              className="flex-1"
+            >
+              Maybe Later
+            </Button>
+            <Button 
+              onClick={handleGotIt}
+              className="flex-1"
+            >
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+              Got It!
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
-
