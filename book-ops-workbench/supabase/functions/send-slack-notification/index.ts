@@ -95,6 +95,8 @@ async function sendSlackDM(userId: string, message: SlackMessage): Promise<{ ok:
         channel: channelId,
         text: message.text,
         blocks: message.blocks,
+        unfurl_links: false,
+        unfurl_media: false,
       }),
     });
     
@@ -136,6 +138,16 @@ function formatSlackMessage(req: NotificationRequest, isDeveloperFallback = fals
   const label = typeLabel[req.type] || "Notification";
   
   let text = `${emoji} *${label}*\n\n*${req.title}*\n\n${req.message}`;
+  
+  // For feedback, show the specific feedback type (bug, question, feature)
+  if (req.type === "feedback" && req.metadata?.feedbackType) {
+    const feedbackEmojis: Record<string, string> = { bug: "🐛", question: "❓", feature: "💡" };
+    const feedbackLabels: Record<string, string> = { bug: "Bug Report", question: "Question", feature: "Feature Request" };
+    const fbType = req.metadata.feedbackType;
+    const fbEmoji = feedbackEmojis[fbType] || "📝";
+    const fbLabel = feedbackLabels[fbType] || "Feedback";
+    text = `${fbEmoji} *${fbLabel}*\n\n*${req.title}*\n\n${req.message}`;
+  }
   
   if (isDeveloperFallback) {
     text = `⚠️ *Fallback Notification* (non-pendo.io user)\n\n_Original recipient: ${req.recipientEmail}_\n\n${text}`;

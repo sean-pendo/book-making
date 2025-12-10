@@ -230,6 +230,18 @@ export function PriorityWaterfallConfig({
         return; // Don't allow moving locked priorities
       }
 
+      // Check cannotGoAbove constraint
+      if (activePriority?.cannotGoAbove) {
+        const constraintPriority = sortedAvailable.find(p => p.id === activePriority.cannotGoAbove);
+        if (constraintPriority) {
+          const constraintIndex = sortedAvailable.findIndex(p => p.id === activePriority.cannotGoAbove);
+          // If trying to move above the constraint priority, block it
+          if (newIndex <= constraintIndex) {
+            return; // Don't allow moving above the constraint
+          }
+        }
+      }
+
       // Calculate new order
       const newOrder = arrayMove(sortedAvailable, oldIndex, newIndex);
 

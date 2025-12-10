@@ -23,6 +23,7 @@ export interface PriorityDefinition {
   type: PriorityType;
   defaultWeight: number; // 0-100, used in HiGHS objective function
   isLocked?: boolean; // If true, cannot be reordered or disabled
+  cannotGoAbove?: string; // If set, this priority cannot be dragged above the specified priority ID
   defaultPosition: Partial<Record<Exclude<AssignmentMode, 'CUSTOM'>, number>>;
 }
 
@@ -44,26 +45,37 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
   
   {
     id: 'manual_holdover',
-    name: 'Manual Holdover',
-    description: 'Accounts marked "exclude from reassignment" stay with current owner',
+    name: 'Manual Holdover & Strategic Accounts',
+    description: 'Excluded accounts stay put, strategic accounts stay with strategic reps',
     modes: ['ENT', 'COMMERCIAL', 'EMEA'],
-    requiredFields: [{ table: 'accounts', field: 'exclude_from_reassignment' }],
+    requiredFields: [],
     type: 'holdover',
     defaultWeight: 100,
-    isLocked: true, // Always first, cannot be disabled
+    isLocked: true, // P0 - Always first, cannot be disabled or moved
     defaultPosition: { ENT: 0, COMMERCIAL: 0, EMEA: 0 }
+  },
+  
+  {
+    id: 'cre_risk',
+    name: 'CRE Risk Protection',
+    description: 'At-risk accounts (CRE flagged) stay with current experienced owner',
+    modes: ['ENT', 'COMMERCIAL', 'EMEA'],
+    requiredFields: [{ table: 'accounts', field: 'cre_risk' }],
+    type: 'holdover',
+    defaultWeight: 95,
+    defaultPosition: { ENT: 1, COMMERCIAL: 1, EMEA: 1 }
   },
   
   {
     id: 'geo_and_continuity',
     name: 'Geography + Continuity',
-    description: 'Account stays with current owner if they match geography - the strongest retention signal',
+    description: 'Account stays with current owner if they match geography AND rep has capacity',
     modes: ['ENT', 'COMMERCIAL', 'EMEA'],
-    requiredFields: [], // Core fields always available - no requirements
+    requiredFields: [],
     type: 'holdover',
-    defaultWeight: 98,
-    isLocked: true, // Cannot be moved below other priorities
-    defaultPosition: { ENT: 1, COMMERCIAL: 1, EMEA: 1 }
+    defaultWeight: 90,
+    isLocked: true, // P2 - Geography/Continuity components cannot go above this
+    defaultPosition: { ENT: 2, COMMERCIAL: 2, EMEA: 2 }
   },
   
   {
@@ -88,17 +100,6 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     defaultPosition: { COMMERCIAL: 3 }
   },
   
-  {
-    id: 'cre_risk',
-    name: 'CRE Risk Protection',
-    description: 'At-risk accounts (CRE flagged) stay with current experienced owner',
-    modes: ['ENT', 'COMMERCIAL', 'EMEA'],
-    requiredFields: [{ table: 'accounts', field: 'cre_risk' }],
-    type: 'holdover',
-    defaultWeight: 85,
-    defaultPosition: { ENT: 2, COMMERCIAL: 4, EMEA: 2 }
-  },
-  
   // ========== OPTIMIZATION PRIORITIES (constraints/weights in HiGHS) ==========
   
   {
@@ -120,9 +121,10 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     name: 'Geographic Match',
     description: 'Match account territory to rep region for regional alignment',
     modes: ['ENT', 'COMMERCIAL', 'EMEA'],
-    requiredFields: [{ table: 'accounts', field: 'sales_territory' }],
+    requiredFields: [], // Core field always available
     type: 'optimization',
     defaultWeight: 75,
+    cannotGoAbove: 'geo_and_continuity', // Cannot be positioned above the combined priority
     defaultPosition: { ENT: 3, COMMERCIAL: 6, EMEA: 3 }
   },
   
@@ -145,9 +147,10 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     name: 'Account Continuity',
     description: 'Prefer keeping accounts with their current owner when balanced',
     modes: ['ENT', 'COMMERCIAL', 'EMEA'],
-    requiredFields: [{ table: 'accounts', field: 'owner_id' }],
+    requiredFields: [], // Core field always available
     type: 'optimization',
     defaultWeight: 65,
+    cannotGoAbove: 'geo_and_continuity', // Cannot be positioned above the combined priority
     defaultPosition: { ENT: 4, COMMERCIAL: 7, EMEA: 5 }
   },
   
