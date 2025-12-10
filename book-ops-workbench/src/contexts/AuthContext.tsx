@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/components/ui/use-toast";
+import { sendSlackNotification } from '@/services/slackNotificationService';
 
 type UserRole = 'REVOPS' | 'SLM' | 'FLM';
 type UserRegion = 'AMER' | 'EMEA' | 'GLOBAL';
@@ -206,6 +207,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         if (profileError) {
           console.error('Error creating profile:', profileError);
         }
+
+        // Send welcome message via Slack (non-blocking)
+        sendSlackNotification({
+          type: 'welcome',
+          recipientEmail: email,
+          title: `Welcome to Book Builder! 👋`,
+          message: `Hi ${profileData.full_name || email.split('@')[0]}! Your account has been created successfully. You're all set to start building territories and managing book assignments.\n\nHere are some tips to get started:\n• Navigate to "Builds" to create your first territory build\n• Use "Reps" to manage your sales representatives\n• Check "Analytics" for insights on book distribution`,
+          metadata: {
+            userName: profileData.full_name || email.split('@')[0],
+            userRole: profileData.role,
+            userRegion: profileData.region,
+          }
+        }).catch(err => console.log('Welcome notification failed (non-critical):', err));
       }
 
       toast({

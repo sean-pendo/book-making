@@ -1,5 +1,120 @@
 # Changelog
 
+## [2025-12-10] - Feature: Complete Slack Integration for Notifications
+
+### Summary
+Full Slack integration for debugging, error reporting, and user notifications. All notification types now working and users are prompted to install the Slack app.
+
+### Notification Types
+- **feedback** (📝) - User feedback sent to developer
+- **review_assigned** (📋) - Managers notified when assigned reviews
+- **proposal_approved** (✅) - Users notified of approvals
+- **proposal_rejected** (❌) - Users notified of rejections  
+- **build_status** (🏗️) - Build status updates
+- **error** (🚨) - JavaScript errors sent to developer with stack traces
+- **welcome** (👋) - Welcome message on user signup
+
+### Features
+- **Welcome messages**: New users receive Slack DM on signup with getting started tips
+- **Slack App Prompt**: Banner prompts pendo.io users to install the Slack app
+- **Settings Page**: New Slack Integration section with notification types and install link
+- **Fallback routing**: Non-pendo.io emails route to developer as fallback
+- **Error reporting**: Global error handlers capture and report JS errors to Slack
+
+### Technical Changes
+- Updated `send-slack-notification` edge function (v5) with welcome type
+- Added `SlackAppPrompt` component (banner and card variants)
+- Added Slack section to Settings page
+- AuthContext sends welcome notification on signup
+- All notification types logged to `slack_notifications_log` table
+
+---
+
+## [2025-12-10] - Feature: Dynamic Priority Waterfall Tooltip
+- WaterfallLogicExplainer now dynamically displays your configured priorities
+- Added "Geography + Continuity" combined priority (locked at P1 for ENT) - accounts with matching geo AND current owner stay put
+- Tooltip shows holdover vs optimization priorities with proper grouping
+- Shows mode badge (Enterprise/Commercial/EMEA/Custom) and priority count
+- Displays weight values for optimization priorities
+
+## [2025-12-10] - UI: Removed "What Changed from Old System" section
+- Removed outdated comparison card from WaterfallLogicExplainer tooltip
+
+## [2025-12-10] - Feature: Priority Waterfall Configuration System
+Major implementation of multi-mode priority configuration for assignment engine.
+
+### Database Changes
+- Added `pe_firm` field to accounts table (Private Equity firm tracking)
+- Added `is_renewal_specialist` and `sub_region` fields to sales_reps table
+- Added priority config fields to assignment_configuration: `assignment_mode`, `priority_config`, `rs_arr_threshold`, `is_custom_priority`
+- Assignment modes: ENT (Enterprise), COMMERCIAL (Renewal Specialist routing), EMEA (sub-region routing), CUSTOM
+
+### New Files Created
+- `src/config/priorityRegistry.ts` - Defines all assignment priorities with holdover vs optimization types
+- `src/hooks/useMappedFields.ts` - Checks which fields were mapped during import
+- `src/services/modeDetectionService.ts` - Auto-detects assignment mode from build data
+- `src/services/priorityExecutor.ts` - Orchestrates holdovers then HiGHS optimization
+- `src/services/commercialPriorityHandlers.ts` - Top 10% ARR calculation, RS routing, EMEA sub-region mapping
+- `src/components/PriorityWaterfallConfig.tsx` - Drag-drop priority configuration UI
+- `src/utils/approvalChainUtils.ts` - EMEA approval chain (skips SLM)
+
+### Features
+- **Priority Configuration UI**: Drag-drop reordering, toggle on/off, mode selection (ENT/COMMERCIAL/EMEA/CUSTOM)
+- **Unavailable priorities**: Shown at bottom with lock icon and "Missing data required" tooltip
+- **Mode auto-detection**: Suggests mode based on build region and data characteristics
+- **Holdover priorities**: Manual holdover, PE firm, Top 10% ARR, CRE risk (filter before optimization)
+- **Optimization priorities**: Geography, sub-region, continuity, renewal balance, ARR balance (HiGHS weights)
+- **Commercial mode**: Renewal Specialist routing for accounts ≤$25K ARR
+- **EMEA mode**: Sub-region routing (DACH, UKI, Nordics, France, Benelux, Middle East)
+- **EMEA approval chain**: Skips SLM step (FLM → RevOps → Approved)
+
+### Integration
+- Added Priority Configuration section to FullAssignmentConfig with mode badge and priority count
+- All assignment decisions go through HiGHS MILP solver (never greedy)
+
+## [2025-12-10] - UI: Removed redundant UI elements
+- Removed "View Balancing Dashboard" button from "Ready for Territory Assignment" card (balancing tab wouldn't be unlocked at that stage)
+- Removed redundant ImbalanceWarningDialog that required two clicks to apply assignments
+- Imbalance warnings now show as a toast notification while applying proceeds directly
+- Cleaner UX: one click to apply assignments instead of two
+
+## [2024-12-10] - UI: Simplified ARR Distribution threshold display
+- Replaced 4 individual threshold lines with a single **green target zone** ($1.7M - $2.1M)
+- Only shows Hard Cap line as a red vertical marker
+- Much cleaner visualization - zone shows where reps should be
+
+## [2024-12-10] - Feature: Real-time analytics updates after reassignments
+- Manual reassignments now properly tagged with `MANUAL_REASSIGNMENT:` prefix in all dialogs
+- ChangeChildOwnerDialog now also uses MANUAL_REASSIGNMENT prefix
+- Priority distribution pie chart now refreshes automatically after any reassignment
+- Metric cards updated: Avg ARR | Avg ATR | Avg Pipeline (3 distinct metrics)
+
+## [2024-12-10] - UI: Clearer terminology across Balancing Dashboard
+- "Retention" → "Continuity" in stats bar
+- ARR Distribution chart labels updated:
+  - "Under Min" → "Below Floor"
+  - "Over Max" → "Over Ceiling"  
+  - "Min" → "Floor", "Max" → "Ceiling", "Cap" → "Hard Cap"
+- Status tooltips now explain what each color means
+
+## [2024-12-10] - UI: Major Balancing Dashboard Analytics Overhaul
+- Fixed threshold label overlap on ARR Distribution chart - now shows legend above chart
+- Rep names now show "First L" format (e.g., "Tom S") for clarity
+- Added info tooltips (i) to each chart explaining what they show
+- Split "Book Changes" into **Biggest Gains** and **Biggest Losses** charts
+- Added toggle to switch between $ (ARR) and # (account count) views
+- Added **Total Pipeline** metric card alongside Avg ARR and Avg Pipeline
+- Reorganized layout: metrics row → priority pie → gains/losses charts
+
+## [2024-12-10] - UI: Consolidated Balancing Dashboard - removed redundancy
+- Removed OptimizationMetricsPanel (duplicate info)
+- Removed 6 separate summary cards (duplicate info)  
+- Added compact summary stats bar: Customers, Prospects, Total ARR, Reps, Retention %, Geo Match %
+- Dashboard now: Stats bar → Analytics row (3 charts) → ARR Distribution → Rep list
+
+## [2024-12-10] - UI: Reduced "Book Changes" chart from Top 8 to Top 5 reps
+- Changed chart to show fewer reps for better spacing/readability
+
 # v1.3.0 - Development Branch
 
 *Beta testers: Continue using https://book-ops-v1-2-beta.vercel.app (pinned to v1.2.0)*
@@ -64,6 +179,12 @@ The `SLACK_BOT_TOKEN` secret must be set in Supabase Dashboard → Settings → 
 
 ### Summary
 Integrated advanced analytics and priority-level batch optimization into the Balancing Dashboard. The assignment engine now processes all accounts at each priority level before moving to the next, preventing greedy assignments where early accounts "steal" capacity from better matches.
+
+### Critical Fixes (Same Day)
+- **HiGHS Constraint Fix**: Solver now uses **Ceiling** (Target × 1.1) instead of **Hard Cap** as the capacity constraint
+- **P1 Now Uses HiGHS**: All four priority levels now use HiGHS optimization (was only P2-P4)
+- **Tightened Overflow Logic**: Reduced overflow allowance from 20%→10% (far below min) and 15%→5% (below min)
+- **Territory Auto-Mapping Fix**: "Southwest" now correctly maps to West region (was mapping to South East due to TX state code matching first). Also changed matching priority: keywords → cities → states
 
 ### Assignment Engine Improvements - HiGHS Integration
 - **Priority-Level Batching**: Engine now processes ALL accounts at each priority level (P1→P4) before cascading remainders

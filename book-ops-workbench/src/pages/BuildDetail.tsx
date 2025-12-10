@@ -625,10 +625,6 @@ export const BuildDetail = () => {
                       <Users className="mr-2 h-5 w-5" />
                       View Assignment Engine
                     </Button>
-                    <Button variant="glass" onClick={() => setActiveTab('balancing')}>
-                      <Target className="mr-2 h-4 w-4" />
-                      View Balancing Dashboard
-                    </Button>
                   </div>
                 </div>
               </CardContent>

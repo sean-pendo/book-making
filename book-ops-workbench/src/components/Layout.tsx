@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { AppSidebar } from '@/components/AppSidebar';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { FeedbackWidget } from '@/components/FeedbackWidget';
+import { SlackAppPrompt } from '@/components/SlackAppPrompt';
 import { useAuth } from '@/contexts/AuthContext';
 
 interface LayoutProps {
@@ -35,6 +36,9 @@ export const Layout = ({ children }: LayoutProps) => {
         <AppSidebar />
         
         <div className="flex-1 flex flex-col">
+          {/* Slack App Install Prompt */}
+          <SlackAppPrompt variant="banner" />
+          
           {/* Header */}
           <header className="h-16 flex items-center gap-4 border-b bg-gradient-subtle backdrop-blur-sm px-6 sticky top-0 z-10">
             <div className="flex-1">

@@ -56,6 +56,7 @@ export type Database = {
           owner_name: string | null
           owners_lifetime_count: number | null
           parent_id: string | null
+          pe_firm: string | null
           previous_owner_id: string | null
           renewal_date: string | null
           renewal_quarter: string | null
@@ -107,6 +108,7 @@ export type Database = {
           owner_name?: string | null
           owners_lifetime_count?: number | null
           parent_id?: string | null
+          pe_firm?: string | null
           previous_owner_id?: string | null
           renewal_date?: string | null
           renewal_quarter?: string | null
@@ -158,6 +160,7 @@ export type Database = {
           owner_name?: string | null
           owners_lifetime_count?: number | null
           parent_id?: string | null
+          pe_firm?: string | null
           previous_owner_id?: string | null
           renewal_date?: string | null
           renewal_quarter?: string | null
@@ -245,6 +248,10 @@ export type Database = {
           tier2_variance: number | null
           updated_at: string | null
           use_ai_optimization: boolean | null
+          assignment_mode: string | null
+          priority_config: Json | null
+          rs_arr_threshold: number | null
+          is_custom_priority: boolean | null
         }
         Insert: {
           account_scope?: string
@@ -312,6 +319,10 @@ export type Database = {
           tier2_variance?: number | null
           updated_at?: string | null
           use_ai_optimization?: boolean | null
+          assignment_mode?: string | null
+          priority_config?: Json | null
+          rs_arr_threshold?: number | null
+          is_custom_priority?: boolean | null
         }
         Update: {
           account_scope?: string
@@ -379,6 +390,10 @@ export type Database = {
           tier2_variance?: number | null
           updated_at?: string | null
           use_ai_optimization?: boolean | null
+          assignment_mode?: string | null
+          priority_config?: Json | null
+          rs_arr_threshold?: number | null
+          is_custom_priority?: boolean | null
         }
         Relationships: [
           {
@@ -1311,10 +1326,12 @@ export type Database = {
           include_in_assignments: boolean | null
           is_active: boolean | null
           is_manager: boolean | null
+          is_renewal_specialist: boolean | null
           is_strategic_rep: boolean
           manager: string | null
           name: string
           region: string | null
+          sub_region: string | null
           rep_id: string
           slm: string | null
           status_notes: string | null
@@ -1329,10 +1346,12 @@ export type Database = {
           include_in_assignments?: boolean | null
           is_active?: boolean | null
           is_manager?: boolean | null
+          is_renewal_specialist?: boolean | null
           is_strategic_rep?: boolean
           manager?: string | null
           name: string
           region?: string | null
+          sub_region?: string | null
           rep_id: string
           slm?: string | null
           status_notes?: string | null
@@ -1347,10 +1366,12 @@ export type Database = {
           include_in_assignments?: boolean | null
           is_active?: boolean | null
           is_manager?: boolean | null
+          is_renewal_specialist?: boolean | null
           is_strategic_rep?: boolean
           manager?: string | null
           name?: string
           region?: string | null
+          sub_region?: string | null
           rep_id?: string
           slm?: string | null
           status_notes?: string | null

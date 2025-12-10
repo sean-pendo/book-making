@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { getApprovalStepsForRegion } from '@/utils/approvalChainUtils';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
@@ -104,6 +105,26 @@ export default function ManagerReassignmentPanel({
     },
   });
 
+  // Fetch build region to determine approval chain
+  const { data: buildData } = useQuery({
+    queryKey: ['build-region', buildId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('builds')
+        .select('region')
+        .eq('id', buildId)
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  // Determine initial approval status based on region
+  const initialApprovalStatus = useMemo(() => {
+    return getApprovalStepsForRegion(buildData?.region)[0];
+  }, [buildData?.region]);
+
   const createReassignmentMutation = useMutation({
     mutationFn: async () => {
       const account = accounts?.find(a => a.sfdc_account_id === selectedAccount);
@@ -144,7 +165,7 @@ export default function ManagerReassignmentPanel({
         rationale,
         capacity_warnings: warnings,
         status: 'pending', // Legacy field
-        approval_status: 'pending_slm', // New approval chain field
+        approval_status: initialApprovalStatus, // Dynamic based on region (EMEA skips SLM)
       });
 
       if (error) throw error;

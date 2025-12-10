@@ -762,7 +762,7 @@ export const useAssignmentEngine = (buildId?: string) => {
       return false;
     }
 
-    // Phase 3: Balance Verification Pre-flight Check (unless skipping)
+    // Phase 3: Balance Verification Pre-flight Check - show warning toast but proceed anyway
     if (!skipImbalanceCheck) {
       const proposals = assignmentResult.proposals;
       const repARRMap = new Map<string, number>();
@@ -782,16 +782,15 @@ export const useAssignmentEngine = (buildId?: string) => {
       const maxRepEntry = Array.from(repARRMap.entries()).find(([_, arr]) => arr === maxARR);
       const maxRepName = owners.find(o => o.rep_id === maxRepEntry?.[0])?.name || 'Unknown';
       
-      // Check if any rep is >30% over target - show proper UI dialog
+      // Check if any rep is >30% over target - show warning toast but continue applying
       if (maxARR / avgARR > 1.3) {
-        setImbalanceWarning({
-          show: true,
-          repName: maxRepName,
-          repARR: maxARR,
-          targetARR: avgARR,
-          overloadPercent: Math.round((maxARR / avgARR - 1) * 100)
+        const overloadPercent = Math.round((maxARR / avgARR - 1) * 100);
+        toast({
+          title: "⚠️ Imbalanced Assignment",
+          description: `${maxRepName} is ${overloadPercent}% over target ARR. Consider adjusting thresholds after applying.`,
+          variant: "default",
         });
-        return false; // Execution blocked - wait for user confirmation via the dialog
+        // Continue applying - no blocking dialog
       }
     }
 

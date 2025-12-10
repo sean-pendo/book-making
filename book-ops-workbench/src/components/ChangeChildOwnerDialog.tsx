@@ -102,7 +102,7 @@ export const ChangeChildOwnerDialog = ({
             new_owner_id: newOwnerId,
             new_owner_name: selectedRep.name
           },
-          rationale: rationale || `Child account owner changed to ${selectedRep.name}`,
+          rationale: `MANUAL_REASSIGNMENT: ${rationale || `Child account owner changed to ${selectedRep.name}`}`,
           created_by: userData.user?.id
         });
 

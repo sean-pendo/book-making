@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Loader2, Users, Building, TrendingUp, AlertTriangle, RotateCcw, Lock, ArrowLeft } from 'lucide-react';
 import { useEnhancedBalancing, RepMetrics } from '@/hooks/useEnhancedBalancing';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEnhancedAccountCalculations } from '@/hooks/useEnhancedAccountCalculations';
 import { SalesRepDetailModal } from '@/components/SalesRepDetailModal';
-import { OptimizationMetricsPanel, OptimizationMetrics } from '@/components/OptimizationMetricsPanel';
 import { ARRDistributionChart } from '@/components/ARRDistributionChart';
 import { BalancingAnalyticsRow } from '@/components/BalancingAnalyticsRow';
 import { toast } from 'sonner';
@@ -42,6 +42,15 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
   const { data, isLoading, error, refetch, generateRebalancingPlan } = useEnhancedBalancing(buildId);
   const { recalculateAccountValues, recalculateAccountValuesAsync, isCalculating, progress } = useEnhancedAccountCalculations(buildId);
   const [thresholds, setThresholds] = useState<any>(null);
+  const queryClient = useQueryClient();
+
+  // Comprehensive refresh that updates all analytics including priority distribution
+  const handleDataRefresh = useCallback(async () => {
+    // Invalidate priority distribution query so pie chart updates
+    await queryClient.invalidateQueries({ queryKey: ['priority-distribution', buildId] });
+    // Refetch main balancing data
+    await refetch();
+  }, [queryClient, buildId, refetch]);
 
   useEffect(() => {
     const fetchThresholds = async () => {
@@ -62,25 +71,6 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
     
     fetchThresholds();
   }, [buildId]);
-
-  // Calculate current metrics from data (read-only analytics)
-  const currentMetrics: OptimizationMetrics | null = data ? {
-    arrBalanceScore: 100 - (data.customerMetrics.maxVariance || 0),
-    geoAlignmentPct: data.retentionMetrics.avgRegionalAlignment || 0,
-    continuityPct: data.retentionMetrics.ownerRetentionRate || 0,
-    p1Rate: 0, // Will be tracked when priority-level engine is integrated
-    p2Rate: 0,
-    p3Rate: 0,
-    p4Rate: 0,
-    repsInBand: data.repMetrics.filter(r => r.status === 'Balanced').length,
-    totalReps: data.repMetrics.length,
-    avgArrPerRep: data.customerMetrics.avgARRPerRep || 0,
-    minArrPerRep: data.repMetrics.length > 0 ? Math.min(...data.repMetrics.map(r => r.customerARR)) : 0,
-    maxArrPerRep: data.repMetrics.length > 0 ? Math.max(...data.repMetrics.map(r => r.customerARR)) : 0,
-    targetArr: thresholds?.customer_target_arr || 1900000,
-    totalAccounts: data.customerMetrics.totalAccounts,
-    totalCustomerArr: data.customerMetrics.totalARR,
-  } : null;
 
   const handleRefresh = async () => {
     if (!buildId) return;
@@ -343,6 +333,41 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
           </div>
         </div>
 
+        {/* Compact Summary Stats Bar */}
+        <div className="flex flex-wrap items-center gap-6 px-4 py-3 bg-muted/30 rounded-lg border">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Customers:</span>
+            <span className="font-semibold">{balanceMetrics.totalCustomerAccounts.toLocaleString()}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Building className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Prospects:</span>
+            <span className="font-semibold">{balanceMetrics.totalProspectAccounts.toLocaleString()}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Total ARR:</span>
+            <span className="font-semibold text-emerald-600 dark:text-emerald-400">{formatCurrency(balanceMetrics.totalCustomerARR)}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Reps:</span>
+            <span className="font-semibold">{data.repMetrics.length}</span>
+          </div>
+          <div className="h-4 w-px bg-border" />
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Continuity:</span>
+            <span className={`font-semibold ${balanceMetrics.ownerRetentionRate >= 50 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
+              {balanceMetrics.ownerRetentionRate.toFixed(0)}%
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Geo Match:</span>
+            <span className={`font-semibold ${balanceMetrics.avgRegionalAlignment >= 80 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
+              {balanceMetrics.avgRegionalAlignment.toFixed(0)}%
+            </span>
+          </div>
+        </div>
+
         {/* Analytics Row - Compact charts and metrics */}
         <BalancingAnalyticsRow
           repMetrics={repMetrics}
@@ -350,14 +375,6 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
           buildId={buildId}
           customerMetrics={data.customerMetrics}
         />
-
-        {/* Success Metrics Panel - Read-only analytics at top */}
-        {currentMetrics && (
-          <OptimizationMetricsPanel
-            metrics={currentMetrics}
-            title="Assignment Quality Metrics"
-          />
-        )}
 
         {/* ARR Distribution Chart - Visual analytics */}
         {arrDistributionData.length > 0 && (
@@ -370,87 +387,6 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
             title="ARR Distribution by Rep"
           />
         )}
-
-        {/* Summary Cards */}
-        <div className="grid gap-4 md:grid-cols-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Parent Customer Accounts</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{balanceMetrics.totalCustomerAccounts.toLocaleString()}</div>
-              <p className="text-xs text-muted-foreground">
-                Avg: {Math.round(balanceMetrics.avgCustomerAccountsPerRep)} per rep
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Parent Prospect Accounts</CardTitle>
-              <Building className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{balanceMetrics.totalProspectAccounts.toLocaleString()}</div>
-              <p className="text-xs text-muted-foreground">
-                Avg: {Math.round(balanceMetrics.avgProspectAccountsPerRep)} per rep
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Customer Retention</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{balanceMetrics.ownerRetentionRate.toFixed(1)}%</div>
-              <p className="text-xs text-muted-foreground">
-                Customer accounts with same owner
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Customer Regional Alignment</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{balanceMetrics.avgRegionalAlignment.toFixed(1)}%</div>
-              <p className="text-xs text-muted-foreground">
-                Customer accounts in rep's region
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Prospect Retention</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{balanceMetrics.prospectRetentionRate.toFixed(1)}%</div>
-              <p className="text-xs text-muted-foreground">
-                Prospects with same owner
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Prospect Regional Alignment</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{balanceMetrics.prospectRegionalAlignment.toFixed(1)}%</div>
-              <p className="text-xs text-muted-foreground">
-                Prospects in rep's region
-              </p>
-            </CardContent>
-          </Card>
-        </div>
 
         {/* Sales Representatives List */}
         <div className="w-full">
@@ -548,7 +484,7 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
           rep={selectedRep}
           buildId={buildId}
           availableReps={data.repMetrics}
-          onDataRefresh={refetch}
+          onDataRefresh={handleDataRefresh}
         />
 
       </div>

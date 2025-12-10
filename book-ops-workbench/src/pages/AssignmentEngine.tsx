@@ -35,11 +35,11 @@ import { buildDataService } from '@/services/buildDataService';
 import { supabase } from '@/integrations/supabase/client';
 import { AIBalancingOptimizer } from '@/services/aiBalancingOptimizer';
 import { AIBalancingOptimizerDialog } from '@/components/AIBalancingOptimizerDialog';
-import { ImbalanceWarningDialog } from '@/components/ImbalanceWarningDialog';
 import { AssignmentSuccessDialog } from '@/components/AssignmentSuccessDialog';
 import { fixOwnerAssignments } from '@/utils/fixOwnerAssignments';
 import { QuickResetButton } from '@/components/QuickResetButton';
 import { FullAssignmentConfig } from '@/components/FullAssignmentConfig';
+import { PriorityConfig, getDefaultPriorityConfig } from '@/config/priorityRegistry';
 
 interface Account {
   sfdc_account_id: string;
@@ -179,10 +179,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     refreshData: hookRefreshData,
     isExecuting,
     assignmentProgress: hookAssignmentProgress,
-    // Imbalance warning
-    imbalanceWarning,
-    handleImbalanceConfirm,
-    handleImbalanceDismiss
   } = useAssignmentEngine(buildId);
 
   // Notify parent when pending proposals change
@@ -215,6 +211,28 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     };
     checkConfiguration();
   }, [buildId, showConfigDialog]); // Re-check when dialog closes
+
+  // Fetch assignment configuration for priority display
+  const { data: assignmentConfig } = useQuery({
+    queryKey: ['assignment-config-full', buildId, showConfigDialog],
+    queryFn: async () => {
+      if (!buildId) return null;
+      const { data, error } = await supabase
+        .from('assignment_configuration')
+        .select('assignment_mode, priority_config')
+        .eq('build_id', buildId)
+        .maybeSingle();
+      
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!buildId
+  });
+
+  // Get priority config with defaults
+  const priorityConfig: PriorityConfig[] = (assignmentConfig?.priority_config as unknown as PriorityConfig[]) || 
+    getDefaultPriorityConfig((assignmentConfig?.assignment_mode as 'ENT' | 'COMMERCIAL' | 'EMEA') || 'ENT');
+  const assignmentMode = assignmentConfig?.assignment_mode || 'ENT';
 
   // Fetch opportunities for Net ARR calculation
   const { data: opportunities = [] } = useQuery({
@@ -798,45 +816,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     
     // Refresh data to show the updated balance (AI optimizer already updated the database)
     await refreshAllData();
-  };
-
-  // Wrapper for imbalance confirmation that shows success dialog after execution
-  const onImbalanceConfirm = async () => {
-    const resultToExecute = sophisticatedAssignmentResult || assignmentResult;
-    const proposalCount = resultToExecute?.proposals?.length || 0;
-    
-    console.log('[Imbalance Confirm] 🚀 User clicked Apply Anyway, executing...');
-    
-    toast({
-      title: "🔄 Applying Assignments",
-      description: `Saving ${proposalCount} assignment${proposalCount !== 1 ? 's' : ''} to database...`,
-    });
-    
-    const success = await handleImbalanceConfirm();
-    
-    if (success) {
-      console.log('[Imbalance Confirm] ✅ Execution succeeded, showing success dialog');
-      
-      setShowPreviewDialog(false);
-      setSophisticatedAssignmentResult(null);
-      
-      // Force refresh all data
-      await refreshAllData();
-      
-      // Wait for data propagation
-      await new Promise(resolve => setTimeout(resolve, 800));
-      
-      // Show success dialog
-      setAppliedAssignmentCount(proposalCount);
-      setShowSuccessDialog(true);
-    } else {
-      console.log('[Imbalance Confirm] ❌ Execution failed');
-      toast({
-        title: "❌ Assignment Failed",
-        description: "There was an error applying assignments. Check console for details.",
-        variant: "destructive"
-      });
-    }
   };
 
   // Helper function for retrying database operations with exponential backoff
@@ -2160,7 +2139,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
             </DialogDescription>
           </DialogHeader>
           <WaterfallLogicExplainer 
-            buildId={buildId} 
+            buildId={buildId}
+            priorityConfig={priorityConfig}
+            assignmentMode={assignmentMode}
             onConfigureClick={() => {
               setShowHowItWorks(false);
               setShowConfigDialog(true);
@@ -2396,19 +2377,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
         customerAccounts={allCustomerAccounts}
         prospectAccounts={allProspectAccounts}
       />
-
-      {/* Imbalance Warning Dialog - replaces browser confirm() */}
-      {imbalanceWarning && (
-        <ImbalanceWarningDialog
-          open={imbalanceWarning.show}
-          repName={imbalanceWarning.repName}
-          repARR={imbalanceWarning.repARR}
-          targetARR={imbalanceWarning.targetARR}
-          overloadPercent={imbalanceWarning.overloadPercent}
-          onConfirm={onImbalanceConfirm}
-          onDismiss={handleImbalanceDismiss}
-        />
-      )}
 
       {/* Assignment Success Dialog - animated confirmation */}
       <AssignmentSuccessDialog

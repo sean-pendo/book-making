@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Info } from 'lucide-react';
 
 interface ARRDistributionData {
   repId: string;
@@ -27,6 +28,15 @@ const formatCurrency = (amount: number) => {
     return `$${(amount / 1000).toFixed(0)}K`;
   }
   return `$${amount.toFixed(0)}`;
+};
+
+// Get first name + last initial (e.g., "Tom S")
+const formatRepName = (fullName: string) => {
+  const parts = fullName.trim().split(' ');
+  if (parts.length === 1) return parts[0];
+  const firstName = parts[0];
+  const lastInitial = parts[parts.length - 1][0];
+  return `${firstName} ${lastInitial}`;
 };
 
 export const ARRDistributionChart: React.FC<ARRDistributionChartProps> = ({
@@ -61,69 +71,60 @@ export const ARRDistributionChart: React.FC<ARRDistributionChartProps> = ({
   
   // Get status text
   const getStatusText = (arr: number) => {
-    if (arr > preferredMax) return 'Over preferred max';
-    if (arr >= minThreshold && arr <= preferredMax) return 'Within target band';
-    return 'Below minimum';
+    if (arr > preferredMax) return 'Over ceiling - needs rebalancing';
+    if (arr >= minThreshold && arr <= preferredMax) return 'In range';
+    return 'Below floor - can take more';
   };
 
   // Calculate summary stats
   const withinBand = sortedData.filter(d => d.customerARR >= minThreshold && d.customerARR <= preferredMax).length;
-  const overMax = sortedData.filter(d => d.customerARR > preferredMax).length;
-  const underMin = sortedData.filter(d => d.customerARR < minThreshold).length;
+  const overCeiling = sortedData.filter(d => d.customerARR > preferredMax).length;
+  const belowFloor = sortedData.filter(d => d.customerARR < minThreshold).length;
+
+  // Calculate positions for threshold markers
+  const minPos = (minThreshold / maxValue) * 100;
+  const prefMaxPos = (preferredMax / maxValue) * 100;
+  const hardCapPos = (hardCap / maxValue) * 100;
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-lg">{title}</CardTitle>
+    <Card className="overflow-hidden">
+      <CardHeader className="pb-3 bg-card">
+        <div className="flex items-center gap-2">
+          <CardTitle className="text-lg">{title}</CardTitle>
+          <Tooltip>
+            <TooltipTrigger>
+              <Info className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">
+              <p className="text-sm">Shows each rep's total Customer ARR. Green = in range (floor to ceiling), Blue = below floor (can take more accounts), Red = over ceiling (needs rebalancing).</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
         <CardDescription className="flex gap-4 text-xs">
           <span className="flex items-center gap-1">
-            <span className="w-3 h-3 rounded bg-green-500" />
-            Within Band: {withinBand}
+            <span className="w-3 h-3 rounded bg-blue-500" />
+            Below Floor: {belowFloor}
           </span>
           <span className="flex items-center gap-1">
-            <span className="w-3 h-3 rounded bg-blue-500" />
-            Under Min: {underMin}
+            <span className="w-3 h-3 rounded bg-green-500" />
+            In Range: {withinBand}
           </span>
           <span className="flex items-center gap-1">
             <span className="w-3 h-3 rounded bg-red-500" />
-            Over Max: {overMax}
+            Over Ceiling: {overCeiling}
           </span>
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        {/* Threshold markers */}
-        <div className="relative mb-2 h-6 flex items-center">
-          <div 
-            className="absolute border-l-2 border-blue-400 border-dashed h-full"
-            style={{ left: `${(minThreshold / maxValue) * 100}%` }}
-          >
-            <span className="absolute -top-1 left-1 text-[10px] text-blue-500 whitespace-nowrap">
-              Min {formatCurrency(minThreshold)}
-            </span>
+      <CardContent className="relative">
+        {/* Threshold legend - shows green target zone */}
+        <div className="flex items-center justify-start gap-5 mb-4 text-xs flex-wrap bg-card pb-2">
+          <div className="flex items-center gap-1.5">
+            <div className="w-6 h-4 bg-green-500/30 border border-green-500/50 rounded-sm" />
+            <span className="text-green-600 font-medium">Target Zone: {formatCurrency(minThreshold)} - {formatCurrency(preferredMax)}</span>
           </div>
-          <div 
-            className="absolute border-l-2 border-green-500 h-full"
-            style={{ left: `${(targetArr / maxValue) * 100}%` }}
-          >
-            <span className="absolute -top-1 left-1 text-[10px] text-green-600 whitespace-nowrap font-medium">
-              Target {formatCurrency(targetArr)}
-            </span>
-          </div>
-          <div 
-            className="absolute border-l-2 border-yellow-500 border-dashed h-full"
-            style={{ left: `${(preferredMax / maxValue) * 100}%` }}
-          >
-            <span className="absolute -top-1 left-1 text-[10px] text-yellow-600 whitespace-nowrap">
-              Pref Max {formatCurrency(preferredMax)}
-            </span>
-          </div>
-          <div 
-            className="absolute border-l-2 border-red-500 h-full"
-            style={{ left: `${(hardCap / maxValue) * 100}%` }}
-          >
-            <span className="absolute -top-1 left-1 text-[10px] text-red-600 whitespace-nowrap">
-              Hard Cap {formatCurrency(hardCap)}
-            </span>
+          <div className="flex items-center gap-1.5">
+            <div className="w-0.5 h-4 bg-red-500" />
+            <span className="text-red-600">Hard Cap: {formatCurrency(hardCap)}</span>
           </div>
         </div>
 
@@ -134,17 +135,26 @@ export const ARRDistributionChart: React.FC<ARRDistributionChartProps> = ({
               <TooltipTrigger asChild>
                 <div className="flex items-center gap-2 group cursor-pointer">
                   <div className="w-24 text-xs truncate text-right text-muted-foreground group-hover:text-foreground">
-                    {rep.repName.split(' ')[0]}
+                    {formatRepName(rep.repName)}
                   </div>
                   <div className="flex-1 bg-muted rounded-full h-4 relative overflow-hidden">
+                    {/* Green target zone highlight */}
+                    <div 
+                      className="absolute top-0 bottom-0 bg-green-500/20"
+                      style={{ 
+                        left: `${minPos}%`, 
+                        width: `${prefMaxPos - minPos}%` 
+                      }}
+                    />
+                    {/* The actual bar */}
                     <div
-                      className={`h-full rounded-full transition-all ${getBarColor(rep.customerARR)} group-hover:opacity-80`}
+                      className={`h-full rounded-full transition-all ${getBarColor(rep.customerARR)} group-hover:opacity-80 relative z-10`}
                       style={{ width: `${getBarWidth(rep.customerARR)}%` }}
                     />
-                    {/* Threshold lines on bar */}
+                    {/* Hard cap line */}
                     <div 
-                      className="absolute top-0 bottom-0 border-l border-green-300"
-                      style={{ left: `${(targetArr / maxValue) * 100}%` }}
+                      className="absolute top-0 bottom-0 w-0.5 bg-red-500/70 z-20"
+                      style={{ left: `${hardCapPos}%` }}
                     />
                   </div>
                   <div className="w-16 text-xs font-medium text-right">
@@ -172,4 +182,3 @@ export const ARRDistributionChart: React.FC<ARRDistributionChartProps> = ({
     </Card>
   );
 };
-

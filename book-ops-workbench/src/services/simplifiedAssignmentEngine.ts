@@ -332,7 +332,7 @@ export class WaterfallAssignmentEngine {
     
     // ========== PRIORITY 1: Continuity + Geography ==========
     console.log(`\n=== P1: Continuity + Geography (${remainingAccounts.length} candidates) ===`);
-    const p1Results = this.batchAssignPriority1(remainingAccounts, reps);
+    const p1Results = await this.batchAssignPriority1(remainingAccounts, reps);
     proposals.push(...p1Results.assigned);
     remainingAccounts = p1Results.remaining;
     console.log(`✅ P1 Complete: ${p1Results.assigned.length} assigned, ${remainingAccounts.length} remaining`);
@@ -422,7 +422,7 @@ export class WaterfallAssignmentEngine {
       
       const targetARR = this.getTargetARR();
       const variance = (this.config.capacity_variance_percent || 10) / 100;
-      const maxARR = this.getCapacityLimit();
+      const preferredMaxARR = targetARR * (1 + variance); // Use ceiling, not hard cap
       
       // Variables: x_account_rep = 1 if account assigned to rep
       lines.push('Maximize');
@@ -487,7 +487,7 @@ export class WaterfallAssignmentEngine {
         }
         
         if (arrTerms.length > 0) {
-          const remainingCapacity = maxARR - currentLoad;
+          const remainingCapacity = preferredMaxARR - currentLoad;
           constraints.push(` cap_${sanitizeVarName(repId)}: ${arrTerms.join(' + ')} <= ${Math.max(0, remainingCapacity)}`);
         }
       }
@@ -587,19 +587,20 @@ export class WaterfallAssignmentEngine {
 
   /**
    * P1: Batch assign accounts to current owner if in same geography AND has capacity
-   * Processes all eligible accounts at this priority before moving to next
+   * Uses HiGHS optimization to decide which accounts get continuity when owners have limited capacity
    */
-  private batchAssignPriority1(accounts: Account[], allReps: SalesRep[]): { assigned: AssignmentProposal[], remaining: Account[] } {
+  private async batchAssignPriority1(accounts: Account[], allReps: SalesRep[]): Promise<{ assigned: AssignmentProposal[], remaining: Account[] }> {
     const assigned: AssignmentProposal[] = [];
     const remaining: Account[] = [];
     
-    // First pass: identify all candidates for P1
-    const candidates: { account: Account; currentOwner: SalesRep }[] = [];
+    // Build eligibility map: account -> current owner (if same geo and has capacity)
+    const eligibleRepsPerAccount = new Map<string, SalesRep[]>();
+    const accountsWithOptions: Account[] = [];
+    const accountsWithoutOptions: Account[] = [];
     
     for (const account of accounts) {
-      // Skip strategic accounts - they have their own logic
+      // Handle strategic accounts separately (no optimization needed - they always go to strategic reps)
       if (this.isStrategicAccount(account)) {
-        // Handle strategic accounts immediately (they always go to strategic reps)
         const proposal = this.assignStrategicAccount(account, allReps);
         if (proposal) {
           assigned.push(proposal);
@@ -611,54 +612,51 @@ export class WaterfallAssignmentEngine {
       }
       
       if (!account.owner_id) {
-        remaining.push(account);
+        accountsWithoutOptions.push(account);
         continue;
       }
       
       const currentOwner = this.repMap.get(account.owner_id);
       if (!currentOwner || currentOwner.is_strategic_rep) {
-        remaining.push(account);
+        accountsWithoutOptions.push(account);
         continue;
       }
       
-      const isSameGeo = this.isSameGeography(account, currentOwner);
-      if (isSameGeo) {
-        candidates.push({ account, currentOwner });
-      } else {
-        remaining.push(account);
+      // Check if current owner is in same geography
+      if (!this.isSameGeography(account, currentOwner)) {
+        accountsWithoutOptions.push(account);
+        continue;
       }
-    }
-    
-    // Sort candidates by ARR descending (prioritize larger accounts for stability)
-    candidates.sort((a, b) => {
-      const arrA = a.account.calculated_arr || a.account.arr || 0;
-      const arrB = b.account.calculated_arr || b.account.arr || 0;
-      return arrB - arrA;
-    });
-    
-    // Second pass: assign candidates while checking capacity
-    for (const { account, currentOwner } of candidates) {
+      
       const accountARR = account.calculated_arr || account.arr || 0;
       
+      // Check if current owner has capacity
       if (this.hasCapacity(currentOwner.rep_id, accountARR, account.cre_count, account, currentOwner)) {
-        const proposal: AssignmentProposal = {
-          account,
-          proposedRep: currentOwner,
-          currentOwner,
-          rationale: 'Account Continuity + Geography Match',
-          warnings: [],
-          ruleApplied: 'Priority 1: Continuity + Geography',
-          arr: accountARR,
-          priorityLevel: 1
-        };
-        assigned.push(proposal);
-        this.updateWorkload(currentOwner.rep_id, account);
+        eligibleRepsPerAccount.set(account.sfdc_account_id, [currentOwner]);
+        accountsWithOptions.push(account);
       } else {
-        remaining.push(account);
+        accountsWithoutOptions.push(account);
       }
     }
     
-    return { assigned, remaining };
+    if (accountsWithOptions.length === 0) {
+      return { assigned, remaining: [...remaining, ...accountsWithoutOptions] };
+    }
+    
+    // Use HiGHS to optimize which accounts get continuity when multiple accounts share same owner
+    const result = await this.solveWithHiGHS(
+      accountsWithOptions,
+      eligibleRepsPerAccount,
+      1,
+      'Priority 1: Continuity + Geography',
+      'Account Continuity + Geography Match'
+    );
+    
+    // Combine results
+    return {
+      assigned: [...assigned, ...result.assigned],
+      remaining: [...remaining, ...result.remaining, ...accountsWithoutOptions]
+    };
   }
 
   /**
@@ -1312,13 +1310,13 @@ export class WaterfallAssignmentEngine {
         return true;
       }
       
-      // 3. If rep is far below minimum (< 50% of min), allow up to 20% over preferred max
-      if (currentLoad < (minThreshold * 0.5) && newLoad <= (preferredMax * 1.2)) {
+      // 3. If rep is far below minimum (< 50% of min), allow up to 10% over preferred max
+      if (currentLoad < (minThreshold * 0.5) && newLoad <= (preferredMax * 1.1)) {
         return true;
       }
       
-      // 4. Otherwise, only accept if within 15% of preferred max
-      return newLoad <= (preferredMax * 1.15);
+      // 4. Otherwise, only accept if within 5% of preferred max
+      return newLoad <= (preferredMax * 1.05);
     }
     
     // Rep is at/above minimum - check if they can stay within preferred max

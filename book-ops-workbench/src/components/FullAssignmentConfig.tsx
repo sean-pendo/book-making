@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Save, CheckCircle, MapPin, X, Loader2, Sparkles, Calculator, HelpCircle } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Save, CheckCircle, MapPin, X, Loader2, Sparkles, Calculator, HelpCircle, Settings2, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,15 @@ import {
   isNotApplicable,
   getRegionDisplayLabel 
 } from '@/services/geminiRegionMappingService';
+import { 
+  AssignmentMode, 
+  PriorityConfig, 
+  getDefaultPriorityConfig,
+  getPriorityById
+} from '@/config/priorityRegistry';
+import { detectAssignmentMode, getModeLabel } from '@/services/modeDetectionService';
+import { PriorityWaterfallConfig } from './PriorityWaterfallConfig';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 interface FullAssignmentConfigProps {
   buildId: string;
@@ -39,6 +48,11 @@ interface ConfigState {
   max_tier1_per_rep: number;
   max_tier2_per_rep: number;
   renewal_concentration_max: number;
+  // Priority configuration
+  assignment_mode: AssignmentMode;
+  priority_config: PriorityConfig[];
+  rs_arr_threshold: number;
+  is_custom_priority: boolean;
 }
 
 export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({ 
@@ -61,7 +75,12 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
     atr_max: 150000,
     max_tier1_per_rep: 5,
     max_tier2_per_rep: 8,
-    renewal_concentration_max: 25
+    renewal_concentration_max: 25,
+    // Priority configuration defaults
+    assignment_mode: 'ENT',
+    priority_config: getDefaultPriorityConfig('ENT'),
+    rs_arr_threshold: 25000,
+    is_custom_priority: false
   });
   
   const [accountTerritories, setAccountTerritories] = useState<string[]>([]);
@@ -84,6 +103,7 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
     confidence: 'high' | 'medium' | 'low';
     reasoning?: string;
   }>>([]);
+  const [showPriorityConfig, setShowPriorityConfig] = useState(false);
 
   useEffect(() => {
     if (!buildId) return;
@@ -102,6 +122,10 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         if (error) {
           console.error('Error loading config:', error);
         } else if (data) {
+          // Determine saved mode or detect from data
+          const savedMode = (data.assignment_mode as AssignmentMode) || 'ENT';
+          const savedPriorityConfig = (data.priority_config as PriorityConfig[]) || [];
+          
           setConfig({
             customer_target_arr: data.customer_target_arr || 2000000,
             customer_max_arr: data.customer_max_arr || 3000000,
@@ -115,9 +139,28 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             atr_max: data.atr_max || 150000,
             max_tier1_per_rep: data.max_tier1_per_rep || 5,
             max_tier2_per_rep: data.max_tier2_per_rep || 8,
-            renewal_concentration_max: data.renewal_concentration_max || 25
+            renewal_concentration_max: data.renewal_concentration_max || 25,
+            // Priority configuration
+            assignment_mode: savedMode,
+            priority_config: savedPriorityConfig.length > 0 
+              ? savedPriorityConfig 
+              : getDefaultPriorityConfig(savedMode === 'CUSTOM' ? 'ENT' : savedMode),
+            rs_arr_threshold: data.rs_arr_threshold || 25000,
+            is_custom_priority: data.is_custom_priority || false
           });
           setLastCalculatedAt(data.last_calculated_at);
+        } else {
+          // No saved config - auto-detect mode
+          try {
+            const detected = await detectAssignmentMode(buildId);
+            setConfig(prev => ({
+              ...prev,
+              assignment_mode: detected.suggestedMode,
+              priority_config: getDefaultPriorityConfig(detected.suggestedMode)
+            }));
+          } catch (e) {
+            console.log('[Config] Mode detection failed, using ENT default');
+          }
         }
         
         // Load unique account territories (just need sales_territory field)
@@ -372,6 +415,35 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
     setIsDirty(true);
     setShowSuccess(false);
   };
+
+  // Priority configuration handlers
+  const handleModeChange = useCallback((mode: AssignmentMode) => {
+    setConfig(prev => ({
+      ...prev,
+      assignment_mode: mode,
+      is_custom_priority: mode === 'CUSTOM'
+    }));
+    setIsDirty(true);
+    setShowSuccess(false);
+  }, []);
+
+  const handlePriorityConfigChange = useCallback((newConfig: PriorityConfig[]) => {
+    setConfig(prev => ({
+      ...prev,
+      priority_config: newConfig,
+      is_custom_priority: true
+    }));
+    setIsDirty(true);
+    setShowSuccess(false);
+  }, []);
+
+  // Get priority display info
+  const enabledPriorityCount = config.priority_config.filter(p => p.enabled).length;
+  const priorityNames = config.priority_config
+    .filter(p => p.enabled)
+    .slice(0, 3)
+    .map(p => getPriorityById(p.id)?.name || p.id)
+    .join(', ');
 
   const aiMapTerritories = async () => {
     if (accountTerritories.length === 0 || repRegions.length === 0) {
@@ -1076,7 +1148,72 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         </CardContent>
       </Card>
 
+      {/* Priority Configuration */}
+      <Card className="border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Settings2 className="w-4 h-4" />
+                Priority Configuration
+              </CardTitle>
+              <CardDescription>
+                Assignment mode: <strong>{getModeLabel(config.assignment_mode)}</strong> • {enabledPriorityCount} priorities active
+              </CardDescription>
+            </div>
+            <Badge variant={config.is_custom_priority ? 'default' : 'secondary'} className="text-xs">
+              {config.is_custom_priority ? 'Customized' : 'Preset'}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">
+                {priorityNames}{enabledPriorityCount > 3 ? `, +${enabledPriorityCount - 3} more` : ''}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Configure the order and selection of assignment priorities used during generation.
+              </p>
+            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => setShowPriorityConfig(true)}
+                  className="gap-2"
+                >
+                  Configure Priorities
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Reorder priorities or toggle them on/off</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </CardContent>
+      </Card>
+
       </div>
+
+      {/* Priority Configuration Dialog */}
+      <Dialog open={showPriorityConfig} onOpenChange={setShowPriorityConfig}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Priority Configuration</DialogTitle>
+          </DialogHeader>
+          <PriorityWaterfallConfig
+            buildId={buildId}
+            currentMode={config.assignment_mode}
+            currentConfig={config.priority_config}
+            onModeChange={handleModeChange}
+            onConfigChange={handlePriorityConfigChange}
+            onClose={() => setShowPriorityConfig(false)}
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* Fixed Footer Actions - always at bottom */}
       <div className="flex-shrink-0 flex justify-between items-center pt-4 mt-4 border-t bg-background">

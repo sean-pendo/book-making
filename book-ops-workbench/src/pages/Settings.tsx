@@ -11,7 +11,8 @@ import { toast } from "sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { RolePermissionsManager } from "@/components/RolePermissionsManager";
-import { Info, LogOut } from "lucide-react";
+import { SlackAppPrompt } from "@/components/SlackAppPrompt";
+import { Info, LogOut, MessageSquare, Bell, CheckCircle2 } from "lucide-react";
 
 type UserRole = "SLM" | "FLM" | "REVOPS";
 
@@ -125,6 +126,62 @@ const Settings = () => {
               <Input value={profile?.region || ""} disabled />
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Slack Integration */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5 text-purple-600" />
+            <CardTitle>Slack Integration</CardTitle>
+          </div>
+          <CardDescription>
+            Receive real-time notifications about reviews, approvals, and build updates
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 text-sm">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              <span>Review assignments</span>
+            </div>
+            <div className="flex items-center gap-3 text-sm">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              <span>Proposal approvals & rejections</span>
+            </div>
+            <div className="flex items-center gap-3 text-sm">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              <span>Build status updates</span>
+            </div>
+            <div className="flex items-center gap-3 text-sm">
+              <Bell className="h-4 w-4 text-purple-500" />
+              <span>Direct messages from team members</span>
+            </div>
+          </div>
+          
+          {profile?.email?.endsWith('@pendo.io') ? (
+            <div className="pt-2 border-t">
+              <p className="text-sm text-muted-foreground mb-3">
+                Make sure you've added the Book Builder app to your Slack workspace to receive notifications.
+              </p>
+              <Button 
+                variant="outline" 
+                className="gap-2"
+                onClick={() => window.open('https://slack.com/apps', '_blank')}
+              >
+                <MessageSquare className="h-4 w-4" />
+                Open Slack App Directory
+              </Button>
+            </div>
+          ) : (
+            <div className="pt-2 border-t">
+              <p className="text-sm text-amber-600">
+                Note: Slack notifications are currently only available for @pendo.io email addresses. 
+                Non-pendo users will have their notifications forwarded to the RevOps team.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 

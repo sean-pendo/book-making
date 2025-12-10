@@ -9,7 +9,7 @@ const DEVELOPER_SLACK_USER = "sean.muse";
 const PENDO_DOMAIN = "pendo.io";
 
 interface NotificationRequest {
-  type: "feedback" | "review_assigned" | "proposal_approved" | "proposal_rejected" | "build_status" | "error";
+  type: "feedback" | "review_assigned" | "proposal_approved" | "proposal_rejected" | "build_status" | "error" | "welcome";
   recipientEmail?: string;
   title: string;
   message: string;
@@ -34,8 +34,10 @@ function extractUsername(email: string): string | null {
 }
 
 // Look up Slack user ID by email
-async function lookupSlackUser(email: string): Promise<string | null> {
-  if (!SLACK_BOT_TOKEN) return null;
+async function lookupSlackUser(email: string): Promise<{ userId: string | null; error?: string }> {
+  if (!SLACK_BOT_TOKEN) {
+    return { userId: null, error: "SLACK_BOT_TOKEN not configured" };
+  }
   
   try {
     const response = await fetch(`https://slack.com/api/users.lookupByEmail?email=${encodeURIComponent(email)}`, {
@@ -46,14 +48,15 @@ async function lookupSlackUser(email: string): Promise<string | null> {
     });
     
     const data = await response.json();
+    console.log(`Slack lookup for ${email}:`, JSON.stringify(data));
+    
     if (data.ok && data.user?.id) {
-      return data.user.id;
+      return { userId: data.user.id };
     }
-    console.log("Slack user lookup failed:", data.error);
-    return null;
+    return { userId: null, error: `Slack API: ${data.error || 'unknown error'}` };
   } catch (error) {
     console.error("Error looking up Slack user:", error);
-    return null;
+    return { userId: null, error: String(error) };
   }
 }
 
@@ -116,6 +119,7 @@ function formatSlackMessage(req: NotificationRequest, isDeveloperFallback = fals
     proposal_rejected: "❌",
     build_status: "🏗️",
     error: "🚨",
+    welcome: "👋",
   };
   
   const typeLabel: Record<string, string> = {
@@ -125,6 +129,7 @@ function formatSlackMessage(req: NotificationRequest, isDeveloperFallback = fals
     proposal_rejected: "Proposal Rejected",
     build_status: "Build Status",
     error: "Error Alert",
+    welcome: "Welcome to Book Builder",
   };
 
   const emoji = typeEmoji[req.type] || "📢";
@@ -223,33 +228,43 @@ Deno.serve(async (req: Request) => {
 
     // Determine recipient
     let targetSlackUserId: string | null = null;
+    let lookupError: string | undefined;
     let isFallback = false;
 
     if (body.type === "feedback" || body.type === "error") {
       // Developer feedback and errors always go to sean.muse
-      targetSlackUserId = await lookupSlackUser(`${DEVELOPER_SLACK_USER}@${PENDO_DOMAIN}`);
+      const result = await lookupSlackUser(`${DEVELOPER_SLACK_USER}@${PENDO_DOMAIN}`);
+      targetSlackUserId = result.userId;
+      lookupError = result.error;
     } else if (body.recipientEmail) {
       // System notifications go to the user
       const username = extractUsername(body.recipientEmail);
       
       if (username) {
         // Pendo email - send to that user
-        targetSlackUserId = await lookupSlackUser(body.recipientEmail);
+        const result = await lookupSlackUser(body.recipientEmail);
+        targetSlackUserId = result.userId;
+        lookupError = result.error;
       } else {
         // Non-pendo email - fallback to developer
         isFallback = true;
-        targetSlackUserId = await lookupSlackUser(`${DEVELOPER_SLACK_USER}@${PENDO_DOMAIN}`);
+        const result = await lookupSlackUser(`${DEVELOPER_SLACK_USER}@${PENDO_DOMAIN}`);
+        targetSlackUserId = result.userId;
+        lookupError = result.error;
         console.log(`Non-pendo email (${body.recipientEmail}), falling back to developer`);
       }
     } else {
       // No recipient specified, send to developer
-      targetSlackUserId = await lookupSlackUser(`${DEVELOPER_SLACK_USER}@${PENDO_DOMAIN}`);
+      const result = await lookupSlackUser(`${DEVELOPER_SLACK_USER}@${PENDO_DOMAIN}`);
+      targetSlackUserId = result.userId;
+      lookupError = result.error;
     }
 
     if (!targetSlackUserId) {
-      await logNotification(supabase, body, null, "failed", "Could not find Slack user");
+      const errorMsg = lookupError || "Could not find Slack user";
+      await logNotification(supabase, body, null, "failed", errorMsg);
       return new Response(
-        JSON.stringify({ error: "Could not find Slack user", sent: false }),
+        JSON.stringify({ error: errorMsg, sent: false }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

@@ -35,26 +35,35 @@ export function autoMapTerritoryToRegion(territory: string): string | null {
       keywords: ['SOUTH EAST', 'SOUTHEAST', 'GULF COAST', 'MID-ATLANTIC', 'AUSTIN – HOUSTON', 'AUSTIN - HOUSTON', 'CHESAPEAKE']
     },
     'Central': {
-      states: ['ND', 'SD', 'NE', 'KS', 'MO', 'IA', 'MN', 'WI', 'IL', 'IN', 'OH', 'MI', 'CO', 'WY', 'MT', 'NM', 'ID'],
+      states: ['ND', 'SD', 'NE', 'KS', 'MO', 'IA', 'MN', 'WI', 'IL', 'IN', 'OH', 'MI', 'CO', 'WY', 'MT', 'ID'],
       cities: ['CHICAGO', 'MINNEAPOLIS', 'ST LOUIS', 'KANSAS CITY', 'CLEVELAND', 'COLUMBUS', 'DETROIT', 'DENVER', 'CALGARY', 'EDMONTON'],
-      keywords: ['GREAT LAKES', 'MIDWEST', 'MOUNTAIN', 'SOUTHWEST', 'ALBERTA']
+      keywords: ['GREAT LAKES', 'MIDWEST', 'MOUNTAIN', 'ALBERTA']
     },
     'West': {
-      states: ['WA', 'OR', 'CA', 'NV', 'UT', 'AZ', 'AK', 'HI'],
-      cities: ['SEATTLE', 'PORTLAND', 'SAN FRANCISCO', 'SAN DIEGO', 'LOS ANGELES', 'SACRAMENTO', 'LAS VEGAS', 'PHOENIX', 'TUCSON', 'SALT LAKE CITY', 'VANCOUVER'],
-      keywords: ['NOR CAL', 'SO CAL', 'PAC NW', 'PACIFIC NORTHWEST', 'BRITISH COLUMBIA']
+      states: ['WA', 'OR', 'CA', 'NV', 'UT', 'AZ', 'AK', 'HI', 'NM'],
+      cities: ['SEATTLE', 'PORTLAND', 'SAN FRANCISCO', 'SAN DIEGO', 'LOS ANGELES', 'SACRAMENTO', 'LAS VEGAS', 'PHOENIX', 'TUCSON', 'SALT LAKE CITY', 'VANCOUVER', 'ALBUQUERQUE'],
+      keywords: ['NOR CAL', 'SO CAL', 'PAC NW', 'PACIFIC NORTHWEST', 'BRITISH COLUMBIA', 'SOUTHWEST', 'SOUTH WEST']
     }
   };
 
-  const matchesConfig = (config: RegionConfig): boolean => {
-    const hasState = config.states.some(state => tokenSet.has(state));
-    const hasCity = config.cities.some(city => territoryUpper.includes(city));
-    const hasKeyword = config.keywords.some(keyword => territoryUpper.includes(keyword));
-    return hasState || hasCity || hasKeyword;
-  };
-
+  // PRIORITY 1: Check explicit keywords first (most specific)
+  // This prevents "Southwest TX" from matching South East due to TX state code
   for (const [regionName, config] of Object.entries(REGION_CONFIG) as [RegionName, RegionConfig][]) {
-    if (matchesConfig(config)) {
+    if (config.keywords.some(keyword => territoryUpper.includes(keyword))) {
+      return regionName;
+    }
+  }
+  
+  // PRIORITY 2: Check cities
+  for (const [regionName, config] of Object.entries(REGION_CONFIG) as [RegionName, RegionConfig][]) {
+    if (config.cities.some(city => territoryUpper.includes(city))) {
+      return regionName;
+    }
+  }
+  
+  // PRIORITY 3: Check state codes (least specific)
+  for (const [regionName, config] of Object.entries(REGION_CONFIG) as [RegionName, RegionConfig][]) {
+    if (config.states.some(state => tokenSet.has(state))) {
       return regionName;
     }
   }
