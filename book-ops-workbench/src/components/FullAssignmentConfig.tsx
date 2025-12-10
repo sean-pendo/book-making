@@ -26,7 +26,7 @@ import {
 } from '@/config/priorityRegistry';
 import { detectAssignmentMode, getModeLabel } from '@/services/modeDetectionService';
 import { PriorityWaterfallConfig } from './PriorityWaterfallConfig';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 
 interface FullAssignmentConfigProps {
   buildId: string;
@@ -1201,9 +1201,6 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       {/* Priority Configuration Dialog */}
       <Dialog open={showPriorityConfig} onOpenChange={setShowPriorityConfig}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Priority Configuration</DialogTitle>
-          </DialogHeader>
           <PriorityWaterfallConfig
             buildId={buildId}
             currentMode={config.assignment_mode}

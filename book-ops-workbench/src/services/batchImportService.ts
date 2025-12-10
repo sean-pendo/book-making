@@ -787,4 +787,102 @@ export class BatchImportService {
       throw error;
     }
   }
+
+  /**
+   * Sync renewal_quarter on PARENT accounts from the earliest renewal_event_date 
+   * across the parent AND all its children (rollup behavior).
+   * Format: "Q4-FY27" (fiscal year starts Feb 1)
+   */
+  static async syncRenewalQuarterFromOpportunities(buildId: string): Promise<void> {
+    console.log(`🔄 Syncing renewal_quarter from opportunities for build ${buildId} (with hierarchy rollup)...`);
+
+    try {
+      // Import fiscal year calculation function
+      const { getFiscalQuarterLabel } = await import('@/utils/fiscalYearCalculations');
+
+      // Get all opportunities with renewal_event_date for this build
+      const { data: opportunities, error: oppsError } = await supabase
+        .from('opportunities')
+        .select('sfdc_account_id, renewal_event_date')
+        .eq('build_id', buildId)
+        .not('renewal_event_date', 'is', null);
+
+      if (oppsError) throw oppsError;
+
+      if (!opportunities || opportunities.length === 0) {
+        console.log('ℹ️ No opportunities with renewal_event_date found, skipping renewal_quarter sync');
+        return;
+      }
+
+      // Get all accounts to build the hierarchy mapping (child -> parent)
+      const { data: accounts, error: accountsError } = await supabase
+        .from('accounts')
+        .select('sfdc_account_id, ultimate_parent_id, is_parent')
+        .eq('build_id', buildId);
+
+      if (accountsError) throw accountsError;
+
+      if (!accounts || accounts.length === 0) {
+        console.log('ℹ️ No accounts found, skipping renewal_quarter sync');
+        return;
+      }
+
+      // Build a map: account_id -> ultimate_parent_id (or self if it's a parent)
+      const accountToParentMap = new Map<string, string>();
+      for (const account of accounts) {
+        const accountId = account.sfdc_account_id;
+        // If account has an ultimate_parent_id and it's not self-referencing, use it
+        // Otherwise, use the account itself (it's a parent account)
+        const parentId = account.ultimate_parent_id && account.ultimate_parent_id !== accountId
+          ? account.ultimate_parent_id
+          : accountId;
+        accountToParentMap.set(accountId, parentId);
+      }
+
+      // Roll up: Find the earliest renewal_event_date per PARENT account
+      const earliestRenewalByParent = new Map<string, string>();
+      
+      for (const opp of opportunities) {
+        const accountId = opp.sfdc_account_id;
+        const renewalDate = opp.renewal_event_date;
+        
+        if (!renewalDate) continue;
+        
+        // Find the parent this opportunity rolls up to
+        const parentId = accountToParentMap.get(accountId) || accountId;
+        
+        const currentEarliest = earliestRenewalByParent.get(parentId);
+        if (!currentEarliest || new Date(renewalDate) < new Date(currentEarliest)) {
+          earliestRenewalByParent.set(parentId, renewalDate);
+        }
+      }
+
+      console.log(`📊 Found renewal dates for ${earliestRenewalByParent.size} parent accounts (rolled up from hierarchy)`);
+
+      // Update PARENT accounts with their rolled-up renewal_quarter
+      let updatedCount = 0;
+      for (const [parentId, renewalDate] of earliestRenewalByParent.entries()) {
+        const quarterLabel = getFiscalQuarterLabel(renewalDate);
+        
+        if (quarterLabel) {
+          const { error: updateError } = await supabase
+            .from('accounts')
+            .update({ renewal_quarter: quarterLabel })
+            .eq('build_id', buildId)
+            .eq('sfdc_account_id', parentId);
+
+          if (updateError) {
+            console.warn(`⚠️ Failed to update renewal_quarter for parent ${parentId}:`, updateError);
+          } else {
+            updatedCount++;
+          }
+        }
+      }
+
+      console.log(`✅ renewal_quarter sync completed: Updated ${updatedCount} parent accounts`);
+    } catch (error) {
+      console.error('❌ renewal_quarter sync failed:', error);
+      throw error;
+    }
+  }
 }

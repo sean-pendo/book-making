@@ -2139,7 +2139,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
             </DialogDescription>
           </DialogHeader>
           <WaterfallLogicExplainer 
-            buildId={buildId}
+            buildId={buildId} 
             priorityConfig={priorityConfig}
             assignmentMode={assignmentMode}
             onConfigureClick={() => {

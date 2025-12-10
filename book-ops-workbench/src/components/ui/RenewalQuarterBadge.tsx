@@ -17,16 +17,30 @@ export function RenewalQuarterBadge({ renewalQuarter, className = '' }: RenewalQ
     return <span className="text-xs text-muted-foreground">-</span>;
   }
 
-  // Normalize the quarter value (handle "Q1", "q1", "1", etc.)
-  const normalized = renewalQuarter.toUpperCase().startsWith('Q') 
-    ? renewalQuarter.toUpperCase() 
-    : `Q${renewalQuarter}`;
+  // Handle new format "Q1-FY27" or legacy "Q1"
+  const upper = renewalQuarter.toUpperCase();
   
-  const style = quarterStyles[normalized] || 'bg-gray-50 text-gray-700 border-gray-300';
+  // Extract just the quarter part (Q1, Q2, Q3, Q4) for styling
+  const quarterMatch = upper.match(/Q[1-4]/);
+  const quarterKey = quarterMatch ? quarterMatch[0] : null;
+  
+  // Normalize display: keep full format if it has FY, otherwise just show Q#
+  let displayLabel = upper;
+  if (!upper.startsWith('Q')) {
+    // Handle plain number input like "1" -> "Q1"
+    displayLabel = `Q${renewalQuarter}`;
+  }
+  
+  const style = quarterKey 
+    ? quarterStyles[quarterKey] 
+    : 'bg-gray-50 text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600';
 
   return (
-    <Badge variant="outline" className={`text-xs ${style} ${className}`}>
-      {normalized}
+    <Badge 
+      variant="outline" 
+      className={`text-xs whitespace-nowrap min-w-[4rem] justify-center ${style} ${className}`}
+    >
+      {displayLabel}
     </Badge>
   );
 }

@@ -3,8 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Info, Settings, CheckCircle, AlertTriangle, TrendingDown, Users, MapPin, Zap, Shield, Lock, Scale, Building2 } from 'lucide-react';
-import { PriorityConfig, getPriorityById, PriorityDefinition } from '@/config/priorityRegistry';
+import { Info, Settings, CheckCircle, AlertTriangle, TrendingDown, Users, MapPin, Zap, Shield, Lock, Scale, Building2, Clock, Briefcase, RefreshCw } from 'lucide-react';
+import { PriorityConfig, getPriorityById, PriorityDefinition, SubCondition } from '@/config/priorityRegistry';
 
 interface WaterfallLogicExplainerProps {
   buildId: string;
@@ -30,40 +30,67 @@ function getPriorityIcon(priorityId: string, className: string) {
   switch (priorityId) {
     case 'manual_holdover':
       return <Lock className={className} />;
+    case 'stability_accounts':
+      return <Shield className={className} />;
     case 'geo_and_continuity':
       return <CheckCircle className={className} />;
-    case 'pe_firm':
-      return <Building2 className={className} />;
-    case 'top_10_percent':
-      return <TrendingDown className={className} />;
-    case 'cre_risk':
-      return <AlertTriangle className={className} />;
     case 'rs_routing':
       return <Users className={className} />;
     case 'geography':
-    case 'sub_region':
       return <MapPin className={className} />;
     case 'continuity':
       return <CheckCircle className={className} />;
-    case 'renewal_balance':
-      return <Scale className={className} />;
     case 'arr_balance':
-      return <Scale className={className} />;
+      return <Zap className={className} />;
+    default:
+      return <Shield className={className} />;
+  }
+}
+
+// Get icon for a sub-condition
+function getSubConditionIcon(subConditionId: string, className: string) {
+  switch (subConditionId) {
+    case 'cre_risk':
+      return <AlertTriangle className={className} />;
+    case 'renewal_soon':
+      return <Clock className={className} />;
+    case 'top_10_arr':
+      return <TrendingDown className={className} />;
+    case 'pe_firm':
+      return <Building2 className={className} />;
+    case 'expansion_opps':
+      return <Briefcase className={className} />;
+    case 'recent_owner_change':
+      return <RefreshCw className={className} />;
     default:
       return <Shield className={className} />;
   }
 }
 
 // Get detailed description for a priority
-function getPriorityDetails(priorityId: string): { bullets: string[]; result: string } {
+function getPriorityDetails(priorityId: string, config?: PriorityConfig): { bullets: string[]; result: string } {
   switch (priorityId) {
     case 'manual_holdover':
       return {
         bullets: [
           'Accounts marked "exclude from reassignment"',
-          'Always stays with current owner regardless of other factors'
+          'Strategic accounts stay with strategic reps'
         ],
         result: 'Protected accounts never move'
+      };
+    case 'stability_accounts':
+      // Dynamic bullets based on enabled sub-conditions
+      const enabledSubs = config?.subConditions?.filter(sc => sc.enabled).map(sc => sc.id) || [];
+      const bullets: string[] = [];
+      if (enabledSubs.includes('cre_risk')) bullets.push('CRE at-risk accounts stay with current owner');
+      if (enabledSubs.includes('renewal_soon')) bullets.push('Accounts with renewal in 90 days stay');
+      if (enabledSubs.includes('top_10_arr')) bullets.push('Top 10% ARR accounts (per FLM) stay');
+      if (enabledSubs.includes('pe_firm')) bullets.push('PE-owned accounts stay with majority owner');
+      if (enabledSubs.includes('expansion_opps')) bullets.push('Accounts with open expansions stay');
+      if (enabledSubs.includes('recent_owner_change')) bullets.push('Recently changed accounts stay');
+      return {
+        bullets: bullets.length > 0 ? bullets : ['Configure sub-conditions to define stability criteria'],
+        result: 'Account stays if ANY enabled condition matches'
       };
     case 'geo_and_continuity':
       return {
@@ -73,37 +100,13 @@ function getPriorityDetails(priorityId: string): { bullets: string[]; result: st
         ],
         result: 'Account stays with current owner - no disruption'
       };
-    case 'pe_firm':
-      return {
-        bullets: [
-          'Account is owned by a Private Equity firm',
-          'Stays with designated AE, never routed to Renewal Specialists'
-        ],
-        result: 'PE-owned accounts stay protected'
-      };
-    case 'top_10_percent':
-      return {
-        bullets: [
-          'Account is in top 10% by ARR (calculated at runtime)',
-          'Not routed to Renewal Specialists'
-        ],
-        result: 'Top performers stay with experienced AEs'
-      };
-    case 'cre_risk':
-      return {
-        bullets: [
-          'Account flagged as CRE (at-risk)',
-          'Requires experienced owner to manage risk'
-        ],
-        result: 'At-risk accounts stay with current owner'
-      };
     case 'rs_routing':
       return {
         bullets: [
-          'Account ARR is at or below RS threshold (default $25K)',
-          'Routed to Renewal Specialist reps for handling'
+          'Account ARR is at or below $25K threshold',
+          'Routes to FLM (First Line Manager)'
         ],
-        result: 'Low-ARR accounts go to Renewal Specialists'
+        result: 'Low-ARR accounts assigned to FLM'
       };
     case 'geography':
       return {
@@ -113,14 +116,6 @@ function getPriorityDetails(priorityId: string): { bullets: string[]; result: st
         ],
         result: 'Account assigned to best rep in home region'
       };
-    case 'sub_region':
-      return {
-        bullets: [
-          'Routes to EMEA sub-regions: DACH, UKI, Nordics, France, Benelux, Middle East',
-          'Based on account HQ country'
-        ],
-        result: 'EMEA accounts go to correct sub-region team'
-      };
     case 'continuity':
       return {
         bullets: [
@@ -129,21 +124,13 @@ function getPriorityDetails(priorityId: string): { bullets: string[]; result: st
         ],
         result: 'Account stays with familiar owner'
       };
-    case 'renewal_balance':
-      return {
-        bullets: [
-          'Distribute renewals evenly across Q1/Q2/Q3/Q4 per rep',
-          'Prevents renewal overload in any single quarter'
-        ],
-        result: 'Even quarterly workload distribution'
-      };
     case 'arr_balance':
       return {
         bullets: [
-          'Even distribution of ARR across all reps',
-          'Targets configured capacity per rep'
+          'Assigns to reps with most available capacity',
+          'Ensures balanced distribution across team'
         ],
-        result: 'Balanced ARR workload across team'
+        result: 'Account goes to next best available rep'
       };
     default:
       return {
@@ -253,35 +240,60 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
               </div>
               {holdoverPriorities.map((priority, index) => {
                 const colors = PRIORITY_COLORS[index % PRIORITY_COLORS.length];
-                const details = getPriorityDetails(priority.config.id);
+                const details = getPriorityDetails(priority.config.id, priority.config);
+                const hasSubConditions = priority.definition?.subConditions && priority.definition.subConditions.length > 0;
+                const enabledSubConditions = priority.config.subConditions?.filter(sc => sc.enabled) || [];
                 
                 return (
                   <div 
                     key={priority.config.id}
-                    className={`flex gap-4 p-4 ${colors.bg} rounded-lg border ${colors.border}`}
+                    className={`p-4 ${colors.bg} rounded-lg border ${colors.border}`}
                   >
-                    <div className="flex-shrink-0">
-                      <Badge className={`${colors.badge} text-white`}>
-                        {priority.definition?.isLocked ? '🔒' : ''} P{index + 1}
-                      </Badge>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        {getPriorityIcon(priority.config.id, `w-5 h-5 ${colors.icon}`)}
-                        <h4 className="font-semibold">{priority.definition?.name}</h4>
-                        <Badge variant="secondary" className="text-xs">Filter</Badge>
+                    <div className="flex gap-4">
+                      <div className="flex-shrink-0">
+                        <Badge className={`${colors.badge} text-white font-mono`}>
+                          {priority.definition?.isLocked ? '🔒 ' : ''}P{index}
+                        </Badge>
                       </div>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        {priority.definition?.description}
-                      </p>
-                      <ul className="text-sm space-y-1 ml-4 list-disc text-muted-foreground">
-                        {details.bullets.map((bullet, i) => (
-                          <li key={i}>{bullet}</li>
-                        ))}
-                      </ul>
-                      <p className={`text-sm font-medium ${colors.text} mt-2`}>
-                        Result: {details.result}
-                      </p>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          {getPriorityIcon(priority.config.id, `w-5 h-5 ${colors.icon}`)}
+                          <h4 className="font-semibold">{priority.definition?.name}</h4>
+                          <Badge variant="secondary" className="text-xs">Filter</Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">
+                          {priority.definition?.description}
+                        </p>
+                        
+                        {/* Show sub-conditions for stability_accounts */}
+                        {hasSubConditions && enabledSubConditions.length > 0 && (
+                          <div className="mt-3 p-3 bg-background/50 rounded border">
+                            <p className="text-xs font-medium text-muted-foreground mb-2">
+                              Active sub-conditions ({enabledSubConditions.length}):
+                            </p>
+                            <div className="grid grid-cols-2 gap-2">
+                              {priority.definition?.subConditions
+                                ?.filter(sc => enabledSubConditions.find(e => e.id === sc.id))
+                                .map(sc => (
+                                  <div key={sc.id} className="flex items-center gap-2 text-sm">
+                                    {getSubConditionIcon(sc.id, 'w-4 h-4 text-muted-foreground')}
+                                    <span>{sc.name}</span>
+                                  </div>
+                                ))
+                              }
+                            </div>
+                          </div>
+                        )}
+                        
+                        <ul className="text-sm space-y-1 ml-4 list-disc text-muted-foreground mt-2">
+                          {details.bullets.map((bullet, i) => (
+                            <li key={i}>{bullet}</li>
+                          ))}
+                        </ul>
+                        <p className={`text-sm font-medium ${colors.text} mt-2`}>
+                          Result: {details.result}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 );
@@ -299,8 +311,8 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
               {optimizationPriorities.map((priority, index) => {
                 const colorIndex = (holdoverPriorities.length + index) % PRIORITY_COLORS.length;
                 const colors = PRIORITY_COLORS[colorIndex];
-                const details = getPriorityDetails(priority.config.id);
-                const priorityNumber = holdoverPriorities.length + index + 1;
+                const details = getPriorityDetails(priority.config.id, priority.config);
+                const priorityNumber = holdoverPriorities.length + index;
                 
                 return (
                   <div 
@@ -308,7 +320,7 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
                     className={`flex gap-4 p-4 ${colors.bg} rounded-lg border ${colors.border}`}
                   >
                     <div className="flex-shrink-0">
-                      <Badge className={`${colors.badge} text-white`}>P{priorityNumber}</Badge>
+                      <Badge className={`${colors.badge} text-white font-mono`}>P{priorityNumber}</Badge>
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-2">
@@ -357,16 +369,6 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
               </p>
             </div>
 
-            <div className="p-4 bg-red-50 dark:bg-red-950 rounded-lg border border-red-200 dark:border-red-800">
-              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-600" />
-                CRE Hard Cap
-              </h4>
-              <p className="text-sm text-muted-foreground">
-                Maximum CRE (at-risk) accounts per rep (configurable)
-              </p>
-            </div>
-
             <div className="p-4 bg-purple-50 dark:bg-purple-950 rounded-lg border-2 border-purple-500 dark:border-purple-700">
               <h4 className="font-semibold mb-2 flex items-center gap-2">
                 <Users className="w-4 h-4 text-purple-600" />
@@ -384,6 +386,16 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
               </h4>
               <p className="text-sm text-muted-foreground">
                 Parent and child accounts keep same owner
+              </p>
+            </div>
+
+            <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-blue-600" />
+                Regional Alignment
+              </h4>
+              <p className="text-sm text-muted-foreground">
+                EMEA accounts use region field (DACH, UKI, etc.) for routing
               </p>
             </div>
           </div>

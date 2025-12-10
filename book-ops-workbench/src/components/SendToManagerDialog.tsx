@@ -706,9 +706,49 @@ export default function SendToManagerDialog({
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="flex-col sm:flex-row gap-2">
           <Button variant="outline" onClick={onClose}>
             Cancel
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              // Generate link based on current selection
+              const baseUrl = window.location.origin;
+              let link = '';
+              
+              if (sendToAllSLMs && slmNames && slmNames.length > 0) {
+                link = `${baseUrl}/manager-dashboard?buildId=${buildId}`;
+              } else if (targetManager) {
+                link = `${baseUrl}/manager-dashboard?buildId=${buildId}&managerName=${encodeURIComponent(targetManager.name)}`;
+              } else {
+                link = `${baseUrl}/manager-dashboard?buildId=${buildId}`;
+              }
+              
+              navigator.clipboard.writeText(link).then(() => {
+                setCopied(true);
+                toast({
+                  title: 'Link Copied',
+                  description: 'Shareable link copied to clipboard.',
+                });
+                setTimeout(() => setCopied(false), 2000);
+              }).catch(() => {
+                toast({
+                  title: 'Copy Failed',
+                  description: 'Could not copy link to clipboard.',
+                  variant: 'destructive',
+                });
+              });
+            }}
+            disabled={!targetManager && !sendToAllSLMs}
+            className="gap-2"
+          >
+            {copied ? (
+              <Check className="h-4 w-4 text-green-600" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+            Copy Link
           </Button>
           <Button
             onClick={() => sendToManagerMutation.mutate()}
@@ -722,7 +762,7 @@ export default function SendToManagerDialog({
             {sendToManagerMutation.isPending && (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             )}
-            Send
+            Send & Copy Link
           </Button>
         </DialogFooter>
       </DialogContent>

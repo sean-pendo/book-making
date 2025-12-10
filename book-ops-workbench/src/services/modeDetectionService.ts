@@ -3,6 +3,9 @@
  * 
  * Auto-detects the appropriate assignment mode (ENT, COMMERCIAL, EMEA)
  * based on build region and data characteristics.
+ * 
+ * Note: EMEA uses the region field directly (DACH, UKI, Nordics, etc.)
+ * instead of a separate sub_region field.
  */
 
 import { supabase } from '@/integrations/supabase/client';
@@ -21,10 +24,8 @@ interface BuildInfo {
 interface DataCharacteristics {
   hasRenewalSpecialists: boolean;
   hasPEAccounts: boolean;
-  hasSubRegions: boolean;
   renewalSpecialistCount: number;
   peAccountCount: number;
-  subRegionCount: number;
 }
 
 /**
@@ -46,14 +47,8 @@ export async function detectAssignmentMode(buildId: string): Promise<ModeDetecti
     if (buildInfo.region === 'EMEA') {
       suggestedMode = 'EMEA';
       reasons.push('Build region is EMEA');
-      
-      if (dataChars.hasSubRegions) {
-        confidence = 'high';
-        reasons.push(`${dataChars.subRegionCount} reps have sub-regions assigned`);
-      } else {
-        confidence = 'medium';
-        reasons.push('No sub-regions mapped yet (optional for EMEA)');
-      }
+      reasons.push('EMEA uses region field for routing (DACH, UKI, etc.)');
+      confidence = 'high';
       
       return { suggestedMode, confidence, reasons };
     }
@@ -137,20 +132,11 @@ async function getDataCharacteristics(buildId: string): Promise<DataCharacterist
     .eq('build_id', buildId)
     .not('pe_firm', 'is', null);
 
-  // Check for sub-regions
-  const { count: subRegionCount } = await supabase
-    .from('sales_reps')
-    .select('*', { count: 'exact', head: true })
-    .eq('build_id', buildId)
-    .not('sub_region', 'is', null);
-
   return {
     hasRenewalSpecialists: (rsCount || 0) > 0,
     hasPEAccounts: (peCount || 0) > 0,
-    hasSubRegions: (subRegionCount || 0) > 0,
     renewalSpecialistCount: rsCount || 0,
-    peAccountCount: peCount || 0,
-    subRegionCount: subRegionCount || 0
+    peAccountCount: peCount || 0
   };
 }
 
@@ -180,13 +166,12 @@ export function getModeDescription(mode: AssignmentMode): string {
     case 'ENT':
       return 'Standard enterprise account assignment with geographic and continuity priorities';
     case 'COMMERCIAL':
-      return 'Commercial mode with Renewal Specialist routing and PE firm protection';
+      return 'Commercial mode with FLM routing for low-ARR accounts and PE firm protection';
     case 'EMEA':
-      return 'EMEA regional routing with sub-region assignments (DACH, UKI, etc.)';
+      return 'EMEA regional routing using region field (DACH, UKI, Nordics, etc.)';
     case 'CUSTOM':
-      return 'Custom priority configuration';
+      return 'Custom priority configuration - shows all available priorities';
     default:
       return '';
   }
 }
-

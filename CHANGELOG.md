@@ -1,5 +1,105 @@
 # Changelog
 
+## [2025-12-10] - Feature: Priority Waterfall Overhaul with Stability Accounts
+
+### Summary
+Major restructure of the priority waterfall with new expandable "Stability Accounts" priority (P1) that combines multiple holdover conditions. Includes UI improvements with P0/P1/P2 format, tooltips, and CUSTOM mode showing all priorities.
+
+### New Priority Waterfall (All Modes)
+- **P0**: Manual Holdover & Strategic Accounts (Filter, locked)
+- **P1**: Stability Accounts (Filter, expandable sub-conditions)
+  - CRE Risk (at-risk accounts stay)
+  - Renewal Soon (RED within 90 days)
+  - Top 10% ARR (per FLM hierarchy)
+  - PE Firm (stay with majority owner)
+  - Open Expansion Opps
+  - Recent Owner Change
+- **P2**: Geography + Continuity (Optimize)
+- **P3**: Geographic Match (Optimize)
+- **P4**: Account Continuity (Optimize)
+- **P5**: Next Best Reps (Optimize)
+- **P6** (COMMERCIAL only): FLM Routing (≤$25k ARR)
+
+### Changes
+- `priorityRegistry.ts`: Added `stability_accounts` with `subConditions` array, removed sub_region priority
+- `PriorityWaterfallConfig.tsx`: P0/P1/P2 format, expandable sub-conditions, tooltips, disabled at bottom
+- `WaterfallLogicExplainer.tsx`: Dynamic sub-condition display, P0 numbering
+- `modeDetectionService.ts`: Removed sub_region detection (EMEA uses region field directly)
+- CUSTOM mode now shows ALL priorities with unavailable ones locked
+
+### Key Features
+- **Expandable Stability Accounts**: Click to expand/collapse sub-conditions with individual toggles
+- **Tooltips**: Descriptions now shown on hover instead of inline
+- **Disabled priorities**: Move to bottom of list, no position number
+- **CUSTOM mode**: Shows all possible priorities (available + unavailable with "Missing data" tooltip)
+
+---
+
+## [2025-12-10] - Feature: PE Firm Field Mapping for Related Partner Account
+
+### Summary
+Added auto-mapping support for "Related Partner Account: Related Partner Account Name" to map to the `pe_firm` field in the accounts table. This enables PE-owned accounts to be properly identified during import.
+
+### Changes
+- Added `pe_firm` field aliases to `autoMappingUtils.ts` with patterns for:
+  - "Related Partner Account: Related Partner Account Name"
+  - "PE Firm", "Private Equity Firm", "Partner Account" variants
+- Added `pe_firm` to account field mappings in `DataImport.tsx`
+- Field appears in "Secondary" priority section during import
+
+---
+
+## [2025-12-10] - Refactor: Simplified Priority Waterfall
+
+### Summary
+Removed CRE Risk and Renewal Quarter Balance (Q4) priorities from the waterfall pending team input. Renamed "ARR Workload Balance" to "Next Best Reps" for clarity.
+
+### Changes
+- Commented out `cre_risk` priority from `priorityRegistry.ts`
+- Commented out `renewal_balance` (Q4) priority from `priorityRegistry.ts`
+- Renamed `arr_balance` to "Next Best Reps" with updated description
+- Updated default positions for ENT/COMMERCIAL/EMEA modes to be sequential
+- Removed icon and detail mappings for removed priorities in `WaterfallLogicExplainer.tsx`
+- Updated `arr_balance` icon to Zap (lightning bolt) to represent optimization
+
+### Core Priority Waterfall (ENT)
+- **P0**: Manual Holdover & Strategic Accounts (locked filter)
+- **P1**: Geography + Continuity (locked filter)
+- **P2**: Geographic Match (optimization)
+- **P3**: Account Continuity (optimization)
+- **P4**: Next Best Reps (optimization)
+
+---
+
+## [2025-12-10] - Feature: Renewal Quarter Auto-Calculation from Opportunities
+
+### Summary
+Automatically calculates and populates the `renewal_quarter` field on **parent accounts** based on the earliest `renewal_event_date` from opportunities across the entire hierarchy (parent + all children).
+
+### Changes
+- Updated `fiscalYearCalculations.ts` with correct FY logic (FY27 starts Feb 1, 2026)
+- Added `getFiscalQuarterLabel()` function returning formatted strings like "Q4-FY27"
+- Added `syncRenewalQuarterFromOpportunities()` to `batchImportService.ts`
+- Sync runs automatically after opportunity import completes
+- **Rollup behavior**: Uses `ultimate_parent_id` to roll up child opportunity dates to parent accounts
+
+### Fiscal Year Logic
+- Q1: Feb-Apr, Q2: May-Jul, Q3: Aug-Oct, Q4: Nov-Jan
+- Format: "Q#-FY##" (e.g., Nov 2026 → "Q4-FY27")
+
+---
+
+## [2025-12-10] - UI: Improved Slack App Install Prompt
+
+### Changes
+- Changed Slack App Prompt from linking to marketplace to showing instructions modal
+- Users now see step-by-step instructions to search "Book Builder" in Slack Apps
+- Banner permanently dismissed when closed or "Got it" clicked (no more 7-day reappear)
+- Modal styled to match app's theme using primary colors
+- Disabled URL unfurling in Slack messages to remove preview cards
+
+---
+
 ## [2025-12-10] - Feature: Complete Slack Integration for Notifications
 
 ### Summary
@@ -77,6 +177,7 @@ Major implementation of multi-mode priority configuration for assignment engine.
 - Removed redundant ImbalanceWarningDialog that required two clicks to apply assignments
 - Imbalance warnings now show as a toast notification while applying proceeds directly
 - Cleaner UX: one click to apply assignments instead of two
+- Removed duplicate "Priority Configuration" header from dialog (was showing title twice)
 
 ## [2024-12-10] - UI: Simplified ARR Distribution threshold display
 - Replaced 4 individual threshold lines with a single **green target zone** ($1.7M - $2.1M)

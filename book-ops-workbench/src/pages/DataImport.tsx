@@ -726,7 +726,8 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'inbound_count', required: false, mapped: false, priority: 'secondary', description: 'Number of inbound leads' },
     { csvField: '', schemaField: 'idr_count', required: false, mapped: false, priority: 'secondary', description: 'Inside sales rep count' },
     { csvField: '', schemaField: 'risk_flag', required: false, mapped: false, priority: 'secondary', description: 'Account at-risk flag' },
-    { csvField: '', schemaField: 'cre_risk', required: false, mapped: false, priority: 'secondary', description: 'Customer Risk & Expansion flag' }
+    { csvField: '', schemaField: 'cre_risk', required: false, mapped: false, priority: 'secondary', description: 'Customer Risk & Expansion flag' },
+    { csvField: '', schemaField: 'pe_firm', required: false, mapped: false, priority: 'secondary', description: 'Private Equity firm name (for PE routing rules)' }
   ]);
 
   // Opportunity field mappings optimized for pipeline and revenue tracking

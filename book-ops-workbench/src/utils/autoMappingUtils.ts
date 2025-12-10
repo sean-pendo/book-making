@@ -335,6 +335,17 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     ],
     patterns: [/.*cre.*risk.*/i, /.*commercial.*risk.*/i],
     required: false
+  },
+  {
+    schemaField: 'pe_firm',
+    aliases: [
+      'Related Partner Account: Related Partner Account Name', 'Related Partner Account Name',
+      'PE_Firm', 'PE Firm', 'Private_Equity_Firm', 'Private Equity Firm',
+      'pe_firm', 'private_equity_firm', 'partner_account', 'Partner Account',
+      'Related Partner Account', 'PE Owner', 'PE_Owner', 'pe_owner'
+    ],
+    patterns: [/.*related.*partner.*account.*/i, /.*pe.*firm.*/i, /.*private.*equity.*/i, /.*partner.*account.*/i],
+    required: false
   }
 ];
 

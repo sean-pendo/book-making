@@ -1119,6 +1119,13 @@ export const importOpportunitiesToDatabase = async (
       } else {
         console.log('✅ Account calculations completed');
       }
+      
+      // Sync renewal_quarter from opportunity renewal_event_date
+      try {
+        await BatchImportService.syncRenewalQuarterFromOpportunities(buildId);
+      } catch (syncError) {
+        console.warn('⚠️ renewal_quarter sync failed (non-fatal):', syncError);
+      }
     }
 
     return {
@@ -1203,6 +1210,15 @@ export const importOpportunitiesToDatabase = async (
     }
 
     console.log(`Import completed. Successfully imported: ${imported}/${total}`);
+    
+    // Sync renewal_quarter from opportunity renewal_event_date
+    if (imported > 0) {
+      try {
+        await BatchImportService.syncRenewalQuarterFromOpportunities(buildId);
+      } catch (syncError) {
+        console.warn('⚠️ renewal_quarter sync failed (non-fatal):', syncError);
+      }
+    }
     
     return {
       success: imported > 0,

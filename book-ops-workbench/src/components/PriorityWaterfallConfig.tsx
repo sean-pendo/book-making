@@ -2,8 +2,12 @@
  * Priority Waterfall Configuration Component
  * 
  * Drag-and-drop UI for configuring assignment priority order.
- * Shows available priorities as draggable items and unavailable
- * priorities at the bottom with lock icons.
+ * Features:
+ * - P0, P1, P2... position format
+ * - Expandable Stability Accounts with sub-conditions
+ * - Tooltips for descriptions
+ * - Disabled priorities at bottom
+ * - CUSTOM mode shows ALL priorities
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -31,14 +35,18 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { GripVertical, Lock, HelpCircle, RotateCcw, Sparkles, AlertTriangle } from 'lucide-react';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { GripVertical, Lock, HelpCircle, RotateCcw, Sparkles, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   AssignmentMode,
   PriorityConfig,
   PriorityDefinition,
-  PRIORITY_REGISTRY,
+  SubCondition,
+  SubConditionConfig,
+  getAllPriorities,
   getDefaultPriorityConfig,
   getAvailablePriorities,
+  getAvailableSubConditions,
   getPriorityById,
 } from '@/config/priorityRegistry';
 import { useMappedFields } from '@/hooks/useMappedFields';
@@ -56,11 +64,23 @@ interface PriorityWaterfallConfigProps {
 interface SortablePriorityItemProps {
   priority: PriorityDefinition;
   config: PriorityConfig;
+  position: number;
   onToggle: (id: string, enabled: boolean) => void;
+  onSubConditionToggle?: (priorityId: string, subConditionId: string, enabled: boolean) => void;
   isLocked: boolean;
+  mappedFields: { accounts: Set<string>; sales_reps: Set<string>; opportunities: Set<string> };
 }
 
-function SortablePriorityItem({ priority, config, onToggle, isLocked }: SortablePriorityItemProps) {
+function SortablePriorityItem({ 
+  priority, 
+  config, 
+  position,
+  onToggle, 
+  onSubConditionToggle,
+  isLocked,
+  mappedFields
+}: SortablePriorityItemProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const {
     attributes,
     listeners,
@@ -68,7 +88,7 @@ function SortablePriorityItem({ priority, config, onToggle, isLocked }: Sortable
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: priority.id, disabled: isLocked });
+  } = useSortable({ id: priority.id, disabled: isLocked || !config.enabled });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -76,52 +96,190 @@ function SortablePriorityItem({ priority, config, onToggle, isLocked }: Sortable
     opacity: isDragging ? 0.5 : 1,
   };
 
+  const hasSubConditions = priority.subConditions && priority.subConditions.length > 0;
+  
+  // Get available sub-conditions
+  const { available: availableSubs, unavailable: unavailableSubs } = hasSubConditions
+    ? getAvailableSubConditions(priority, mappedFields)
+    : { available: [], unavailable: [] };
+
+  // Count enabled sub-conditions
+  const enabledSubCount = config.subConditions?.filter(sc => sc.enabled).length ?? 0;
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-3 p-3 rounded-lg border bg-card ${
+      className={`rounded-lg border bg-card ${
         isDragging ? 'shadow-lg ring-2 ring-primary' : ''
-      } ${!config.enabled ? 'opacity-60' : ''}`}
+      } ${!config.enabled ? 'opacity-50' : ''}`}
     >
-      {/* Drag handle or lock icon */}
-      <div className="flex-shrink-0 w-6">
-        {isLocked ? (
-          <Lock className="h-4 w-4 text-muted-foreground" />
+      <div className="flex items-center gap-3 p-3">
+        {/* Drag handle or lock icon */}
+        <div className="flex-shrink-0 w-6">
+          {isLocked ? (
+            <Lock className="h-4 w-4 text-muted-foreground" />
+          ) : !config.enabled ? (
+            <div className="w-4 h-4" /> 
+          ) : (
+            <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
+              <GripVertical className="h-4 w-4 text-muted-foreground" />
+            </div>
+          )}
+        </div>
+
+        {/* Position badge - P0, P1, P2 format */}
+        {config.enabled ? (
+          <Badge 
+            variant={position === 0 ? 'default' : 'outline'} 
+            className={`w-8 h-6 flex items-center justify-center text-xs font-mono ${
+              position === 0 ? 'bg-primary text-primary-foreground' : ''
+            }`}
+          >
+            P{position}
+          </Badge>
         ) : (
-          <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
-            <GripVertical className="h-4 w-4 text-muted-foreground" />
-          </div>
+          <div className="w-8 h-6" /> 
         )}
-      </div>
 
-      {/* Position badge */}
-      <Badge variant="outline" className="w-6 h-6 flex items-center justify-center text-xs">
-        {config.position + 1}
-      </Badge>
-
-      {/* Priority info */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-sm">{priority.name}</span>
+        {/* Priority name and type badge */}
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="font-medium text-sm cursor-help">{priority.name}</span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs">
+              <p>{priority.description}</p>
+            </TooltipContent>
+          </Tooltip>
           <Badge variant={priority.type === 'holdover' ? 'secondary' : 'outline'} className="text-xs">
             {priority.type === 'holdover' ? 'Filter' : 'Optimize'}
           </Badge>
+          {hasSubConditions && config.enabled && (
+            <Badge variant="outline" className="text-xs">
+              {enabledSubCount}/{priority.subConditions!.length} active
+            </Badge>
+          )}
         </div>
-        <p className="text-xs text-muted-foreground truncate">{priority.description}</p>
+
+        {/* Expand button for sub-conditions */}
+        {hasSubConditions && config.enabled && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 w-6 p-0"
+            onClick={() => setIsExpanded(!isExpanded)}
+          >
+            {isExpanded ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </Button>
+        )}
+
+        {/* Toggle switch */}
+        <div className="flex-shrink-0">
+          {isLocked ? (
+            <Badge variant="secondary" className="text-xs">Always On</Badge>
+          ) : (
+            <Switch
+              checked={config.enabled}
+              onCheckedChange={(checked) => onToggle(priority.id, checked)}
+            />
+          )}
+        </div>
       </div>
 
-      {/* Toggle switch */}
-      <div className="flex-shrink-0">
-        {isLocked ? (
-          <Badge variant="secondary" className="text-xs">Always On</Badge>
-        ) : (
-          <Switch
-            checked={config.enabled}
-            onCheckedChange={(checked) => onToggle(priority.id, checked)}
-          />
-        )}
+      {/* Expandable sub-conditions */}
+      {hasSubConditions && config.enabled && isExpanded && (
+        <div className="px-3 pb-3 pt-0 ml-14 space-y-2 border-t">
+          <div className="pt-2 text-xs text-muted-foreground mb-2">
+            Sub-conditions (account stays if ANY enabled condition matches):
+          </div>
+          
+          {/* Available sub-conditions */}
+          {availableSubs.map(subCondition => {
+            const subConfig = config.subConditions?.find(sc => sc.id === subCondition.id);
+            const isEnabled = subConfig?.enabled ?? subCondition.defaultEnabled;
+            
+            return (
+              <div key={subCondition.id} className="flex items-center gap-3 p-2 rounded bg-muted/50">
+                <Switch
+                  checked={isEnabled}
+                  onCheckedChange={(checked) => 
+                    onSubConditionToggle?.(priority.id, subCondition.id, checked)
+                  }
+                  className="scale-75"
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="text-sm cursor-help">{subCondition.name}</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs">
+                    <p>{subCondition.description}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            );
+          })}
+          
+          {/* Unavailable sub-conditions */}
+          {unavailableSubs.map(subCondition => (
+            <div key={subCondition.id} className="flex items-center gap-3 p-2 rounded bg-muted/30 opacity-50">
+              <Lock className="h-3 w-3 text-muted-foreground" />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-sm text-muted-foreground cursor-help">
+                    {subCondition.name}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs">
+                  <p>{subCondition.description}</p>
+                  <p className="text-xs mt-1 text-amber-500">
+                    Missing: {subCondition.requiredFields.map(f => f.field).join(', ')}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface DisabledPriorityItemProps {
+  priority: PriorityDefinition;
+  onToggle: (id: string, enabled: boolean) => void;
+}
+
+function DisabledPriorityItem({ priority, onToggle }: DisabledPriorityItemProps) {
+  return (
+    <div className="flex items-center gap-3 p-3 rounded-lg border bg-card opacity-50">
+      <div className="w-6" />
+      <div className="w-8 h-6" />
+      
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="font-medium text-sm text-muted-foreground cursor-help">
+              {priority.name}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs">
+            <p>{priority.description}</p>
+          </TooltipContent>
+        </Tooltip>
+        <Badge variant="outline" className="text-xs opacity-50">
+          {priority.type === 'holdover' ? 'Filter' : 'Optimize'}
+        </Badge>
       </div>
+
+      <Switch
+        checked={false}
+        onCheckedChange={(checked) => onToggle(priority.id, checked)}
+      />
     </div>
   );
 }
@@ -131,17 +289,32 @@ interface UnavailablePriorityItemProps {
 }
 
 function UnavailablePriorityItem({ priority }: UnavailablePriorityItemProps) {
-  const missingFields = priority.requiredFields.map(f => f.field).join(', ');
+  // Get missing fields - for sub-condition priorities, show which sub-conditions are missing
+  let missingInfo = '';
+  if (priority.subConditions && priority.subConditions.length > 0) {
+    const missingFields = priority.subConditions
+      .flatMap(sc => sc.requiredFields.map(f => f.field));
+    missingInfo = [...new Set(missingFields)].join(', ');
+  } else {
+    missingInfo = priority.requiredFields.map(f => f.field).join(', ');
+  }
 
   return (
     <div className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/30 opacity-50 cursor-not-allowed">
       <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+      <div className="w-8 h-6" />
       
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-sm text-muted-foreground">{priority.name}</span>
-        </div>
-        <p className="text-xs text-muted-foreground truncate">{priority.description}</p>
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="font-medium text-sm text-muted-foreground cursor-help">
+              {priority.name}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs">
+            <p>{priority.description}</p>
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       <Tooltip>
@@ -152,7 +325,7 @@ function UnavailablePriorityItem({ priority }: UnavailablePriorityItemProps) {
           </div>
         </TooltipTrigger>
         <TooltipContent>
-          <p>Missing data required: {missingFields}</p>
+          <p>Missing data required: {missingInfo}</p>
         </TooltipContent>
       </Tooltip>
     </div>
@@ -199,18 +372,26 @@ export function PriorityWaterfallConfig({
     detect();
   }, [buildId]);
 
-  // Get available and unavailable priorities based on current mode
-  const effectiveMode = currentMode === 'CUSTOM' 
-    ? (detectedMode?.suggestedMode || 'ENT') 
-    : currentMode;
-    
+  // Get available and unavailable priorities
+  // For CUSTOM mode, show ALL priorities
   const { available, unavailable } = getAvailablePriorities(
-    effectiveMode as Exclude<AssignmentMode, 'CUSTOM'>,
+    currentMode,
     mappedFields
   );
 
-  // Sort available priorities by current config position
-  const sortedAvailable = [...available].sort((a, b) => {
+  // Separate enabled and disabled priorities
+  const enabledPriorities = available.filter(p => {
+    const config = currentConfig.find(c => c.id === p.id);
+    return config?.enabled !== false;
+  });
+  
+  const disabledPriorities = available.filter(p => {
+    const config = currentConfig.find(c => c.id === p.id);
+    return config?.enabled === false;
+  });
+
+  // Sort enabled priorities by position
+  const sortedEnabled = [...enabledPriorities].sort((a, b) => {
     const configA = currentConfig.find(c => c.id === a.id);
     const configB = currentConfig.find(c => c.id === b.id);
     return (configA?.position ?? 999) - (configB?.position ?? 999);
@@ -221,8 +402,8 @@ export function PriorityWaterfallConfig({
     const { active, over } = event;
 
     if (over && active.id !== over.id) {
-      const oldIndex = sortedAvailable.findIndex(p => p.id === active.id);
-      const newIndex = sortedAvailable.findIndex(p => p.id === over.id);
+      const oldIndex = sortedEnabled.findIndex(p => p.id === active.id);
+      const newIndex = sortedEnabled.findIndex(p => p.id === over.id);
 
       // Check if we're trying to move a locked priority
       const activePriority = getPriorityById(active.id as string);
@@ -232,18 +413,14 @@ export function PriorityWaterfallConfig({
 
       // Check cannotGoAbove constraint
       if (activePriority?.cannotGoAbove) {
-        const constraintPriority = sortedAvailable.find(p => p.id === activePriority.cannotGoAbove);
-        if (constraintPriority) {
-          const constraintIndex = sortedAvailable.findIndex(p => p.id === activePriority.cannotGoAbove);
-          // If trying to move above the constraint priority, block it
-          if (newIndex <= constraintIndex) {
-            return; // Don't allow moving above the constraint
-          }
+        const constraintIndex = sortedEnabled.findIndex(p => p.id === activePriority.cannotGoAbove);
+        if (constraintIndex >= 0 && newIndex <= constraintIndex) {
+          return; // Don't allow moving above the constraint
         }
       }
 
       // Calculate new order
-      const newOrder = arrayMove(sortedAvailable, oldIndex, newIndex);
+      const newOrder = arrayMove(sortedEnabled, oldIndex, newIndex);
 
       // Update config with new positions
       const newConfig = currentConfig.map(c => {
@@ -261,15 +438,69 @@ export function PriorityWaterfallConfig({
 
       onConfigChange(newConfig);
     }
-  }, [sortedAvailable, currentConfig, currentMode, onModeChange, onConfigChange]);
+  }, [sortedEnabled, currentConfig, currentMode, onModeChange, onConfigChange]);
 
   // Handle priority toggle
   const handleToggle = useCallback((id: string, enabled: boolean) => {
-    const newConfig = currentConfig.map(c => 
-      c.id === id ? { ...c, enabled } : c
-    );
+    let newConfig: PriorityConfig[];
+    
+    if (enabled) {
+      // When enabling, add to the end of enabled priorities
+      const maxPosition = Math.max(...currentConfig.filter(c => c.enabled).map(c => c.position), -1);
+      newConfig = currentConfig.map(c => 
+        c.id === id ? { ...c, enabled: true, position: maxPosition + 1 } : c
+      );
+      
+      // If priority doesn't exist in config, add it
+      if (!currentConfig.find(c => c.id === id)) {
+        const priority = getPriorityById(id);
+        newConfig.push({
+          id,
+          enabled: true,
+          position: maxPosition + 1,
+          weight: priority?.defaultWeight ?? 50,
+          subConditions: priority?.subConditions?.map(sc => ({
+            id: sc.id,
+            enabled: sc.defaultEnabled
+          }))
+        });
+      }
+    } else {
+      // When disabling, remove position and reorder remaining
+      const disabledPosition = currentConfig.find(c => c.id === id)?.position ?? 999;
+      newConfig = currentConfig.map(c => {
+        if (c.id === id) {
+          return { ...c, enabled: false, position: 999 };
+        }
+        // Shift positions of priorities that were after the disabled one
+        if (c.enabled && c.position > disabledPosition) {
+          return { ...c, position: c.position - 1 };
+        }
+        return c;
+      });
+    }
 
     // Switch to CUSTOM mode when user toggles
+    if (currentMode !== 'CUSTOM') {
+      onModeChange('CUSTOM');
+    }
+
+    onConfigChange(newConfig);
+  }, [currentConfig, currentMode, onModeChange, onConfigChange]);
+
+  // Handle sub-condition toggle
+  const handleSubConditionToggle = useCallback((priorityId: string, subConditionId: string, enabled: boolean) => {
+    const newConfig = currentConfig.map(c => {
+      if (c.id === priorityId) {
+        const subConditions = c.subConditions?.map(sc =>
+          sc.id === subConditionId ? { ...sc, enabled } : sc
+        ) ?? [];
+        return { ...c, subConditions };
+      }
+      return c;
+    });
+
+    // Switch to CUSTOM mode when user toggles sub-conditions
     if (currentMode !== 'CUSTOM') {
       onModeChange('CUSTOM');
     }
@@ -302,15 +533,23 @@ export function PriorityWaterfallConfig({
 
   // Get config for a priority, or create a default one
   const getConfig = (priorityId: string): PriorityConfig => {
-    return currentConfig.find(c => c.id === priorityId) || {
+    const existing = currentConfig.find(c => c.id === priorityId);
+    if (existing) return existing;
+    
+    const priority = getPriorityById(priorityId);
+    return {
       id: priorityId,
       enabled: true,
       position: 999,
-      weight: getPriorityById(priorityId)?.defaultWeight || 50
+      weight: priority?.defaultWeight || 50,
+      subConditions: priority?.subConditions?.map(sc => ({
+        id: sc.id,
+        enabled: sc.defaultEnabled
+      }))
     };
   };
 
-  const enabledCount = currentConfig.filter(c => c.enabled).length;
+  const enabledCount = sortedEnabled.length;
 
   return (
     <Card className="w-full">
@@ -357,9 +596,7 @@ export function PriorityWaterfallConfig({
                 <SelectItem value="ENT">{getModeLabel('ENT')}</SelectItem>
                 <SelectItem value="COMMERCIAL">{getModeLabel('COMMERCIAL')}</SelectItem>
                 <SelectItem value="EMEA">{getModeLabel('EMEA')}</SelectItem>
-                {currentMode === 'CUSTOM' && (
-                  <SelectItem value="CUSTOM">{getModeLabel('CUSTOM')}</SelectItem>
-                )}
+                <SelectItem value="CUSTOM">{getModeLabel('CUSTOM')}</SelectItem>
               </SelectContent>
             </Select>
 
@@ -394,31 +631,55 @@ export function PriorityWaterfallConfig({
           </span>
         </div>
 
-        {/* Available priorities - draggable */}
+        {/* Enabled priorities - draggable */}
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}
         >
           <SortableContext
-            items={sortedAvailable.map(p => p.id)}
+            items={sortedEnabled.map(p => p.id)}
             strategy={verticalListSortingStrategy}
           >
             <div className="space-y-2">
-              {sortedAvailable.map(priority => (
+              {sortedEnabled.map((priority, index) => (
                 <SortablePriorityItem
                   key={priority.id}
                   priority={priority}
                   config={getConfig(priority.id)}
+                  position={index}
                   onToggle={handleToggle}
+                  onSubConditionToggle={handleSubConditionToggle}
                   isLocked={priority.isLocked || false}
+                  mappedFields={mappedFields}
                 />
               ))}
             </div>
           </SortableContext>
         </DndContext>
 
-        {/* Unavailable priorities */}
+        {/* Disabled priorities */}
+        {disabledPriorities.length > 0 && (
+          <div className="space-y-2 pt-4 border-t">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-muted-foreground">
+                Disabled
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              {disabledPriorities.map(priority => (
+                <DisabledPriorityItem 
+                  key={priority.id} 
+                  priority={priority}
+                  onToggle={handleToggle}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Unavailable priorities (missing data) */}
         {unavailable.length > 0 && (
           <div className="space-y-2 pt-4 border-t">
             <div className="flex items-center gap-2">
@@ -446,4 +707,3 @@ export function PriorityWaterfallConfig({
     </Card>
   );
 }
-
