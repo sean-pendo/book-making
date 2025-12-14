@@ -35,7 +35,8 @@ const ALWAYS_AVAILABLE_FIELDS = {
     'arr',
     'is_customer',
     'is_parent',
-    'exclude_from_reassignment'
+    'exclude_from_reassignment',
+    'is_strategic'
   ]),
   sales_reps: new Set([
     'rep_id',
@@ -154,7 +155,8 @@ async function checkAccountFieldPresence(buildId: string): Promise<Set<string>> 
     'owner_id',
     'renewal_quarter',
     'hq_country',
-    'expansion_tier'
+    'expansion_tier',
+    'employees'  // For team alignment priority
   ];
 
   const presentFields = new Set<string>();
@@ -190,7 +192,8 @@ async function checkSalesRepFieldPresence(buildId: string): Promise<Set<string>>
     'region',
     'is_strategic_rep',
     'flm',
-    'slm'
+    'slm',
+    'team'  // For team alignment priority (contains tier values: SMB/Growth/MM/ENT)
   ];
 
   const presentFields = new Set<string>();

@@ -36,6 +36,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Slider } from '@/components/ui/slider';
+import { Label } from '@/components/ui/label';
 import { GripVertical, Lock, HelpCircle, RotateCcw, Sparkles, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   AssignmentMode,
@@ -67,6 +69,7 @@ interface SortablePriorityItemProps {
   position: number;
   onToggle: (id: string, enabled: boolean) => void;
   onSubConditionToggle?: (priorityId: string, subConditionId: string, enabled: boolean) => void;
+  onSettingsChange?: (priorityId: string, key: string, value: unknown) => void;
   isLocked: boolean;
   mappedFields: { accounts: Set<string>; sales_reps: Set<string>; opportunities: Set<string> };
 }
@@ -77,6 +80,7 @@ function SortablePriorityItem({
   position,
   onToggle, 
   onSubConditionToggle,
+  onSettingsChange,
   isLocked,
   mappedFields
 }: SortablePriorityItemProps) {
@@ -103,8 +107,10 @@ function SortablePriorityItem({
     ? getAvailableSubConditions(priority, mappedFields)
     : { available: [], unavailable: [] };
 
-  // Count enabled sub-conditions
-  const enabledSubCount = config.subConditions?.filter(sc => sc.enabled).length ?? 0;
+  // Count enabled sub-conditions that also have data available
+  const enabledSubCount = config.subConditions?.filter(sc => 
+    sc.enabled && availableSubs.some(avail => avail.id === sc.id)
+  ).length ?? 0;
 
   return (
     <div
@@ -128,7 +134,7 @@ function SortablePriorityItem({
           )}
         </div>
 
-        {/* Position badge - P0, P1, P2 format */}
+        {/* Position badge - P0, P1, P2 format (RO for Residual Optimization) */}
         {config.enabled ? (
           <Badge 
             variant={position === 0 ? 'default' : 'outline'} 
@@ -136,7 +142,7 @@ function SortablePriorityItem({
               position === 0 ? 'bg-primary text-primary-foreground' : ''
             }`}
           >
-            P{position}
+            {priority.id === 'arr_balance' ? 'RO' : `P${position}`}
           </Badge>
         ) : (
           <div className="w-8 h-6" /> 
@@ -243,6 +249,31 @@ function SortablePriorityItem({
               </Tooltip>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Team Alignment Settings - slider for minimum tier match % */}
+      {priority.id === 'team_alignment' && config.enabled && (
+        <div className="px-3 pb-3 pt-0 ml-14 border-t">
+          <div className="pt-3">
+            <Label className="text-xs font-medium">Minimum Tier Match %</Label>
+            <div className="flex items-center gap-4 mt-2">
+              <Slider 
+                value={[((config.settings?.minTierMatchPct as number) ?? 80)]}
+                onValueChange={(v) => onSettingsChange?.(priority.id, 'minTierMatchPct', v[0])}
+                min={50}
+                max={100}
+                step={5}
+                className="flex-1"
+              />
+              <span className="text-sm font-mono w-12 text-right">
+                {((config.settings?.minTierMatchPct as number) ?? 80)}%
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Each rep must have at least this % of accounts matching their tier (SMB/Growth/MM/ENT)
+            </p>
+          </div>
         </div>
       )}
     </div>
@@ -356,13 +387,21 @@ export function PriorityWaterfallConfig({
     })
   );
 
-  // Detect mode on mount
+  // Detect mode on mount and auto-apply if not custom
   useEffect(() => {
     async function detect() {
       setIsDetecting(true);
       try {
         const result = await detectAssignmentMode(buildId);
         setDetectedMode(result);
+        
+        // Auto-apply detected mode if current mode is different and not CUSTOM
+        // This ensures the dropdown shows the detected mode by default
+        if (result.suggestedMode !== currentMode && currentMode !== 'CUSTOM') {
+          onModeChange(result.suggestedMode);
+          const defaultConfig = getDefaultPriorityConfig(result.suggestedMode);
+          onConfigChange(defaultConfig);
+        }
       } catch (error) {
         console.error('[PriorityConfig] Mode detection failed:', error);
       } finally {
@@ -370,7 +409,7 @@ export function PriorityWaterfallConfig({
       }
     }
     detect();
-  }, [buildId]);
+  }, [buildId]); // Only run on mount/buildId change, not on currentMode change
 
   // Get available and unavailable priorities
   // For CUSTOM mode, show ALL priorities
@@ -443,22 +482,85 @@ export function PriorityWaterfallConfig({
   // Handle priority toggle
   const handleToggle = useCallback((id: string, enabled: boolean) => {
     let newConfig: PriorityConfig[];
+    const priority = getPriorityById(id);
     
     if (enabled) {
-      // When enabling, add to the end of enabled priorities
-      const maxPosition = Math.max(...currentConfig.filter(c => c.enabled).map(c => c.position), -1);
-      newConfig = currentConfig.map(c => 
-        c.id === id ? { ...c, enabled: true, position: maxPosition + 1 } : c
-      );
+      // When enabling, determine proper position respecting cannotGoAbove constraint
+      let targetPosition: number;
+      
+      // Check if this priority has a cannotGoAbove constraint
+      if (priority?.cannotGoAbove) {
+        // Find the position of the constraint priority
+        const constraintConfig = currentConfig.find(c => c.id === priority.cannotGoAbove && c.enabled);
+        if (constraintConfig) {
+          // Must be placed AFTER the constraint priority
+          targetPosition = constraintConfig.position + 1;
+          
+          // Shift all priorities at or after this position
+          newConfig = currentConfig.map(c => {
+            if (c.id === id) {
+              return { ...c, enabled: true, position: targetPosition };
+            }
+            if (c.enabled && c.position >= targetPosition) {
+              return { ...c, position: c.position + 1 };
+            }
+            return c;
+          });
+        } else {
+          // Constraint priority not enabled, add at end
+          const maxPosition = Math.max(...currentConfig.filter(c => c.enabled).map(c => c.position), -1);
+          targetPosition = maxPosition + 1;
+          newConfig = currentConfig.map(c => 
+            c.id === id ? { ...c, enabled: true, position: targetPosition } : c
+          );
+        }
+      } else {
+        // No constraint, but check if enabling geo_and_continuity - push geography/continuity down
+        if (id === 'geo_and_continuity') {
+          // Find the first position of geography or continuity
+          const geoConfig = currentConfig.find(c => c.id === 'geography' && c.enabled);
+          const contConfig = currentConfig.find(c => c.id === 'continuity' && c.enabled);
+          const firstConstrainedPosition = Math.min(
+            geoConfig?.position ?? 999,
+            contConfig?.position ?? 999
+          );
+          
+          if (firstConstrainedPosition < 999) {
+            // Insert at that position and shift geography/continuity down
+            targetPosition = firstConstrainedPosition;
+            newConfig = currentConfig.map(c => {
+              if (c.id === id) {
+                return { ...c, enabled: true, position: targetPosition };
+              }
+              if (c.enabled && c.position >= targetPosition) {
+                return { ...c, position: c.position + 1 };
+              }
+              return c;
+            });
+          } else {
+            // Neither is enabled, just add at end
+            const maxPosition = Math.max(...currentConfig.filter(c => c.enabled).map(c => c.position), -1);
+            targetPosition = maxPosition + 1;
+            newConfig = currentConfig.map(c => 
+              c.id === id ? { ...c, enabled: true, position: targetPosition } : c
+            );
+          }
+        } else {
+          // Regular priority, add at end
+          const maxPosition = Math.max(...currentConfig.filter(c => c.enabled).map(c => c.position), -1);
+          targetPosition = maxPosition + 1;
+          newConfig = currentConfig.map(c => 
+            c.id === id ? { ...c, enabled: true, position: targetPosition } : c
+          );
+        }
+      }
       
       // If priority doesn't exist in config, add it
       if (!currentConfig.find(c => c.id === id)) {
-        const priority = getPriorityById(id);
         newConfig.push({
           id,
           enabled: true,
-          position: maxPosition + 1,
-          weight: priority?.defaultWeight ?? 50,
+          position: targetPosition,
           subConditions: priority?.subConditions?.map(sc => ({
             id: sc.id,
             enabled: sc.defaultEnabled
@@ -508,6 +610,29 @@ export function PriorityWaterfallConfig({
     onConfigChange(newConfig);
   }, [currentConfig, currentMode, onModeChange, onConfigChange]);
 
+  // Handle priority-specific settings change (e.g., team_alignment threshold)
+  const handleSettingsChange = useCallback((priorityId: string, key: string, value: unknown) => {
+    const newConfig = currentConfig.map(c => {
+      if (c.id === priorityId) {
+        return { 
+          ...c, 
+          settings: { 
+            ...(c.settings || {}), 
+            [key]: value 
+          } 
+        };
+      }
+      return c;
+    });
+
+    // Switch to CUSTOM mode when user changes settings
+    if (currentMode !== 'CUSTOM') {
+      onModeChange('CUSTOM');
+    }
+
+    onConfigChange(newConfig);
+  }, [currentConfig, currentMode, onModeChange, onConfigChange]);
+
   // Handle mode change from dropdown
   const handleModeSelect = useCallback((mode: string) => {
     const newMode = mode as AssignmentMode;
@@ -541,7 +666,6 @@ export function PriorityWaterfallConfig({
       id: priorityId,
       enabled: true,
       position: 999,
-      weight: priority?.defaultWeight || 50,
       subConditions: priority?.subConditions?.map(sc => ({
         id: sc.id,
         enabled: sc.defaultEnabled
@@ -596,6 +720,7 @@ export function PriorityWaterfallConfig({
                 <SelectItem value="ENT">{getModeLabel('ENT')}</SelectItem>
                 <SelectItem value="COMMERCIAL">{getModeLabel('COMMERCIAL')}</SelectItem>
                 <SelectItem value="EMEA">{getModeLabel('EMEA')}</SelectItem>
+                <SelectItem value="APAC">{getModeLabel('APAC')}</SelectItem>
                 <SelectItem value="CUSTOM">{getModeLabel('CUSTOM')}</SelectItem>
               </SelectContent>
             </Select>
@@ -650,6 +775,7 @@ export function PriorityWaterfallConfig({
                   position={index}
                   onToggle={handleToggle}
                   onSubConditionToggle={handleSubConditionToggle}
+                  onSettingsChange={handleSettingsChange}
                   isLocked={priority.isLocked || false}
                   mappedFields={mappedFields}
                 />

@@ -145,12 +145,12 @@ export class BalanceThresholdCalculator {
       if (tier === 'tier 1' || tier === 'tier1') totalTier1++;
       if (tier === 'tier 2' || tier === 'tier2') totalTier2++;
       
-      // Quarterly renewals
-      const quarter = account.renewal_quarter?.toUpperCase();
-      if (quarter === 'Q1') q1Count++;
-      if (quarter === 'Q2') q2Count++;
-      if (quarter === 'Q3') q3Count++;
-      if (quarter === 'Q4') q4Count++;
+      // Quarterly renewals (handles both "Q1" and "Q1-FY27" formats)
+      const quarter = account.renewal_quarter?.toUpperCase() || '';
+      if (quarter.startsWith('Q1')) q1Count++;
+      if (quarter.startsWith('Q2')) q2Count++;
+      if (quarter.startsWith('Q3')) q3Count++;
+      if (quarter.startsWith('Q4')) q4Count++;
     });
     
     console.log(`\n📈 Totals Across All Accounts:`);

@@ -3,9 +3,26 @@
  * 
  * Defines all available assignment priorities with their metadata,
  * required fields, types (holdover vs optimization), and default positions per mode.
+ * 
+ * ⚠️ PARTIAL DEPRECATION NOTICE (2025-12-11):
+ * 
+ * STILL IN USE (for UI configuration displays):
+ * - Type exports: AssignmentMode, PriorityConfig, PriorityDefinition, SubCondition
+ * - Registry data: PRIORITY_REGISTRY, getPriorityById, getDefaultPriorityConfig
+ * - Used by: WaterfallLogicExplainer, PriorityWaterfallConfig, FullAssignmentConfig, 
+ *            AssignmentEngine page, modeDetectionService
+ * 
+ * NOT USED FOR ACTUAL EXECUTION:
+ * - The priority definitions here are NOT used to drive assignment logic
+ * - Actual assignment uses `simplifiedAssignmentEngine.ts` which has hardcoded priority levels
+ * - This registry is primarily for UI display/configuration purposes
+ * 
+ * To align UI config with actual execution:
+ * - Either connect this registry to simplifiedAssignmentEngine
+ * - Or update UI components to reflect the hardcoded priority levels
  */
 
-export type AssignmentMode = 'ENT' | 'COMMERCIAL' | 'EMEA' | 'CUSTOM';
+export type AssignmentMode = 'ENT' | 'COMMERCIAL' | 'EMEA' | 'APAC' | 'CUSTOM';
 
 export type PriorityType = 'holdover' | 'optimization';
 
@@ -32,7 +49,6 @@ export interface PriorityDefinition {
   modes: Exclude<AssignmentMode, 'CUSTOM'>[]; // Which presets include this priority
   requiredFields: RequiredField[];
   type: PriorityType;
-  defaultWeight: number; // 0-100, used in HiGHS objective function
   isLocked?: boolean; // If true, cannot be reordered or disabled
   cannotGoAbove?: string; // If set, this priority cannot be dragged above the specified priority ID
   defaultPosition: Partial<Record<Exclude<AssignmentMode, 'CUSTOM'>, number>>;
@@ -48,8 +64,8 @@ export interface PriorityConfig {
   id: string;
   enabled: boolean;
   position: number;
-  weight: number;
   subConditions?: SubConditionConfig[]; // For priorities with sub-conditions
+  settings?: Record<string, unknown>; // Priority-specific settings (e.g., team_alignment: { minTierMatchPct: 80 })
 }
 
 /**
@@ -64,24 +80,33 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     id: 'manual_holdover',
     name: 'Manual Holdover & Strategic Accounts',
     description: 'Excluded accounts stay put, strategic accounts stay with strategic reps',
-    modes: ['ENT', 'COMMERCIAL', 'EMEA'],
+    modes: ['ENT', 'COMMERCIAL', 'EMEA', 'APAC'],
     requiredFields: [],
     type: 'holdover',
-    defaultWeight: 100,
     isLocked: true, // P0 - Always first, cannot be disabled or moved
-    defaultPosition: { ENT: 0, COMMERCIAL: 0, EMEA: 0 }
+    defaultPosition: { ENT: 0, COMMERCIAL: 0, EMEA: 0, APAC: 0 }
   },
   
-  // ========== P1: STABILITY ACCOUNTS (expandable sub-conditions) ==========
+  // ========== P1: SALES TOOLS BUCKET (Commercial only) ==========
+  {
+    id: 'sales_tools_bucket',
+    name: 'Sales Tools Bucket',
+    description: 'Route customer accounts under $25K ARR to Sales Tools (no SLM/FLM hierarchy)',
+    modes: ['COMMERCIAL'],
+    requiredFields: [{ table: 'accounts', field: 'hierarchy_bookings_arr_converted' }],
+    type: 'holdover',
+    defaultPosition: { COMMERCIAL: 1 }
+  },
+  
+  // ========== P2: STABILITY ACCOUNTS (expandable sub-conditions) ==========
   {
     id: 'stability_accounts',
     name: 'Stability Accounts',
     description: 'Accounts meeting stability conditions stay with current owner',
-    modes: ['ENT', 'COMMERCIAL', 'EMEA'],
+    modes: ['ENT', 'COMMERCIAL', 'EMEA', 'APAC'],
     requiredFields: [], // No required fields - uses sub-conditions
     type: 'holdover',
-    defaultWeight: 95,
-    defaultPosition: { ENT: 1, COMMERCIAL: 1, EMEA: 1 },
+    defaultPosition: { ENT: 1, COMMERCIAL: 2, EMEA: 1, APAC: 1 },
     subConditions: [
       {
         id: 'cre_risk',
@@ -93,15 +118,8 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
       {
         id: 'renewal_soon',
         name: 'Renewal Soon',
-        description: 'Accounts with renewal event date within 90 days stay with current owner',
-        requiredFields: [{ table: 'opportunities', field: 'renewal_event_date' }],
-        defaultEnabled: true
-      },
-      {
-        id: 'top_10_arr',
-        name: 'Top 10% ARR',
-        description: 'Top 10% accounts by ARR within FLM hierarchy stay with current owner',
-        requiredFields: [{ table: 'accounts', field: 'hierarchy_bookings_arr_converted' }],
+        description: 'Accounts with renewal date within 90 days stay with current owner',
+        requiredFields: [{ table: 'accounts', field: 'renewal_date' }],
         defaultEnabled: true
       },
       {
@@ -112,81 +130,71 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
         defaultEnabled: true
       },
       {
-        id: 'expansion_opps',
-        name: 'Open Expansion Opps',
-        description: 'Accounts with open expansion opportunities stay with current owner',
-        requiredFields: [{ table: 'opportunities', field: 'type' }],
-        defaultEnabled: true
-      },
-      {
         id: 'recent_owner_change',
         name: 'Recent Owner Change',
-        description: 'Accounts that changed owner recently stay to minimize disruption',
+        description: 'Accounts that changed owner in last 90 days stay to minimize disruption',
         requiredFields: [{ table: 'accounts', field: 'owner_change_date' }],
-        defaultEnabled: false // Off by default - optional
+        defaultEnabled: true
       }
     ]
   },
   
-  // ========== P2+: OPTIMIZATION PRIORITIES ==========
+  // ========== P3: TEAM ALIGNMENT ==========
+  {
+    id: 'team_alignment',
+    name: 'Team Alignment',
+    description: 'Match account employee count to rep team tier (SMB/Growth/MM/ENT)',
+    modes: ['COMMERCIAL', 'EMEA', 'APAC'],
+    requiredFields: [
+      { table: 'accounts', field: 'employees' },
+      { table: 'sales_reps', field: 'team' }  // Uses 'team' field which contains tier values (SMB/Growth/MM/ENT)
+    ],
+    type: 'optimization',
+    defaultPosition: { COMMERCIAL: 3, EMEA: 5, APAC: 5 }
+  },
+  
+  // ========== P4+: OPTIMIZATION PRIORITIES ==========
   {
     id: 'geo_and_continuity',
     name: 'Geography + Continuity',
     description: 'Account stays with current owner if they match geography AND rep has capacity',
-    modes: ['ENT', 'COMMERCIAL', 'EMEA'],
+    modes: ['ENT', 'COMMERCIAL', 'EMEA', 'APAC'],
     requiredFields: [],
-    type: 'optimization', // Changed to optimization - checks rep capacity
-    defaultWeight: 90,
-    defaultPosition: { ENT: 2, COMMERCIAL: 2, EMEA: 2 }
-  },
-  
-  {
-    id: 'geography',
-    name: 'Geographic Match',
-    description: 'Match account territory to rep region for regional alignment',
-    modes: ['ENT', 'COMMERCIAL', 'EMEA'],
-    requiredFields: [], // Core field always available
     type: 'optimization',
-    defaultWeight: 75,
-    cannotGoAbove: 'geo_and_continuity', // Cannot be positioned above the combined priority
-    defaultPosition: { ENT: 3, COMMERCIAL: 4, EMEA: 3 }
+    defaultPosition: { ENT: 2, COMMERCIAL: 4, EMEA: 2, APAC: 2 }
   },
   
   {
     id: 'continuity',
     name: 'Account Continuity',
     description: 'Prefer keeping accounts with their current owner when balanced',
-    modes: ['ENT', 'COMMERCIAL', 'EMEA'],
-    requiredFields: [], // Core field always available
+    modes: ['ENT', 'COMMERCIAL', 'EMEA', 'APAC'],
+    requiredFields: [],
     type: 'optimization',
-    defaultWeight: 65,
-    cannotGoAbove: 'geo_and_continuity', // Cannot be positioned above the combined priority
-    defaultPosition: { ENT: 4, COMMERCIAL: 5, EMEA: 4 }
+    cannotGoAbove: 'geo_and_continuity',
+    defaultPosition: { ENT: 3, COMMERCIAL: 5, EMEA: 3, APAC: 3 }
+  },
+  
+  {
+    id: 'geography',
+    name: 'Geographic Match',
+    description: 'Match account territory to rep region for regional alignment',
+    modes: ['ENT', 'COMMERCIAL', 'EMEA', 'APAC'],
+    requiredFields: [],
+    type: 'optimization',
+    cannotGoAbove: 'geo_and_continuity',
+    defaultPosition: { ENT: 4, COMMERCIAL: 6, EMEA: 4, APAC: 4 }
   },
   
   {
     id: 'arr_balance',
-    name: 'Next Best Reps',
-    description: 'Assign to reps with most available capacity for balanced distribution',
-    modes: ['ENT', 'COMMERCIAL', 'EMEA'],
-    requiredFields: [], // No specific field required, always available
+    name: 'Residual Optimization',
+    description: 'Final stage: assigns remaining accounts using multi-metric balancing',
+    modes: ['ENT', 'COMMERCIAL', 'EMEA', 'APAC'],
+    requiredFields: [],
     type: 'optimization',
-    defaultWeight: 60,
-    defaultPosition: { ENT: 5, COMMERCIAL: 6, EMEA: 5 }
-  },
-  
-  // ========== COMMERCIAL ONLY: RS ROUTING ==========
-  {
-    id: 'rs_routing',
-    name: 'FLM Routing (≤$25k ARR)',
-    description: 'Route accounts with ARR ≤$25k to the FLM (First Line Manager)',
-    modes: ['COMMERCIAL'],
-    requiredFields: [
-      { table: 'accounts', field: 'hierarchy_bookings_arr_converted' }
-    ],
-    type: 'optimization',
-    defaultWeight: 80,
-    defaultPosition: { COMMERCIAL: 3 }
+    isLocked: true,
+    defaultPosition: { ENT: 5, COMMERCIAL: 7, EMEA: 6, APAC: 6 }
   }
 ];
 
@@ -208,11 +216,12 @@ export function getDefaultPriorityConfig(mode: Exclude<AssignmentMode, 'CUSTOM'>
       id: p.id,
       enabled: true,
       position: p.defaultPosition[mode] ?? 999,
-      weight: p.defaultWeight,
       subConditions: p.subConditions?.map(sc => ({
         id: sc.id,
         enabled: sc.defaultEnabled
-      }))
+      })),
+      // Add default settings for team_alignment
+      settings: p.id === 'team_alignment' ? { minTierMatchPct: 80 } : undefined
     }))
     .sort((a, b) => a.position - b.position);
 }

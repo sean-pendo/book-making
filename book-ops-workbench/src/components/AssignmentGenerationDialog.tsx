@@ -240,9 +240,12 @@ export const AssignmentGenerationDialog: React.FC<AssignmentGenerationDialogProp
                 const finalIsActive = isActive || isAIOptimizationActive;
                 
                 // Calculate progress percentage for AI stage
-                const aiProgressPercentage = isAIOptimizationActive && batchProgress 
-                  ? Math.round((batchProgress.current / batchProgress.total) * 100)
-                  : 0;
+                // Show 100% when completed to prevent flash to 0
+                const aiProgressPercentage = isAIOptimizationCompleted 
+                  ? 100
+                  : isAIOptimizationActive && batchProgress 
+                    ? Math.round((batchProgress.current / batchProgress.total) * 100)
+                    : 0;
                 
                 return (
                   <div key={stage.id} className="flex items-center gap-2 p-2 rounded-md bg-muted/30">

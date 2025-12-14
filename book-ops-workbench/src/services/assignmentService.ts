@@ -392,12 +392,12 @@ class AssignmentService {
     try {
       console.log(`[AssignmentService] 🔄 Cascading new assignments to child accounts and opportunities...`);
 
-      // First, get all child account IDs for all proposals
+      // First, get all child account IDs for all proposals (including lock status)
       const parentAccountIds = proposals.map(p => p.accountId);
       
       const { data: childAccounts, error: childError } = await supabase
         .from('accounts')
-        .select('sfdc_account_id, ultimate_parent_id')
+        .select('sfdc_account_id, ultimate_parent_id, exclude_from_reassignment')
         .eq('build_id', buildId)
         .in('ultimate_parent_id', parentAccountIds);
 
@@ -406,19 +406,24 @@ class AssignmentService {
         // Continue without child accounts if query fails
       }
 
-      // Create a map of parent -> child account IDs
+      // Create a map of parent -> NON-LOCKED child account IDs (for opportunity cascade)
+      // Locked children should retain their own owner, so their opportunities shouldn't be updated
       const parentToChildMap = new Map<string, string[]>();
       proposals.forEach(p => {
         parentToChildMap.set(p.accountId, [p.accountId]); // Include parent itself
       });
 
       childAccounts?.forEach(child => {
+        // Skip locked children - they retain their own ownership
+        if (child.exclude_from_reassignment === true) {
+          return;
+        }
         if (child.ultimate_parent_id && parentToChildMap.has(child.ultimate_parent_id)) {
           parentToChildMap.get(child.ultimate_parent_id)!.push(child.sfdc_account_id);
         }
       });
 
-      // Update child accounts with new_owner_* fields
+      // Update child accounts with new_owner_* fields (skip locked children)
       const childAccountPromises = proposals.map(async (proposal) => {
         try {
           const { error } = await supabase
@@ -429,7 +434,8 @@ class AssignmentService {
             })
             .eq('ultimate_parent_id', proposal.accountId)
             .eq('build_id', buildId)
-            .neq('is_parent', true); // Only update child accounts
+            .neq('is_parent', true) // Only update child accounts
+            .or('exclude_from_reassignment.is.null,exclude_from_reassignment.eq.false'); // Skip locked children
 
           if (error) {
             console.warn(`[AssignmentService] Warning updating child accounts for ${proposal.accountId}:`, error);
@@ -1093,8 +1099,16 @@ class AssignmentService {
     try {
       console.log(`[AssignmentService] Executing ${proposals.length} parent account assignments`);
       
-      // Build update payload for batch operation
-      const updates = proposals.reduce((acc, proposal) => {
+      // Separate Sales Tools accounts (empty proposedOwnerId) from normal assignments
+      const salesToolsProposals = proposals.filter(p => !p.proposedOwnerId || p.proposedOwnerId === '');
+      const normalProposals = proposals.filter(p => p.proposedOwnerId && p.proposedOwnerId !== '');
+      
+      if (salesToolsProposals.length > 0) {
+        console.log(`[AssignmentService] 📦 ${salesToolsProposals.length} accounts routed to Sales Tools (no owner cascade)`);
+      }
+      
+      // Build update payload for batch operation (only normal assignments)
+      const updates = normalProposals.reduce((acc, proposal) => {
         acc[proposal.accountId] = {
           new_owner_id: proposal.proposedOwnerId,
           new_owner_name: proposal.proposedOwnerName
@@ -1102,25 +1116,49 @@ class AssignmentService {
         return acc;
       }, {} as Record<string, { new_owner_id: string; new_owner_name: string }>);
 
-      console.log(`[AssignmentService] Batch updating ${proposals.length} accounts using RPC...`);
-      const startTime = Date.now();
-      
-      // Use batch RPC function for ultra-fast updates
-      const { data: updatedCount, error: updateError } = await supabase
-        .rpc('batch_update_account_owners', {
-          p_build_id: buildId,
-          p_updates: updates
-        });
-
-      if (updateError) {
-        console.error('[AssignmentService] Batch update failed:', updateError);
+      // Only batch update accounts with normal assignments (not Sales Tools)
+      if (Object.keys(updates).length > 0) {
+        console.log(`[AssignmentService] Batch updating ${normalProposals.length} accounts using RPC...`);
+        const startTime = Date.now();
         
-        // Fallback: Use chunked individual updates
-        console.log('[AssignmentService] Falling back to chunked updates...');
-        await this.batchUpdateAccountsChunked(buildId, proposals);
-      } else {
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-        console.log(`[AssignmentService] ✅ Batch updated ${updatedCount} accounts in ${elapsed}s`);
+        // Use batch RPC function for ultra-fast updates
+        const { data: updatedCount, error: updateError } = await supabase
+          .rpc('batch_update_account_owners', {
+            p_build_id: buildId,
+            p_updates: updates
+          });
+
+        if (updateError) {
+          console.error('[AssignmentService] Batch update failed:', updateError);
+          
+          // Fallback: Use chunked individual updates (only for normal proposals)
+          console.log('[AssignmentService] Falling back to chunked updates...');
+          await this.batchUpdateAccountsChunked(buildId, normalProposals);
+        } else {
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+          console.log(`[AssignmentService] ✅ Batch updated ${updatedCount} accounts in ${elapsed}s`);
+        }
+      }
+      
+      // Update Sales Tools accounts separately (set new_owner to null/'Sales Tools')
+      if (salesToolsProposals.length > 0) {
+        console.log(`[AssignmentService] Updating ${salesToolsProposals.length} Sales Tools accounts...`);
+        const salesToolsAccountIds = salesToolsProposals.map(p => p.accountId);
+        
+        const { error: salesToolsError } = await supabase
+          .from('accounts')
+          .update({
+            new_owner_id: null,
+            new_owner_name: 'Sales Tools'
+          })
+          .eq('build_id', buildId)
+          .in('sfdc_account_id', salesToolsAccountIds);
+        
+        if (salesToolsError) {
+          console.error('[AssignmentService] Sales Tools update failed:', salesToolsError);
+        } else {
+          console.log(`[AssignmentService] ✅ Updated ${salesToolsProposals.length} Sales Tools accounts`);
+        }
       }
 
       // CRITICAL: Update assignments table to mark as approved and preserve reasoning
@@ -1128,13 +1166,14 @@ class AssignmentService {
       const currentUser = await supabase.auth.getUser();
       
       // Use upsert to ensure assignment records exist with proper rationale
+      // For Sales Tools accounts, use null for proposed_owner_id
       const assignmentRecords = proposals.map(proposal => ({
         build_id: buildId,
         sfdc_account_id: proposal.accountId,
-        proposed_owner_id: proposal.proposedOwnerId,
-        proposed_owner_name: proposal.proposedOwnerName,
+        proposed_owner_id: proposal.proposedOwnerId || null,  // null for Sales Tools
+        proposed_owner_name: proposal.proposedOwnerName || 'Sales Tools',
         proposed_team: '',
-        assignment_type: 'AUTO_COMMERCIAL',
+        assignment_type: proposal.proposedOwnerId ? 'AUTO_COMMERCIAL' : 'SALES_TOOLS',
         rationale: `${proposal.ruleApplied}: ${proposal.assignmentReason}`,
         is_approved: true,
         approved_by: currentUser.data.user?.id,
@@ -1160,21 +1199,26 @@ class AssignmentService {
 
       console.log(`[AssignmentService] ✅ Successfully marked ${proposals.length} assignments as approved with reasoning`);
       
-      // Cascade assignments to child accounts and their opportunities
-      await this.cascadeToChildAccounts(buildId, proposals);
-      await this.cascadeToOpportunities(buildId, proposals);
+      // Cascade assignments to child accounts and their opportunities (only for normal assignments)
+      // Sales Tools accounts don't cascade - they have no owner
+      if (normalProposals.length > 0) {
+        await this.cascadeToChildAccounts(buildId, normalProposals);
+        await this.cascadeToOpportunities(buildId, normalProposals);
+      }
       
       // Log assignments to audit trail
       const auditEntries = proposals.map(proposal => ({
         build_id: buildId,
         table_name: 'accounts',
         record_id: proposal.accountId,
-        action: 'ASSIGNMENT_EXECUTED',
+        action: proposal.proposedOwnerId ? 'ASSIGNMENT_EXECUTED' : 'SALES_TOOLS_ROUTED',
         new_values: {
-          new_owner_id: proposal.proposedOwnerId,
-          new_owner_name: proposal.proposedOwnerName
+          new_owner_id: proposal.proposedOwnerId || null,
+          new_owner_name: proposal.proposedOwnerName || 'Sales Tools'
         },
-        rationale: `${proposal.assignmentReason} (executed with child cascade)`,
+        rationale: proposal.proposedOwnerId 
+          ? `${proposal.assignmentReason} (executed with child cascade)`
+          : `${proposal.assignmentReason} (routed to Sales Tools - no owner)`,
         created_by: currentUser.data.user?.id
       }));
       
@@ -1255,6 +1299,7 @@ class AssignmentService {
     const cascadePromises = proposals.map(async (proposal) => {
       try {
         // Update all child accounts to match their parent's assignment (new_owner_* only)
+        // Skip locked children (exclude_from_reassignment = true) to preserve split ownership
         const { error } = await supabase
           .from('accounts')
           .update({
@@ -1263,7 +1308,8 @@ class AssignmentService {
           })
           .eq('ultimate_parent_id', proposal.accountId)
           .eq('build_id', buildId)
-          .neq('is_parent', true); // Only update child accounts
+          .neq('is_parent', true) // Only update child accounts
+          .or('exclude_from_reassignment.is.null,exclude_from_reassignment.eq.false'); // Skip locked children
 
         if (error) {
           console.warn(`[AssignmentService] Warning cascading to children of ${proposal.accountId}:`, error);

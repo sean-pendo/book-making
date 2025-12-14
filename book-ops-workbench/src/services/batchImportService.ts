@@ -522,10 +522,43 @@ export class BatchImportService {
     
     console.log(`🚀 Starting sales reps batch import: ${data.length} records, batch size: ${finalConfig.batchSize} (pure INSERT)`);
 
-    // Split data into batches
+    // Pre-process data: Auto-generate rep_id for open headcount (blank rep_id)
+    // and handle is_backfill_source flag
+    let placeholderCount = 0;
+    let backfillSourceCount = 0;
+    const processedData = data.map(row => {
+      const processed = { ...row };
+      
+      // Auto-generate rep_id if blank but name is present (Open Headcount)
+      if ((!processed.rep_id || processed.rep_id.trim() === '') && processed.name) {
+        processed.rep_id = `OPEN-${buildId.slice(0, 8)}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        processed.is_placeholder = true;
+        placeholderCount++;
+        console.log(`📝 Auto-generated rep_id for "${processed.name}": ${processed.rep_id}`);
+      }
+      
+      // If marked as backfill source, also set include_in_assignments = false
+      if (processed.is_backfill_source === true || processed.is_backfill_source === 'true') {
+        processed.is_backfill_source = true;
+        processed.include_in_assignments = false;
+        backfillSourceCount++;
+        console.log(`🔄 Rep "${processed.name}" marked as backfill source (excluded from assignments)`);
+      }
+      
+      return processed;
+    });
+
+    if (placeholderCount > 0) {
+      console.log(`📋 Generated placeholder IDs for ${placeholderCount} open headcount reps`);
+    }
+    if (backfillSourceCount > 0) {
+      console.log(`📋 Marked ${backfillSourceCount} reps as backfill sources (excluded from assignments)`);
+    }
+
+    // Split processed data into batches
     const batches: any[][] = [];
-    for (let i = 0; i < data.length; i += finalConfig.batchSize) {
-      batches.push(data.slice(i, i + finalConfig.batchSize));
+    for (let i = 0; i < processedData.length; i += finalConfig.batchSize) {
+      batches.push(processedData.slice(i, i + finalConfig.batchSize));
     }
 
     const totalBatches = batches.length;
@@ -876,10 +909,22 @@ export class BatchImportService {
           } else {
             updatedCount++;
           }
+
+          // Also sync renewal_date if account doesn't have one (rollup from opportunities)
+          const { error: dateUpdateError } = await supabase
+            .from('accounts')
+            .update({ renewal_date: renewalDate.toISOString().split('T')[0] })
+            .eq('build_id', buildId)
+            .eq('sfdc_account_id', parentId)
+            .is('renewal_date', null);  // Only if not already set from CSV
+
+          if (dateUpdateError) {
+            console.warn(`⚠️ Failed to update renewal_date for ${parentId}:`, dateUpdateError);
+          }
         }
       }
 
-      console.log(`✅ renewal_quarter sync completed: Updated ${updatedCount} parent accounts`);
+      console.log(`✅ renewal_quarter sync completed: Updated ${updatedCount} parent accounts (with renewal_date rollup)`);
     } catch (error) {
       console.error('❌ renewal_quarter sync failed:', error);
       throw error;

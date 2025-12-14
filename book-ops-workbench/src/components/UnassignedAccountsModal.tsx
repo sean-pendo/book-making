@@ -260,7 +260,7 @@ export const UnassignedAccountsModal = ({
           sfdc_account_id: accountId,
           proposed_owner_id: selectedOwner,
           proposed_owner_name: selectedOwnerData?.name || '',
-          assignment_type: account?.is_customer ? 'customer' : 'prospect',
+          assignment_type: 'MANUAL_REASSIGNMENT',
           rationale: 'Bulk assignment from unassigned accounts',
           created_by: userData.user?.id
         };

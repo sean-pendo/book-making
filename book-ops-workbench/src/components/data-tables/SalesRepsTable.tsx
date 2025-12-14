@@ -6,7 +6,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Search, Download, Users, ChevronUp, ChevronDown } from 'lucide-react';
+import { Search, Download, Users, ChevronUp, ChevronDown, ChevronRight, Layers } from 'lucide-react';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
 import { SalesRepDetailDialog } from './SalesRepDetailDialog';
 import { calculateSalesRepMetrics, type SalesRepMetrics } from '@/utils/salesRepCalculations';
@@ -26,10 +27,15 @@ interface SalesRep {
   total_atr: number;
   renewal_count: number;
   cre_risk_count: number;
+  // Backfill and placeholder fields
+  is_backfill_source?: boolean | null;
+  is_backfill_target?: boolean | null;
+  is_placeholder?: boolean | null;
 }
 
 interface SalesRepsTableProps {
   buildId: string;
+  onDataRefresh?: () => void;
 }
 
 /*
@@ -49,7 +55,142 @@ interface SalesRepsTableProps {
  * - Risk: Count of opportunities tied to both parent and children
  */
 
-export const SalesRepsTable = ({ buildId }: SalesRepsTableProps) => {
+type GroupByOption = 'none' | 'flm' | 'slm';
+
+interface GroupedReps {
+  manager: string;
+  reps: SalesRep[];
+  totals: {
+    total_accounts: number;
+    customer_accounts: number;
+    prospect_accounts: number;
+    total_arr: number;
+    total_atr: number;
+    cre_risk_count: number;
+  };
+}
+
+// Extracted row component for reuse in flat and grouped views
+const RepTableRow = ({ 
+  rep, 
+  onSelect, 
+  formatCurrency, 
+  getRiskBadge,
+  indent = false 
+}: { 
+  rep: SalesRep; 
+  onSelect: () => void; 
+  formatCurrency: (value: number) => string;
+  getRiskBadge: (riskCount: number) => React.ReactNode;
+  indent?: boolean;
+}) => (
+  <TableRow 
+    className={`cursor-pointer hover:bg-muted/50 ${indent ? 'bg-background' : ''}`}
+    onClick={onSelect}
+  >
+    <TableCell className="font-medium">
+      <div className={`flex items-center gap-2 ${indent ? 'pl-6' : ''}`}>
+        <Users className="h-4 w-4 text-muted-foreground" />
+        <div>
+          <div className="flex items-center gap-2">
+            {rep.name}
+            {rep.is_backfill_source && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700">
+                Leaving
+              </Badge>
+            )}
+            {rep.is_backfill_target && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700">
+                Backfill
+              </Badge>
+            )}
+            {rep.is_placeholder && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-gray-100 text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700">
+                Placeholder
+              </Badge>
+            )}
+          </div>
+          <div className="text-xs text-muted-foreground">Click for details</div>
+        </div>
+      </div>
+    </TableCell>
+    <TableCell>
+      <div className="flex flex-col gap-1">
+        {rep.flm && (
+          <div className="text-xs">
+            <span className="text-muted-foreground">FLM: </span>
+            <span className="font-medium">{rep.flm}</span>
+          </div>
+        )}
+        {rep.slm && (
+          <div className="text-xs">
+            <span className="text-muted-foreground">SLM: </span>
+            <span>{rep.slm}</span>
+          </div>
+        )}
+        {!rep.flm && !rep.slm && (
+          <Badge variant="secondary" className="text-xs">No Hierarchy</Badge>
+        )}
+      </div>
+    </TableCell>
+    <TableCell>
+      {rep.team ? (
+        <Badge variant="outline" className="text-xs">
+          {rep.team}
+        </Badge>
+      ) : (
+        <Badge variant="secondary" className="text-xs">No Team</Badge>
+      )}
+    </TableCell>
+    <TableCell>
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-muted-foreground">Parent:</span>
+          <span className="font-medium">{rep.parent_accounts}</span>
+        </div>
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-muted-foreground">Child:</span>
+          <span className="font-medium">{rep.child_accounts}</span>
+        </div>
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-muted-foreground">Customers:</span>
+          <span className="font-medium text-green-600">{rep.customer_accounts} parent(s)</span>
+        </div>
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-muted-foreground">Prospects:</span>
+          <span className="font-medium text-blue-600">{rep.prospect_accounts} parent(s)</span>
+        </div>
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-muted-foreground">Renewals:</span>
+          <span className="font-medium text-orange-600">{rep.renewal_count}</span>
+        </div>
+      </div>
+    </TableCell>
+    <TableCell>
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-muted-foreground">ARR:</span>
+          <span className="font-medium text-green-600">
+            {formatCurrency(rep.total_arr)}
+          </span>
+        </div>
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-muted-foreground">ATR:</span>
+          <span className="font-medium text-red-600">
+            {formatCurrency(rep.total_atr)}
+          </span>
+        </div>
+      </div>
+    </TableCell>
+    <TableCell>
+      <div className="flex flex-col gap-2">
+        {getRiskBadge(rep.cre_risk_count)}
+      </div>
+    </TableCell>
+  </TableRow>
+);
+
+export const SalesRepsTable = ({ buildId, onDataRefresh }: SalesRepsTableProps) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<FilterValues>({});
   const [selectedRep, setSelectedRep] = useState<{
@@ -62,6 +203,52 @@ export const SalesRepsTable = ({ buildId }: SalesRepsTableProps) => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [sortField, setSortField] = useState<keyof SalesRep>('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [groupBy, setGroupBy] = useState<GroupByOption>('none');
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // Toggle group expansion
+  const toggleGroup = (manager: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(manager)) {
+        next.delete(manager);
+      } else {
+        next.add(manager);
+      }
+      return next;
+    });
+  };
+
+  // Group reps by manager
+  const groupReps = (reps: SalesRep[], groupField: 'flm' | 'slm'): GroupedReps[] => {
+    const groups = new Map<string, SalesRep[]>();
+    
+    reps.forEach(rep => {
+      const manager = rep[groupField] || 'No Manager';
+      if (!groups.has(manager)) {
+        groups.set(manager, []);
+      }
+      groups.get(manager)!.push(rep);
+    });
+
+    return Array.from(groups.entries())
+      .map(([manager, groupReps]) => ({
+        manager,
+        reps: groupReps,
+        totals: {
+          total_accounts: groupReps.reduce((sum, r) => sum + r.total_accounts, 0),
+          customer_accounts: groupReps.reduce((sum, r) => sum + r.customer_accounts, 0),
+          prospect_accounts: groupReps.reduce((sum, r) => sum + r.prospect_accounts, 0),
+          total_arr: groupReps.reduce((sum, r) => sum + r.total_arr, 0),
+          total_atr: groupReps.reduce((sum, r) => sum + r.total_atr, 0),
+          cre_risk_count: groupReps.reduce((sum, r) => sum + r.cre_risk_count, 0),
+        }
+      }))
+      .sort((a, b) => {
+        // Sort by total ARR descending
+        return b.totals.total_arr - a.totals.total_arr;
+      });
+  };
 
   const filterConfigs: FilterConfig[] = [
     {
@@ -162,7 +349,7 @@ export const SalesRepsTable = ({ buildId }: SalesRepsTableProps) => {
         // Step 1: Get sales_reps first with filters applied
         let repsQuery = supabase
           .from('sales_reps')
-          .select('rep_id, name, team, flm, slm')
+          .select('rep_id, name, team, flm, slm, is_backfill_source, is_backfill_target, is_placeholder')
           .eq('build_id', buildId);
 
         // Apply rep-based search and filters
@@ -355,7 +542,44 @@ export const SalesRepsTable = ({ buildId }: SalesRepsTableProps) => {
       <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle>Sales Representatives</CardTitle>
+          <div className="flex items-center gap-4">
+            <CardTitle>Sales Representatives</CardTitle>
+            {/* Group by toggle */}
+            <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
+              <Button
+                variant={groupBy === 'none' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setGroupBy('none')}
+              >
+                Flat
+              </Button>
+              <Button
+                variant={groupBy === 'flm' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  setGroupBy('flm');
+                  setExpandedGroups(new Set()); // Collapse all when switching
+                }}
+              >
+                <Layers className="h-3 w-3 mr-1" />
+                By FLM
+              </Button>
+              <Button
+                variant={groupBy === 'slm' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  setGroupBy('slm');
+                  setExpandedGroups(new Set()); // Collapse all when switching
+                }}
+              >
+                <Layers className="h-3 w-3 mr-1" />
+                By SLM
+              </Button>
+            </div>
+          </div>
           <div className="flex items-center gap-2">
             <div className="relative">
               <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -449,12 +673,13 @@ export const SalesRepsTable = ({ buildId }: SalesRepsTableProps) => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {salesReps.map((rep) => (
-                  <TableRow 
-                    key={rep.rep_id} 
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => {
-                      try {
+                {groupBy === 'none' ? (
+                  // Flat view - render all reps directly
+                  salesReps.map((rep) => (
+                    <RepTableRow 
+                      key={rep.rep_id} 
+                      rep={rep} 
+                      onSelect={() => {
                         setSelectedRep({
                           rep_id: rep.rep_id,
                           name: rep.name,
@@ -463,95 +688,80 @@ export const SalesRepsTable = ({ buildId }: SalesRepsTableProps) => {
                           slm: rep.slm
                         });
                         setDialogOpen(true);
-                      } catch (error) {
-                        console.error('Error opening rep detail:', error);
-                      }
-                    }}
-                  >
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <Users className="h-4 w-4 text-muted-foreground" />
-                        <div>
-                          <div>{rep.name}</div>
-                          <div className="text-xs text-muted-foreground">Click for details</div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        {rep.flm && (
-                          <div className="text-xs">
-                            <span className="text-muted-foreground">FLM: </span>
-                            <span className="font-medium">{rep.flm}</span>
+                      }}
+                      formatCurrency={formatCurrency}
+                      getRiskBadge={getRiskBadge}
+                    />
+                  ))
+                ) : (
+                  // Grouped view - render by FLM or SLM
+                  groupReps(salesReps, groupBy).map((group) => (
+                    <React.Fragment key={group.manager}>
+                      {/* Group header row */}
+                      <TableRow 
+                        className="bg-muted/50 hover:bg-muted cursor-pointer"
+                        onClick={() => toggleGroup(group.manager)}
+                      >
+                        <TableCell colSpan={2}>
+                          <div className="flex items-center gap-2">
+                            <ChevronRight 
+                              className={`h-4 w-4 transition-transform ${expandedGroups.has(group.manager) ? 'rotate-90' : ''}`} 
+                            />
+                            <Layers className="h-4 w-4 text-muted-foreground" />
+                            <span className="font-semibold">{group.manager}</span>
+                            <Badge variant="secondary" className="text-xs">
+                              {group.reps.length} reps
+                            </Badge>
                           </div>
-                        )}
-                        {rep.slm && (
-                          <div className="text-xs">
-                            <span className="text-muted-foreground">SLM: </span>
-                            <span>{rep.slm}</span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {groupBy === 'flm' ? 'FLM' : 'SLM'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5 text-xs">
+                            <span className="text-green-600 font-medium">{group.totals.customer_accounts} customers</span>
+                            <span className="text-blue-600">{group.totals.prospect_accounts} prospects</span>
                           </div>
-                        )}
-                        {!rep.flm && !rep.slm && (
-                          <Badge variant="secondary" className="text-xs">No Hierarchy</Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {rep.team ? (
-                        <Badge variant="outline" className="text-xs">
-                          {rep.team}
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="text-xs">No Team</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-muted-foreground">Parent:</span>
-                          <span className="font-medium">{rep.parent_accounts}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-muted-foreground">Child:</span>
-                          <span className="font-medium">{rep.child_accounts}</span>
-                        </div>
-                         <div className="flex justify-between items-center text-xs">
-                           <span className="text-muted-foreground">Customers:</span>
-                           <span className="font-medium text-green-600">{rep.customer_accounts} parent(s)</span>
-                         </div>
-                         <div className="flex justify-between items-center text-xs">
-                           <span className="text-muted-foreground">Prospects:</span>
-                           <span className="font-medium text-blue-600">{rep.prospect_accounts} parent(s)</span>
-                         </div>
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-muted-foreground">Renewals:</span>
-                          <span className="font-medium text-orange-600">{rep.renewal_count}</span>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-muted-foreground">ARR:</span>
-                          <span className="font-medium text-green-600">
-                            {formatCurrency(rep.total_arr)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-muted-foreground">ATR:</span>
-                          <span className="font-medium text-red-600">
-                            {formatCurrency(rep.total_atr)}
-                          </span>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-2">
-                        {getRiskBadge(rep.cre_risk_count)}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5 text-xs">
+                            <span className="text-green-600 font-medium">{formatCurrency(group.totals.total_arr)} ARR</span>
+                            <span className="text-red-600">{formatCurrency(group.totals.total_atr)} ATR</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {group.totals.cre_risk_count > 0 && (
+                            <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
+                              {group.totals.cre_risk_count} at risk
+                            </Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                      {/* Expanded group members */}
+                      {expandedGroups.has(group.manager) && group.reps.map((rep) => (
+                        <RepTableRow 
+                          key={rep.rep_id} 
+                          rep={rep} 
+                          onSelect={() => {
+                            setSelectedRep({
+                              rep_id: rep.rep_id,
+                              name: rep.name,
+                              team: rep.team,
+                              flm: rep.flm,
+                              slm: rep.slm
+                            });
+                            setDialogOpen(true);
+                          }}
+                          formatCurrency={formatCurrency}
+                          getRiskBadge={getRiskBadge}
+                          indent
+                        />
+                      ))}
+                    </React.Fragment>
+                  ))
+                )}
               </TableBody>
             </Table>
 
@@ -570,6 +780,7 @@ export const SalesRepsTable = ({ buildId }: SalesRepsTableProps) => {
         onOpenChange={setDialogOpen}
         rep={selectedRep}
         buildId={buildId}
+        onDataRefresh={onDataRefresh}
       />
     </>
   );

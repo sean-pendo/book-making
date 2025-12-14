@@ -24,7 +24,6 @@ import { WaterfallLogicExplainer } from '@/components/WaterfallLogicExplainer';
 import { VirtualizedAccountTable } from '@/components/VirtualizedAccountTable';
 import { RepManagement } from '@/components/RepManagement';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { DebugAccountInfo } from '@/components/DebugAccountInfo';
 import { ResetProgressDialog, ResetProgress } from '@/components/ResetProgressDialog';
 import { AssignmentRuleAdjustment } from '@/components/AssignmentRuleAdjustment';
 import { assignmentService } from '@/services/assignmentService';
@@ -33,13 +32,13 @@ import { EnhancedTabRefreshIndicator } from '@/components/EnhancedTabRefreshIndi
 import { AssignmentDataFlowTracker } from '@/components/AssignmentDataFlowTracker';
 import { buildDataService } from '@/services/buildDataService';
 import { supabase } from '@/integrations/supabase/client';
-import { AIBalancingOptimizer } from '@/services/aiBalancingOptimizer';
-import { AIBalancingOptimizerDialog } from '@/components/AIBalancingOptimizerDialog';
+// AI Balancing Optimizer removed - now using HIGHS optimization
 import { AssignmentSuccessDialog } from '@/components/AssignmentSuccessDialog';
 import { fixOwnerAssignments } from '@/utils/fixOwnerAssignments';
 import { QuickResetButton } from '@/components/QuickResetButton';
 import { FullAssignmentConfig } from '@/components/FullAssignmentConfig';
 import { PriorityConfig, getDefaultPriorityConfig } from '@/config/priorityRegistry';
+import { useMappedFields } from '@/hooks/useMappedFields';
 
 interface Account {
   sfdc_account_id: string;
@@ -108,6 +107,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [showConfigDialog, setShowConfigDialog] = useState(false);
   const [isConfigured, setIsConfigured] = useState(false);
+  const [configJustSaved, setConfigJustSaved] = useState(false); // Track when config was just saved to prompt regeneration
   const [checkingConfig, setCheckingConfig] = useState(true);
   const [showAssignmentProgress, setShowAssignmentProgress] = useState(false);
   const [assignmentProgress, setAssignmentProgress] = useState({
@@ -132,10 +132,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   const [workloadBalanceData, setWorkloadBalanceData] = useState<any>(null);
   const [sophisticatedAssignmentResult, setSophisticatedAssignmentResult] = useState<any>(null);
   const [resetCancelToken, setResetCancelToken] = useState<{ cancelled: boolean }>({ cancelled: false });
-  const [showAIOptimizer, setShowAIOptimizer] = useState(false);
-  const [aiOptimizerProblemReps, setAiOptimizerProblemReps] = useState<any[]>([]);
-  const [aiOptimizerSuggestions, setAiOptimizerSuggestions] = useState<any[]>([]);
-  const [aiOptimizerReasoning, setAiOptimizerReasoning] = useState<string>('');
+  // AI Optimizer state removed - using HIGHS optimization
   const [resetProgress, setResetProgress] = useState<ResetProgress>({
     isRunning: false,
     currentStep: 0,
@@ -233,6 +230,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   const priorityConfig: PriorityConfig[] = (assignmentConfig?.priority_config as unknown as PriorityConfig[]) || 
     getDefaultPriorityConfig((assignmentConfig?.assignment_mode as 'ENT' | 'COMMERCIAL' | 'EMEA') || 'ENT');
   const assignmentMode = assignmentConfig?.assignment_mode || 'ENT';
+
+  // Get mapped fields for priority availability checking
+  const { mappedFields } = useMappedFields(buildId);
 
   // Fetch opportunities for Net ARR calculation
   const { data: opportunities = [] } = useQuery({
@@ -515,6 +515,10 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   const allProspectAccounts = filterAccountsByAssignmentType(accounts?.filter(acc => !acc.is_customer) || []);
   const calculationsLoading = accountsLoading || ownersLoading;
   const calculationsError = accountsError;
+  
+  // Check if assignments have already been applied to the database
+  const hasExistingAssignments = (accounts || []).some(acc => acc.new_owner_id);
+  const existingAssignmentCount = (accounts || []).filter(acc => acc.new_owner_id).length;
 
   // Handle refresh data
   const handleRefresh = useCallback(async () => {
@@ -607,6 +611,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   // Handle tab-aware assignment generation
   const onGenerateAssignments = async (accountType: 'customers' | 'prospects' | 'all' = 'all') => {
     if (!buildId) return;
+    
+    // Clear the "config just saved" flag since we're now generating
+    setConfigJustSaved(false);
     
     const accountCount = accountType === 'customers' ? allCustomerAccounts.length : 
                        accountType === 'prospects' ? allProspectAccounts.length : 
@@ -781,19 +788,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       setAppliedAssignmentCount(proposalCount);
       setShowSuccessDialog(true);
       
-      // Check if AI optimization is available AFTER execution with real data
-      const needsOptimization = checkIfOptimizationAvailable(resultToExecute);
-      
-      if (needsOptimization) {
-        // Delay this toast so it doesn't overlap with success dialog
-        setTimeout(() => {
-          toast({
-            title: "💡 AI Optimization Available",
-            description: `${aiOptimizerProblemReps.length} rep(s) below $1M ARR. Would you like to optimize?`,
-          });
-          setShowAIOptimizer(true);
-        }, 2000);
-      }
+      // AI optimization toast removed - HIGHS handles balancing
       
     } catch (error) {
       console.error('[Execute] ❌ Assignment execution failed:', error);
@@ -1534,7 +1529,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
             sfdc_account_id: selectedAccount.sfdc_account_id,
             proposed_owner_id: selectedOwnerId,
             proposed_owner_name: selectedOwnerName,
-            assignment_type: selectedAccount.is_customer ? 'customer' : 'prospect',
+            assignment_type: 'MANUAL_REASSIGNMENT',
             rationale: `MANUAL_REASSIGNMENT: ${reassignmentReason.trim()}`,
             created_by: (await supabase.auth.getUser()).data.user?.id,
             updated_at: new Date().toISOString()
@@ -1679,7 +1674,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-3xl font-bold tracking-tight">Assignment Engine</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Assignment Engine</h1>
             <Button
               variant="ghost"
               size="icon"
@@ -1691,147 +1686,195 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
             </Button>
           </div>
           <p className="text-muted-foreground">
-            Generate and manage territory assignments using simple waterfall logic
+            Configure your assignment rules, then generate territory assignments
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Global Apply Proposals Button - shows only when there are pending proposals */}
-          {assignmentResult && assignmentResult.proposals.length > 0 && (
-            <Button
-              onClick={handleExecuteAssignments}
-              disabled={isExecuting || isLoading}
-              className="flex items-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
-            >
-              {isExecuting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="h-4 w-4" />
-              )}
-              Apply {assignmentResult.proposals.length} Proposals
-            </Button>
-          )}
         </div>
       </div>
 
-      {/* Controls */}
-      <Card>
-        <CardContent className="py-4">
-          <div className="flex items-center gap-3">
-            {/* Configure - with subtle attention ring when not configured */}
-            <div className={`relative ${!isConfigured ? 'before:absolute before:-inset-1 before:rounded-lg before:border-2 before:border-primary/40 before:animate-pulse' : ''}`}>
-              <Button
-                onClick={() => setShowConfigDialog(true)}
-                variant={isConfigured ? "outline" : "default"}
-                className={`gap-2 relative z-10 ${isConfigured 
-                  ? 'border-green-500/50 text-green-700 dark:text-green-400' 
-                  : ''
-                }`}
-              >
-                <Settings className={`h-4 w-4 ${!isConfigured ? 'animate-spin' : ''}`} style={{ animationDuration: '3s' }} />
-                {isConfigured ? '✓ Configure' : 'Configure'}
-              </Button>
-            </div>
-
-            {/* Generate - with tooltip when disabled */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button 
-                        disabled={isGenerating || isLoading || !isConfigured} 
-                        className="gap-2"
-                      >
-                        {isGenerating ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Target className="h-4 w-4" />
-                        )}
-                        Generate
-                        <ChevronDown className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuItem onClick={() => onGenerateAssignments('all')}>
-                        <Target className="h-4 w-4 mr-2" />
-                        All Assignments
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onGenerateAssignments('customers')}>
-                        <UserCheck className="h-4 w-4 mr-2" />
-                        Customers Only
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onGenerateAssignments('prospects')}>
-                        <Users className="h-4 w-4 mr-2" />
-                        Prospects Only
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </TooltipTrigger>
-              {!isConfigured && (
-                <TooltipContent side="bottom">
-                  <p>Configure assignment targets first</p>
-                </TooltipContent>
-              )}
-            </Tooltip>
-
-            {/* Export */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button 
-                  variant="outline" 
-                  disabled={isExporting} 
-                  className="gap-2"
-                >
-                  <Download className="h-4 w-4" />
-                  Export
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem onClick={() => handleExportAssignments('customers')}>
-                  Customers
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleExportAssignments('prospects')}>
-                  Prospects
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => handleExportAssignments('all')}>
-                  All
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* Spacer */}
-            <div className="flex-1" />
-
-            {/* Secondary actions */}
-            {(activeTab === 'customers' || activeTab === 'prospects') && (
-              <Button
-                onClick={onPreviewAssignments}
-                variant="ghost"
-                size="sm"
-                disabled={isLoading}
-                className="gap-2"
-              >
-                <Eye className="h-4 w-4" />
-                Preview
-              </Button>
-            )}
-            
-            <Button
-              onClick={handleResetAssignments}
-              disabled={isResetting || isLoading}
-              variant="ghost"
-              size="sm"
-              className="gap-2 text-muted-foreground hover:text-destructive"
+      {/* Primary Flow: Configure → Generate (Arrow Buttons) */}
+      <div className="flex items-stretch gap-0 h-20">
+        {/* Step 1: Configure */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={() => setShowConfigDialog(true)}
+              className={`
+                relative flex-1 flex items-center justify-center gap-4 py-4 px-6 transition-all duration-300
+                ${isConfigured 
+                  ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/30' 
+                  : 'bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 glow-primary'
+                }
+                rounded-l-xl
+              `}
+              style={{
+                clipPath: 'polygon(0 0, calc(100% - 20px) 0, 100% 50%, calc(100% - 20px) 100%, 0 100%)'
+              }}
             >
-              <RotateCcw className="h-4 w-4" />
-              Reset
+              <span className={`
+                w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold shrink-0
+                ${isConfigured 
+                  ? 'bg-emerald-500 text-white' 
+                  : 'bg-primary-foreground/20 text-primary-foreground'
+                }
+              `}>
+                {isConfigured ? <CheckCircle className="w-5 h-5" /> : '1'}
+              </span>
+              <div className="text-left">
+                <span className="font-semibold text-lg block">Configure</span>
+                <span className={`text-sm ${isConfigured ? 'text-emerald-600/70 dark:text-emerald-400/70' : 'text-primary-foreground/70'}`}>
+                  {isConfigured ? 'Click to edit settings' : 'Set up assignment rules'}
+                </span>
+              </div>
+              <Settings className={`w-6 h-6 ml-2 ${!isConfigured ? 'animate-spin' : ''}`} style={{ animationDuration: '3s' }} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {isConfigured 
+              ? 'Edit thresholds, territory mapping, and priority rules' 
+              : 'Configure assignment targets before generating'
+            }
+          </TooltipContent>
+        </Tooltip>
+
+        {/* Step 2: Generate (with dropdown) */}
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <button
+                  disabled={isGenerating || isLoading || !isConfigured}
+                  className={`
+                    relative flex-1 flex items-center justify-center gap-4 py-4 px-6 transition-all duration-300
+                    ${!isConfigured 
+                      ? 'bg-muted/30 text-muted-foreground/50 cursor-not-allowed'
+                      : configJustSaved
+                        ? 'bg-amber-500/20 text-amber-700 dark:text-amber-400 hover:bg-amber-500/30 glow-amber'
+                        : isGenerating
+                          ? 'bg-primary text-primary-foreground'
+                          : hasExistingAssignments
+                            ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/30'
+                            : 'bg-muted/50 text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                    }
+                    rounded-r-xl
+                  `}
+                  style={{
+                    clipPath: 'polygon(0 0, 100% 0, 100% 100%, 0 100%, 20px 50%)'
+                  }}
+                >
+                  <span className={`
+                    w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold shrink-0
+                    ${!isConfigured 
+                      ? 'bg-muted-foreground/20 text-muted-foreground/50'
+                      : configJustSaved
+                        ? 'bg-amber-500 text-white'
+                        : hasExistingAssignments
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground'
+                    }
+                  `}>
+                    {hasExistingAssignments && !configJustSaved ? <CheckCircle className="w-5 h-5" /> : '2'}
+                  </span>
+                  <div className="text-left">
+                    <span className="font-semibold text-lg block">
+                      {configJustSaved ? 'Generate' : hasExistingAssignments ? 'Re-generate' : 'Generate'}
+                    </span>
+                    <span className="text-sm opacity-70">
+                      {isGenerating 
+                        ? 'Processing...' 
+                        : configJustSaved
+                          ? 'Apply new settings'
+                          : hasExistingAssignments
+                            ? `${existingAssignmentCount.toLocaleString()} assigned • Click to re-run`
+                            : 'Run assignment engine'
+                      }
+                    </span>
+                  </div>
+                  {isGenerating ? (
+                    <Loader2 className="w-6 h-6 ml-2 animate-spin" />
+                  ) : (
+                    <>
+                      <Target className="w-6 h-6 ml-2" />
+                      {isConfigured && <ChevronDown className="w-4 h-4 ml-1" />}
+                    </>
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {!isConfigured 
+                ? 'Complete configuration first'
+                : configJustSaved
+                  ? 'Settings updated — click to generate assignments with new configuration'
+                  : hasExistingAssignments
+                    ? 'Run assignment engine again to update assignments'
+                    : 'Generate territory assignments based on your configuration'
+              }
+            </TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="center" className="w-48">
+            <DropdownMenuItem onClick={() => onGenerateAssignments('all')}>
+              <Target className="h-4 w-4 mr-2" />
+              All Accounts
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onGenerateAssignments('customers')}>
+              <UserCheck className="h-4 w-4 mr-2" />
+              Customers Only
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onGenerateAssignments('prospects')}>
+              <Users className="h-4 w-4 mr-2" />
+              Prospects Only
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {/* Secondary Actions Row */}
+      <div className="flex items-center justify-end px-2 gap-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" disabled={isExporting} className="gap-2 text-muted-foreground">
+              <Download className="h-4 w-4" />
+              Export
             </Button>
-          </div>
-        </CardContent>
-      </Card>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => handleExportAssignments('customers')}>
+              Customers
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleExportAssignments('prospects')}>
+              Prospects
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => handleExportAssignments('all')}>
+              All
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {(activeTab === 'customers' || activeTab === 'prospects') && (
+          <Button
+            onClick={onPreviewAssignments}
+            variant="ghost"
+            size="sm"
+            disabled={isLoading}
+            className="gap-2 text-muted-foreground"
+          >
+            <Eye className="h-4 w-4" />
+            Preview
+          </Button>
+        )}
+        
+        <Button
+          onClick={handleResetAssignments}
+          disabled={isResetting || isLoading}
+          variant="ghost"
+          size="sm"
+          className="gap-2 text-muted-foreground hover:text-destructive"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Reset
+        </Button>
+      </div>
 
       {/* Pending Assignments Alert - show when proposals exist but haven't been applied */}
       {(assignmentResult?.proposals?.length > 0 || sophisticatedAssignmentResult?.proposals?.length > 0) && (
@@ -2142,6 +2185,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
             buildId={buildId} 
             priorityConfig={priorityConfig}
             assignmentMode={assignmentMode}
+            mappedFields={mappedFields}
             onConfigureClick={() => {
               setShowHowItWorks(false);
               setShowConfigDialog(true);
@@ -2167,133 +2211,17 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
             onClose={() => setShowConfigDialog(false)}
             onConfigurationComplete={() => {
               setIsConfigured(true);
+              setConfigJustSaved(true); // Mark that config was just saved to prompt regeneration
               toast({
-                title: "Configuration Complete",
-                description: "You can now generate assignments"
+                title: "Configuration Saved",
+                description: "Click Generate to run the assignment engine"
               });
             }}
           />
         </DialogContent>
       </Dialog>
 
-      {/* AI Balancing Optimizer Dialog */}
-      {showAIOptimizer && (
-        <AIBalancingOptimizerDialog
-          buildId={buildId || ''}
-          isOpen={showAIOptimizer}
-          onClose={() => {
-            setShowAIOptimizer(false);
-            // Show preview dialog after closing AI optimizer
-            setShowPreviewDialog(true);
-          }}
-          problemReps={aiOptimizerProblemReps}
-          suggestions={aiOptimizerSuggestions}
-          aiReasoning={aiOptimizerReasoning}
-          onApply={async (selectedSuggestions) => {
-            try {
-              console.log('[AI Optimizer] Applying', selectedSuggestions.length, 'optimization suggestions');
-              
-              // Convert suggestions to assignment format and execute
-              const assignmentUpdates = selectedSuggestions.map(s => ({
-                accountId: s.accountId,
-                accountName: s.accountName,
-                currentOwnerId: s.fromRepId,
-                currentOwnerName: s.fromRepName,
-                proposedOwnerId: s.toRepId,
-                proposedOwnerName: s.toRepName,
-                assignmentReason: `AI OPTIMIZATION: ${s.reasoning}`,
-                rationale: `AI OPTIMIZATION: ${s.reasoning}`,
-                ruleApplied: 'AI Balancer Post-Processing',
-                conflictRisk: 'LOW' as const
-              }));
-              
-              if (buildId) {
-                await assignmentService.executeAssignments(buildId, assignmentUpdates);
-                
-                toast({
-                  title: "AI Optimizations Applied",
-                  description: `Successfully applied ${selectedSuggestions.length} optimization suggestions`,
-                });
-                
-                // Refresh data
-                await refreshAllData();
-              }
-              
-              setShowAIOptimizer(false);
-              setShowPreviewDialog(true);
-            } catch (error: any) {
-              console.error('[AI Optimizer] Error applying suggestions:', error);
-              toast({
-                title: "Error Applying Optimizations",
-                description: error.message,
-                variant: "destructive",
-              });
-            }
-          }}
-          onRegenerate={async () => {
-            try {
-              console.log('[AI Optimizer] Regenerating optimization suggestions');
-              
-              if (!buildId) return;
-              
-              // Fetch fresh data and regenerate suggestions
-              const { data: accounts } = await supabase
-                .from('accounts')
-                .select('*')
-                .eq('build_id', buildId)
-                .eq('is_parent', true);
-              
-              const { data: salesReps } = await supabase
-                .from('sales_reps')
-                .select('*')
-                .eq('build_id', buildId)
-                .eq('is_active', true);
-              
-              if (!accounts || !salesReps) return;
-              
-              const healthCheck = await AIBalancingOptimizer.checkBalanceHealth(
-                buildId,
-                accounts,
-                salesReps,
-                accounts
-              );
-              
-              if (healthCheck.needsOptimization) {
-                const optimizationResult = await AIBalancingOptimizer.generateOptimizations(
-                  buildId,
-                  healthCheck.problemReps
-                );
-                
-                const suggestions = optimizationResult.suggestions.map(s => ({
-                  accountId: s.accountId,
-                  accountName: s.accountName,
-                  fromRepId: s.fromRepId,
-                  fromRepName: s.fromRepName,
-                  toRepId: s.toRepId,
-                  toRepName: s.toRepName,
-                  reasoning: s.reasoning,
-                  priority: s.priority
-                }));
-                
-                setAiOptimizerSuggestions(suggestions);
-                setAiOptimizerReasoning(optimizationResult.aiReasoning || 'Regenerated optimization suggestions');
-                
-                toast({
-                  title: "Suggestions Regenerated",
-                  description: `Generated ${suggestions.length} new optimization suggestions`,
-                });
-              }
-            } catch (error: any) {
-              console.error('[AI Optimizer] Error regenerating suggestions:', error);
-              toast({
-                title: "Error Regenerating Suggestions",
-                description: error.message,
-                variant: "destructive",
-              });
-            }
-          }}
-        />
-      )}
+      {/* AI Balancing Optimizer Dialog removed - using HIGHS optimization */}
 
       {/* Account Reassignment Dialog */}
       <Dialog open={showReassignDialog} onOpenChange={(open) => {
@@ -2371,12 +2299,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
         onCancel={resetProgress.isRunning ? handleCancelReset : undefined}
       />
 
-      {/* Debug Account Info */}
-      <DebugAccountInfo 
-        accounts={accounts || []}
-        customerAccounts={allCustomerAccounts}
-        prospectAccounts={allProspectAccounts}
-      />
 
       {/* Assignment Success Dialog - animated confirmation */}
       <AssignmentSuccessDialog

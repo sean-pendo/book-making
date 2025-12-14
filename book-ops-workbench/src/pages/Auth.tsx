@@ -48,7 +48,7 @@ const Auth = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [role, setRole] = useState<'REVOPS' | 'SLM' | 'FLM'>('SLM');
-  const [region, setRegion] = useState<'AMER' | 'EMEA' | 'GLOBAL'>('GLOBAL');
+  const [region, setRegion] = useState<'AMER' | 'EMEA' | 'APAC' | 'GLOBAL'>('GLOBAL');
   const [isLoading, setIsLoading] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(getInitialRecoveryState);
@@ -393,6 +393,7 @@ const Auth = () => {
                     <SelectContent>
                       <SelectItem value="AMER">AMER</SelectItem>
                       <SelectItem value="EMEA">EMEA</SelectItem>
+                      <SelectItem value="APAC">APAC</SelectItem>
                       <SelectItem value="GLOBAL">Global</SelectItem>
                     </SelectContent>
                   </Select>

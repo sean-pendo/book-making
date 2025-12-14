@@ -251,7 +251,8 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     return validatedFiles;
   });
   
-  const [activeTab, setActiveTab] = useState(() => loadDataImportState.activeTab());
+  // Start with 'upload' - auto-navigation effect will set correct tab after data loads
+  const [activeTab, setActiveTab] = useState('upload');
   const [selectedFile, setSelectedFile] = useState<ImportFile | null>(null);
   const [showMappingDialog, setShowMappingDialog] = useState(false);
   // Use propBuildId if provided (embedded mode), otherwise use localStorage state
@@ -315,6 +316,8 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
 
   // Track previous build to detect build changes - use 'INITIAL' as sentinel for first render
   const previousBuildIdRef = useRef<string | null | 'INITIAL'>('INITIAL');
+  // Track if we've already auto-navigated to the correct tab on initial load
+  const hasInitializedTabRef = useRef(false);
   
   // Clear files when switching to a different build
   useEffect(() => {
@@ -326,6 +329,8 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
       setFiles([]);
       clearDataImportState();
       saveDataImportState.currentBuildId(currentBuildId);
+      // Reset tab initialization flag so auto-nav runs for new build
+      hasInitializedTabRef.current = false;
     }
     
     // On initial render, if we have files but no matching build, clear them
@@ -346,6 +351,45 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
       timestamp: new Date().toISOString()
     });
   }, [files]);
+
+  // Auto-navigate to appropriate tab based on file state (runs on initial load)
+  useEffect(() => {
+    // Only run once after initial data load, skip if already initialized
+    if (hasInitializedTabRef.current || !currentBuildId) return;
+    
+    // Wait a tick for files to be populated from Supabase
+    const timer = setTimeout(() => {
+      if (files.length === 0) {
+        // No files yet - stay on upload tab
+        console.log('📍 Auto-nav: No files, showing Upload tab');
+        setActiveTab('upload');
+      } else {
+        // Check if all files are completed (imported to Supabase)
+        const allCompleted = files.every(f => f.status === 'completed');
+        // Check if any files need mapping
+        const needsMapping = files.some(f => f.status === 'uploaded');
+        // Check if any files are ready for review (validated but not imported)
+        const needsReview = files.some(f => f.status === 'validated' || f.status === 'mapped');
+        
+        if (allCompleted) {
+          console.log('📍 Auto-nav: All files completed, showing Review tab');
+          setActiveTab('review');
+        } else if (needsReview) {
+          console.log('📍 Auto-nav: Files need review, showing Review tab');
+          setActiveTab('review');
+        } else if (needsMapping) {
+          console.log('📍 Auto-nav: Files need mapping, showing Mapping tab');
+          setActiveTab('mapping');
+        } else {
+          console.log('📍 Auto-nav: Default to Upload tab');
+          setActiveTab('upload');
+        }
+      }
+      hasInitializedTabRef.current = true;
+    }, 100); // Small delay to let Supabase data load
+
+    return () => clearTimeout(timer);
+  }, [files, currentBuildId]);
 
   // Prevent accidental refresh/close during active import
   const isImporting = files.some(f => f.status === 'validating');
@@ -615,6 +659,13 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
 
             return filteredPrev;
           });
+          
+          // Auto-navigate to Review tab if imports are already completed
+          const allCompleted = existingFiles.every(f => f.status === 'completed');
+          if (allCompleted && existingFiles.length > 0) {
+            console.log('✅ All imports completed - auto-navigating to Review tab');
+            setActiveTab('review');
+          }
         }
 
       } catch (error) {
@@ -623,7 +674,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     };
 
     loadExistingData();
-  }, [currentBuildId, files.length]);
+  }, [currentBuildId]); // Removed files.length dependency to prevent re-running on file updates
 
   const createBuild = async () => {
     if (!newBuildName.trim()) {
@@ -756,7 +807,8 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
   // Sales Rep field mappings focused on organizational structure
   const [salesRepMappings] = useState<PriorityFieldMapping[]>([
     // Essential fields - Required for basic rep identification
-    { csvField: '', schemaField: 'rep_id', required: true, mapped: false, priority: 'essential', description: 'Unique sales rep identifier (User ID, SFDC ID)' },
+    // Note: rep_id is optional - if blank, a placeholder ID will be auto-generated (Open Headcount)
+    { csvField: '', schemaField: 'rep_id', required: false, mapped: false, priority: 'essential', description: 'Unique sales rep identifier (User ID). Leave blank for open headcount - ID will be auto-generated.' },
     { csvField: '', schemaField: 'name', required: true, mapped: false, priority: 'essential', description: 'Sales representative full name' },
     
     // High priority fields - Important for territory assignment and hierarchy (but not blocking)
@@ -765,8 +817,9 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'slm', required: false, mapped: false, priority: 'high', description: 'Second Level Manager' },
     { csvField: '', schemaField: 'region', required: false, mapped: false, priority: 'high', description: 'Geographic region assignment' },
     
-    // Secondary fields - Optional/legacy
-    { csvField: '', schemaField: 'manager', required: false, mapped: false, priority: 'secondary', description: 'Legacy manager field (use FLM/SLM instead)' }
+    // Secondary fields - Optional/legacy and backfill support
+    { csvField: '', schemaField: 'manager', required: false, mapped: false, priority: 'secondary', description: 'Legacy manager field (use FLM/SLM instead)' },
+    { csvField: '', schemaField: 'is_backfill_source', required: false, mapped: false, priority: 'secondary', description: 'Mark rep as leaving (backfill source). Set to TRUE to exclude from assignments.' }
   ]);
 
   const csvFields = [
@@ -1747,33 +1800,6 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
       </Card>
       )}
 
-      {/* Debug Tools - Only show in development or for debugging */}
-      {process.env.NODE_ENV === 'development' && (
-        <Card className="border-dashed border-orange-200">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-orange-600">Debug Tools</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                clearDataImportState();
-                setFiles([]);
-                setActiveTab('setup');
-                setCurrentBuildId(null);
-                toast({
-                  title: "Import State Cleared",
-                  description: "All import data has been reset for debugging.",
-                });
-              }}
-              className="text-orange-600 border-orange-300 hover:bg-orange-50"
-            >
-              Clear Import State
-            </Button>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Status Bar - Show when all three CSV files are imported */}
       {allCSVsImported && currentBuildId && (
@@ -1986,6 +2012,31 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                 <CardDescription className="min-h-[3rem]">
                   Upload sales representative data with Name, Manager, Team, Region, and Rep ID
                 </CardDescription>
+                <div className="mt-2 space-y-1.5">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-help hover:text-foreground transition-colors">
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-gray-50 dark:bg-gray-800">Open Headcount</Badge>
+                        <span>Leave User ID blank for new hires</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-[280px]">
+                      <p className="text-xs"><strong>Open Headcount:</strong> For new hires without a Salesforce ID yet, leave the User ID field blank. A placeholder ID will be auto-generated. Ensure the rep name is unique.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                  <br />
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-help hover:text-foreground transition-colors">
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">Backfill</Badge>
+                        <span>Mark departing reps in the Reps tab</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-[280px]">
+                      <p className="text-xs"><strong>Backfill Reps:</strong> For reps leaving the business, mark them as "Leaving" in the Reps tab after import. This will auto-create a replacement rep and migrate their accounts.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-6 text-center">

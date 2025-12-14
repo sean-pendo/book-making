@@ -305,7 +305,7 @@ export class RebalancingAssignmentService {
       for (const [region, regionAccounts] of Object.entries(accountsByRegion)) {
         console.log(`[REBALANCE] 🌍 Processing region: ${region} (${regionAccounts.length} accounts)`);
         
-        const regionReps = salesReps.filter(rep => rep.region === region && rep.is_active);
+        const regionReps = salesReps.filter(rep => rep.region === region && rep.is_active && rep.include_in_assignments !== false);
         if (!regionReps.length) {
           console.warn(`[REBALANCE] ⚠️ No active reps for region ${region}, skipping...`);
           continue;
@@ -426,9 +426,9 @@ export class RebalancingAssignmentService {
     config?: RebalancingConfig,
     assignmentConfig?: any
   ): Promise<BalancingTargets> {
-    // Separate strategic and normal pools
-    const stratReps = salesReps.filter(r => r.is_strategic_rep);
-    const normalReps = salesReps.filter(r => !r.is_strategic_rep);
+    // Separate strategic and normal pools (only include active reps eligible for assignments)
+    const stratReps = salesReps.filter(r => r.is_strategic_rep && r.is_active && r.include_in_assignments !== false);
+    const normalReps = salesReps.filter(r => !r.is_strategic_rep && r.is_active && r.include_in_assignments !== false);
     
     console.log(`[REBALANCE] 🎯 Pool analysis: ${stratReps.length} strategic, ${normalReps.length} normal reps`);
     
@@ -587,9 +587,9 @@ export class RebalancingAssignmentService {
 
     const accountsByRegion: { [region: string]: Account[] } = {};
 
-    // Initialize regions from active sales reps
+    // Initialize regions from active sales reps (excluding those not in assignments)
     const activeRegions = [...new Set(salesReps
-      .filter(rep => rep.is_active)
+      .filter(rep => rep.is_active && rep.include_in_assignments !== false)
       .map(rep => rep.region)
       .filter(Boolean)
     )];
@@ -1044,7 +1044,7 @@ export class RebalancingAssignmentService {
       sfdc_account_id: proposal.accountId,
       proposed_owner_id: proposal.proposedOwnerId,
       proposed_owner_name: proposal.proposedOwnerName,
-      assignment_type: 'rebalancing',
+      assignment_type: 'AUTO_COMMERCIAL',
       rationale: `${proposal.ruleApplied}: ${proposal.assignmentReason}`,
       is_approved: false,
       created_by: currentUser.data.user?.id

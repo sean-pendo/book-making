@@ -5,7 +5,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { sendSlackNotification } from '@/services/slackNotificationService';
 
 type UserRole = 'REVOPS' | 'SLM' | 'FLM';
-type UserRegion = 'AMER' | 'EMEA' | 'GLOBAL';
+type UserRegion = 'AMER' | 'EMEA' | 'APAC' | 'GLOBAL';
 
 interface Profile {
   id: string;

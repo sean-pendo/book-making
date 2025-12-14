@@ -1,5 +1,2161 @@
 # Changelog
 
+---
+
+## Release v1.3.1 (2025-12-14)
+
+### Major Accomplishments
+
+This release represents a significant leap forward in assignment engine capabilities, analytics, and user customization.
+
+#### New Optimization Model
+- Integrated HiGHS LP solver for mathematically optimal account distribution
+- Replaced greedy assignment with true multi-constraint optimization
+- Balance ARR, ATR, Pipeline, and account counts simultaneously
+
+#### Priority Customization System
+- Dynamic priority waterfall configuration per assignment mode
+- Drag-and-drop priority reordering in UI
+- Enable/disable individual priorities (Manual Holdover, Stability Accounts, Team Alignment, Geography, Continuity, etc.)
+- Sub-condition toggles for Stability Accounts (CRE Risk, Renewal Soon, PE Firm, Recent Owner Change)
+
+#### Enhanced Analytics
+- Before vs After dashboard with ghost-bar comparisons
+- Success metric tiles (Geo Alignment, Team Alignment, Coverage, Continuity)
+- Customer/Prospect cards with parent/child breakdown on hover
+- Improved threshold visualization with color-coded bars
+
+#### Other Features
+- Parent-child conflict resolution with implicit priority handling
+- Improved territory-to-region auto-mapping
+- Backfill migration support for departing reps
+- Manager reassignment approval workflow enhancements
+
+### Known Issues
+
+There is fragmented business logic across the codebase that will be addressed in v1.4:
+- Duplicate calculation functions in `utils/` and `domain/`
+- Inconsistent region hierarchy definitions across services
+- Not all files import from centralized `@/domain` module
+
+### Next Steps (v1.4)
+
+- Centralize all business logic into `src/domain/`
+- Create comprehensive `business_logic.md` documentation
+- Refactor all files to use single source of truth
+- Clean up duplicate/dead code
+
+---
+
+## [2025-12-14] - Feature: Customer/Prospect Cards Show Total with Parent/Child Breakdown on Hover
+
+### Summary
+Updated the Customer and Prospect KPI cards across the app to show total counts (parent + children) by default, with a tooltip breakdown on hover showing how many are parents vs children.
+
+### Changes
+- Updated `BuildDataSummary` interface with new fields: `childCustomers`, `childProspects`, `totalCustomers`, `totalProspects`
+- Modified `buildDataService.ts` to calculate child account breakdowns by linking to parent customer/prospect accounts
+- Updated `BalancingKPIRow` component to display totals with hover tooltips showing parent/child breakdown
+- Updated `BuildDetail.tsx` overview cards with the same tooltip breakdown pattern
+- Added child counts pass-through in `TerritoryBalancingDashboard`
+
+### Files Modified
+- `src/services/buildDataService.ts`
+- `src/components/balancing/BalancingKPIRow.tsx`
+- `src/pages/BuildDetail.tsx`
+- `src/pages/TerritoryBalancingDashboard.tsx`
+
+---
+
+## [2025-12-14] - Fix: Before vs After Dashboard Improvements
+
+### Summary
+Fixed several UX issues in the Before vs After tab based on user feedback.
+
+### Changes
+
+**Terminology Standardization:**
+- Renamed "Regional Alignment" to "Geo Alignment" for consistency with Overview tab
+- Updated tooltips and comments to use consistent terminology
+
+**Target Zone Visibility:**
+- Increased green target zone opacity from 10% to 25%
+- Added left/right borders to the target zone
+- Made min/max threshold lines dashed for better visibility
+- Moved target line rendering order so it appears above bars
+
+**Tooltip Z-Index Fix:**
+- Added z-50 class to all TooltipContent components
+- Prevents tooltips from being covered by adjacent charts
+
+**Geo Alignment Calculation:**
+- Changed from using lpMetrics.geographyScore to geoAlignment.alignmentRate
+- Now consistent with how Overview tab calculates and displays this metric
+
+### Files Modified
+- `src/components/balancing/BeforeAfterTab.tsx`
+- `src/components/balancing/BeforeAfterDistributionChart.tsx`
+- `src/components/balancing/BeforeAfterAccountChart.tsx`
+- `src/components/balancing/SuccessMetricTile.tsx`
+
+---
+
+## [2025-12-13] - Feature: Before vs After Dashboard Tab
+
+### Summary
+Redesigned the "Before vs After" tab in the Territory Balancing Dashboard with comprehensive comparison metrics, ghost-bar visualizations, and success metric tiles.
+
+### Changes
+
+**Part 1: Fixed RepDistributionChart Threshold Coloring**
+- Added dynamic bar coloring based on thresholds using Recharts Cell components
+- Blue = below floor, Green = in target range, Red = over ceiling
+- Added ReferenceArea for visual green target zone between min and max
+- Updated legend to show color meanings (Below Floor / In Range / Over Ceiling)
+- Enhanced tooltips to show threshold status for each bar
+
+**Part 2: Created New Components**
+
+**SuccessMetricTile.tsx:**
+- Compact before → after metric tiles with delta indicators
+- TrendingUp/TrendingDown icons for positive/negative changes
+- Hover tooltips with detailed breakdowns
+- Supports N/A state for unavailable metrics
+
+**BeforeAfterDistributionChart.tsx:**
+- Gray "ghost" bars showing original assignment values
+- Colored bars showing proposed values (blue/green/red by threshold)
+- ARR/ATR/Pipeline toggle (same pattern as existing charts)
+- Summary stats with CV delta indicator
+- Target zone visualization with threshold lines
+
+**BeforeAfterAccountChart.tsx:**
+- Customer/Prospect stacked bars with before/after comparison
+- Parent/Child breakdown in tooltips
+- Delta indicators showing net account changes per rep
+
+**BeforeAfterTab.tsx:**
+- Row 1: Success metric tiles (Regional Alignment, Team Alignment, Coverage, Continuity)
+- Row 2: Side-by-side distribution and account charts
+- Integrated with useMetricsComparison hook for data
+
+**Part 3: Integration**
+- Updated TerritoryBalancingDashboard.tsx to use new BeforeAfterTab
+- Changed tab label from "Before / After" to "Before vs After"
+
+### Files Modified
+- `src/components/analytics/RepDistributionChart.tsx`
+- `src/pages/TerritoryBalancingDashboard.tsx`
+- `src/components/balancing/index.ts`
+
+### Files Created
+- `src/components/balancing/SuccessMetricTile.tsx`
+- `src/components/balancing/BeforeAfterDistributionChart.tsx`
+- `src/components/balancing/BeforeAfterAccountChart.tsx`
+- `src/components/balancing/BeforeAfterTab.tsx`
+
+---
+
+## [2025-12-13] - Feature: Account Changes Tab in Sales Rep Detail Dialog
+
+### Summary
+Added a new "Account Changes" tab to the Sales Rep Detail Dialog that shows which accounts are being gained and lost by each rep after assignments are applied.
+
+### Changes
+**SalesRepDetailDialog.tsx:**
+- Added third tab "Account Changes" with ArrowRightLeft icon
+- Badge shows count of total account changes
+- **Accounts Gaining section**: Shows accounts being transferred TO this rep
+  - Lists account name, type (customer/prospect), previous owner, and geo
+  - Displays ARR value in emerald/green
+  - Sorted by ARR (highest first)
+  - Summary shows total ARR being gained
+- **Accounts Losing section**: Shows accounts being transferred FROM this rep
+  - Lists account name, type, new owner, and geo
+  - Displays ARR value in red
+  - Summary shows total ARR being lost
+- **Net Impact Summary**: Shows consolidated view with:
+  - Number of accounts gained vs lost
+  - Net ARR impact (positive/negative with color coding)
+
+### Technical Details
+- New query fetches accounts where `new_owner_id = rep_id AND owner_id != rep_id` (gaining)
+- And accounts where `owner_id = rep_id AND new_owner_id IS NOT NULL AND new_owner_id != rep_id` (losing)
+- Only shows parent accounts for cleaner view
+- Uses subtle emerald/red color theming that's "demure" and optimal UX
+- Loading state and empty state handled gracefully
+
+### Files Modified
+- `src/components/data-tables/SalesRepDetailDialog.tsx`
+
+---
+
+## [2025-12-12] - Feature: Slack Notification Confirmations
+
+### Summary
+Users now receive confirmation when their sharing or bug reports trigger Slack notifications.
+
+### Changes
+
+**FeedbackWidget.tsx:**
+- Updated success toast to explicitly confirm Slack notification was sent
+- Bug reports now show: "Bug report sent! Sean has been notified via Slack and will look into it."
+- Other feedback shows: "Thank you! Your feedback has been sent to Sean via Slack."
+- Shows fallback message if Slack notification is pending
+
+**SendToManagerDialog.tsx:**
+- Added tracking for Slack notification success/failure counts
+- Success dialog now shows confirmation banner with notification status
+- Green banner: "Slack notification(s) sent (X)" when successful
+- Amber banner with warning if any notifications failed
+- Includes explanatory text: "The recipient(s) have been notified via Slack."
+
+---
+
+## [2025-12-12] - Feature: Improved Configure & Generate Button States
+
+### Summary
+Enhanced the Configure and Generate buttons in the Assignment Engine to show clearer, context-aware labels and tooltips based on the current workflow state.
+
+### Changes
+**Configure Button:**
+- Now shows "Click to edit settings" when already configured (instead of just "Rules configured")
+- Added tooltip: "Edit thresholds, territory mapping, and priority rules"
+
+**Generate Button - Dynamic States:**
+| State | Button Label | Subtitle | Tooltip |
+|-------|-------------|----------|---------|
+| Not configured | Generate (disabled) | Run assignment engine | "Complete configuration first" |
+| Configured, no assignments | Generate | Run assignment engine | "Generate territory assignments based on your configuration" |
+| **Config just saved** | Generate (amber pulse) | **Apply new settings** | "Settings updated — click to generate assignments with new configuration" |
+| Has existing assignments | **Re-generate** (green) | "X assigned • Click to re-run" | "Run assignment engine again to update assignments" |
+
+### Technical Details
+- Added `configJustSaved` state to track when config was just saved
+- Added `hasExistingAssignments` computed from accounts with `new_owner_id`
+- `configJustSaved` clears when generation starts
+- Button styling changes (amber for "needs regeneration", green for "complete")
+
+### Files Modified
+- `src/pages/AssignmentEngine.tsx`
+
+---
+
+## [2025-12-12] - Feature: Assignment Risk Tooltips & Clarification
+
+### Summary
+Added tooltips to clarify the difference between **Assignment Risk** and **CRE Risk** across the application.
+
+### Problem
+Users were confused about what "Risk" meant in different contexts:
+- **Assignment Risk** = How risky is it to change an account's owner? (based on account value, customer status)
+- **CRE Risk** = Customer Retention/churn probability from renewal events
+
+### Changes
+
+**VirtualizedAccountTable.tsx:**
+- Added tooltip to "Risk" column header explaining Assignment Risk levels
+- Updated `getContinuityRiskBadge` function to wrap badges with tooltips explaining CRE Risk
+- Updated assignment risk badges with tooltips explaining each level
+
+**AssignmentPreviewDialog.tsx:**
+- Added Tooltip import
+- Added tooltip to "Risk" and "Risk Level" column headers in Proposals and Conflicts tables
+- Updated `getConflictRiskBadge` function to include tooltips with explanations
+
+### Risk Level Definitions
+
+| Level | Assignment Risk | Trigger |
+|-------|-----------------|---------|
+| **High** | Relationship disruption | Reassigning an existing customer account |
+| **Medium** | Review needed | ARR > $100K or has risk flag |
+| **Low** | Safe to move | Prospects or low-value accounts |
+
+---
+
+## [2025-12-12] - Fix: Remove Debug Tools from Data Import
+
+Removed the "Debug Tools" section with "Clear Import State" button from the Data Import page. This dev-only UI was appearing in localhost and shouldn't be visible—localhost should match production.
+
+## [2025-12-12] - Feature: Auto-Navigation for Data Import Module
+
+### Summary
+Improved UX in the Data Import module by automatically navigating users to the appropriate tab based on their import progress, eliminating the blank screen issue.
+
+### Changes to `src/pages/DataImport.tsx`
+- Added `hasInitializedTabRef` to track first-load navigation
+- Added new `useEffect` hook for auto-navigation logic that:
+  - Navigates to "Review & Import" tab if all files are completed
+  - Navigates to "Map Fields" tab if files need field mapping
+  - Navigates to "Upload" tab for new imports
+- Reset navigation flag when build changes to re-evaluate for each build
+
+### Behavior
+- On first load, the module checks Supabase for existing imported data
+- Based on file statuses (`completed`, `uploaded`, `validated`, `mapped`), it auto-selects the appropriate inner tab
+- User no longer sees a blank screen - they're taken directly to the relevant step
+
+---
+
+## [2025-12-12] - Feature: Comprehensive Code Comments for Domain Module
+
+### Summary
+Added extensive JSDoc comments to all domain module files so developers can understand the business logic without needing the markdown docs.
+
+### Changes
+- **All `src/domain/*.ts` files** now have:
+  - Module header explaining purpose and usage
+  - JSDoc on every exported function with examples
+  - Inline comments explaining "why" not just "what"
+  - `@see` links to markdown documentation
+
+### CURSOR.mdc Updated
+- Added "Gradual Refactoring Rule" - when working on any file:
+  - Detect hardcoded logic that should use `@/domain`
+  - Flag discrepancies and ASK before changing
+  - Never silently change business logic
+
+---
+
+## [2025-12-12] - Feature: Data Normalization for Typos & Variations
+
+### Summary
+Added comprehensive data normalization module to handle typos, variations, and non-standard values in imported data (regions, PE firms, team tiers).
+
+### New Files
+- `src/domain/normalization.ts` - Normalization functions and alias maps
+
+### Key Features
+- **Region Normalization**: `NYC` → `North East`, `California` → `West`, `Global` → `UNMAPPED`
+- **PE Firm Normalization**: `JMI` → `JMI Private Equity`, `TPG` → `TPG Capital`
+- **Team Tier Normalization**: `grwth` → `Growth`, `enterprise` → `ENT`
+- Batch normalization with statistics
+
+### Documentation
+- Added Section 5 "Data Normalization" to `docs/core/business_logic.md`
+- Documents all alias mappings and usage patterns
+
+---
+
+## [2025-12-12] - Feature: Centralized Business Logic Documentation
+
+### Summary
+Created a single source of truth for all business terminology, calculations, and rules - both as documentation and as a code module that can be imported throughout the application.
+
+### New Files Created
+
+**Documentation:**
+- `docs/core/business_logic.md` - Complete glossary, calculation rules, tier definitions, geography mapping
+
+**Code Module (`src/domain/`):**
+- `index.ts` - Re-exports all domain modules
+- `calculations.ts` - ARR, ATR, Pipeline calculation functions with JSDoc
+- `tiers.ts` - Team tier (SMB/Growth/MM/ENT) and expansion tier logic
+- `geography.ts` - Region hierarchy, territory mapping, geo scoring
+- `constants.ts` - Thresholds, defaults, configuration values
+
+### Updated CURSOR.mdc
+- Added new Section 3: Business Logic Documentation
+- Points to `docs/core/business_logic.md` as the first resource to check
+- Points to `src/domain/` for code implementation
+- Updated glossary section to reference full documentation
+- Renumbered subsequent sections
+
+### Purpose
+This creates alignment between documentation and code, reduces scattered logic, and ensures consistent terminology across the team. When changing business logic, the workflow is:
+1. Update `docs/core/business_logic.md` first
+2. Update corresponding file in `src/domain/`
+3. Update consuming code
+
+---
+
+## [2025-12-12] - Fix: Data Overview Analytics Improvements
+
+### Critical Fixes
+- **Pagination bug causing missing accounts** - `calculateMetricsSnapshot` was querying accounts without pagination (Supabase default limit = 1000). With 2,095 accounts, ~1,000 were being lost! Now reuses properly paginated data from `getBuildDataRelationships`.
+- **Pipeline calculation bug** - Fixed `opp.account_id` → `opp.sfdc_account_id` causing 0 pipeline values
+- **Clarified account counts** - Changed "Total: X accounts" to "X assigned to Y reps" to make the data clearer
+
+### UI Improvements
+- **Removed redundant section** - Removed Accounts by Region, Account Tiers, Owner Coverage charts (redundant with summary cards)
+- **Removed redundant legend** - Customer/Prospect legend removed from account chart (already shown in header stats)
+- **Dynamic chart height** - Charts now scale with number of reps (22px per rep, min 400px) so you can scroll to see all reps
+- **Square root scale** - Financial charts use sqrt scale for better proportional display with large value variations
+- **Larger bars** - Increased bar size from 14px to 16px for better visibility
+
+---
+
+## [2025-12-12] - Feature: Data Overview Analytics Redesign
+
+### Summary
+Completely redesigned the Data Overview page analytics with improved layout, new metrics, and enhanced distribution charts with CV (Coefficient of Variation) statistics.
+
+### Section 1: Summary Metrics Redesign
+- **Removed** Total ARR card (now shown in Section 2 charts)
+- **Added** Coverage card - Shows % of accounts with valid owner assigned
+- **Added** Team Fit card - Shows account-rep tier alignment score with tooltip explaining SMB/Growth/Enterprise tiers
+- **Reorganized** into cleaner layout: Row 1 (Customers, Prospects, All Accounts), Row 2 (Pipeline, Team, Coverage, Team Fit)
+
+### Section 2: Analytics Charts Redesign
+- **Two side-by-side distribution charts**:
+  - Left: Financial Distribution (toggleable ARR/ATR/Pipeline) with Total, Average, CV stats
+  - Right: Account Distribution (Customer vs Prospect stacked bars)
+- **Enhanced RepDistributionChart** with:
+  - `allowedMetrics` prop to control which metrics are toggleable
+  - `showStats` prop to display Total/Avg/CV header
+  - CV (Coefficient of Variation) with color-coded status and tooltip explanation
+  - Average reference line on financial charts
+  - Parent/child account breakdown in tooltip
+- **Removed** redundant ARR Buckets chart (replaced by enhanced distribution chart)
+- **Kept** Region distribution, Tier distribution, and Owner coverage charts
+
+### Files Modified
+- `src/pages/BuildDetail.tsx` - Summary cards redesign, added useAnalyticsMetrics hook
+- `src/components/DataOverviewAnalytics.tsx` - Side-by-side chart layout
+- `src/components/analytics/RepDistributionChart.tsx` - Enhanced with allowedMetrics, showStats, CV calc, ReferenceLine
+- `src/types/analytics.ts` - Added parent/child fields to RepDistributionData
+- `src/services/buildDataService.ts` - Updated calculateRepDistribution() with parent/child counts
+
+---
+
+## [2025-12-12] - Fix: Geo Match Metric Bug + Rep Distribution Chart
+
+### Bug Fixed
+**Geo Match showing 9% instead of 98%** - The dashboard's geo alignment calculation was using a different algorithm than the assignment engine. The dashboard only checked territory mappings, while the assignment engine falls back to direct `account.geo` comparison when no mappings exist.
+
+**Fix**: Updated `useEnhancedBalancing.ts` to use the same fallback logic:
+1. If territory mappings configured → use those
+2. If no mappings → compare `account.geo` directly to `rep.region`
+
+### New Feature: Rep Distribution Chart
+Added a toggleable distribution chart to the Data Overview page showing the "before" state:
+- **ARR Distribution** - Per-rep ARR from customer accounts
+- **ATR Distribution** - Per-rep Available to Renew
+- **Pipeline Distribution** - Per-rep prospect pipeline value
+- **Account Distribution** - Stacked bar showing customers vs prospects per rep
+
+Use the arrow buttons to toggle between views.
+
+### Files Modified
+- `src/hooks/useEnhancedBalancing.ts` - Fixed geo alignment calculation
+- `src/types/analytics.ts` - Added `RepDistributionData` type
+- `src/services/buildDataService.ts` - Added `calculateRepDistribution()` method
+- `src/components/analytics/RepDistributionChart.tsx` - New component
+- `src/components/DataOverviewAnalytics.tsx` - Integrated new chart
+
+---
+
+## [2025-12-12] - Feature: Priority-Based Rationales for LP Assignments
+
+### Summary
+Updated the LP rationale generator to produce priority-prefixed rationales (P0, P1, P2, P3, P4, RO) that match the waterfall format. This enables the UI analytics to correctly categorize and display assignment reasons.
+
+### Priority Codes
+- **P0**: Manual locks, Strategic accounts, Child follows parent
+- **P1**: Stability locks (CRE, renewal, PE firm, recent change, backfill)
+- **P2**: Geography + Continuity (both factors strong)
+- **P3**: Geography Match (dominant factor)
+- **P4**: Account Continuity (dominant factor)
+- **RO**: Balance Optimization / Team Alignment / Residual
+
+### Example Rationales
+- `P0: Strategic Account → John Smith (strategic rep assignment)`
+- `P1: Stability Lock → Jane Doe (CRE at-risk - relationship stability)`
+- `P2: Geography + Continuity → Bob Wilson (AMER-West, relationship maintained, score 0.85)`
+- `P3: Geography Match → Alice Brown (EMEA - exact geo match, score 0.72)`
+- `P4: Account Continuity → Tom Davis (long-term relationship, score 0.68)`
+- `RO: Balance Optimization → Sarah Lee (best available for balance, score 0.25)`
+
+### Files Modified
+- `src/services/optimization/postprocessing/rationaleGenerator.ts`
+- `src/services/optimization/preprocessing/strategicPoolHandler.ts`
+- `src/services/optimization/preprocessing/parentChildAggregator.ts`
+- `src/services/optimization/optimizationSolver.ts`
+
+---
+
+## [2025-12-12] - Feature: Tier Balance Constraints for Relaxed Optimization
+
+### Summary
+Added tier balance constraints with Big-M penalties to the Relaxed Optimization LP engine, ensuring fair distribution of Tier 1-4 accounts across all reps.
+
+### Weights Applied
+**Customers:**
+- ARR: 50%
+- ATR: 25%
+- Tiers: 25% (6.25% each tier)
+
+**Prospects:**
+- Pipeline: 50%
+- Tiers: 50% (12.5% each tier)
+
+### Changes
+- Added `tier`, `expansion_tier`, `initial_sale_tier` fields to `AggregatedAccount` interface
+- Added `getTier()` helper in dataLoader to extract tier from expansion_tier/initial_sale_tier fields
+- Added tier count calculation and targets (total per tier / number of reps)
+- Added Big-M penalty slack variables for each tier (Tier 1-4)
+- Added tier decomposition constraints for each rep/tier combination
+- Each tier treated individually (not grouped) per user specification
+
+### Files Modified
+- `src/services/optimization/types.ts`
+- `src/services/optimization/preprocessing/dataLoader.ts`
+- `src/services/optimization/constraints/lpProblemBuilder.ts`
+
+---
+
+## [2025-12-12] - Feature: Big-M Penalty System for Relaxed Optimization
+
+### Summary
+Implemented the three-tier Big-M penalty system for balance constraints in the Relaxed Optimization LP engine, matching the waterfall engine's behavior. This enforces absolute minimum/maximum ARR, ATR, and Pipeline per rep.
+
+### The Three-Tier System
+1. **Alpha zone** (within variance band) - Small penalty (0.01x)
+2. **Beta zone** (between variance and absolute limits) - Medium penalty (1.0x)  
+3. **Big-M zone** (beyond absolute limits) - Huge penalty (1000x)
+
+### Decomposition Formula
+```
+actual_value = target + alpha_over - alpha_under + beta_over - beta_under + bigM_over - bigM_under
+```
+
+### Changes
+- Added `buildMetricPenaltyTerms()` function for three-tier slack generation
+- Updated balance constraints to use decomposition formula with six slack variables
+- Added `arr_min`, `arr_max`, `arr_variance`, `atr_min/max/variance`, `pipeline_min/max/variance` to `LPBalanceConfig`
+- Updated dataLoader to read min/max/variance from assignment_configuration table
+
+### Also Fixed
+- DataLoader pagination: Now fetches ALL accounts/opportunities (was hitting Supabase 1000-row limit)
+- Added `fetchAllAccounts()` and `fetchAllOpportunities()` with proper pagination
+
+### Files Modified
+- `src/services/optimization/constraints/lpProblemBuilder.ts`
+- `src/services/optimization/types.ts`
+- `src/services/optimization/preprocessing/dataLoader.ts`
+
+---
+
+## [2025-12-12] - Fix: Save Button Disabled After Changing Optimization Model
+
+### Summary
+Fixed bug where the "Save Configuration" button would remain disabled (unclickable) after selecting a new optimization model in the Assignment Engine configuration dialog.
+
+### Root Cause
+The `ModelSelector` component's `onChange` handler was directly updating `config` state but not setting `isDirty` to `true`. The Save button is disabled when `!isDirty`, so it stayed grayed out.
+
+### Fix
+Updated the `onChange` handler for `ModelSelector` to also call `setIsDirty(true)` and `setShowSuccess(false)`, matching the behavior of other field handlers.
+
+### Files Modified
+- `src/components/FullAssignmentConfig.tsx`
+
+---
+
+## [2025-12-12] - Fix: HiGHS Relaxed Optimization Engine (Multiple Issues)
+
+### Summary
+Fixed multiple issues preventing the Relaxed Optimization LP engine from working.
+
+### Issues Fixed
+1. **WASM Loading**: Module was trying to load from local Vercel assets instead of the CDN
+2. **API Error**: `setOption is not a function` - HiGHS JS API doesn't expose setOption method
+3. **LP Format Error**: "Unable to read LP model" - Invalid LP format due to:
+   - Variable names starting with numbers (Salesforce IDs like `001...`)
+   - Incorrect coefficient formatting in objective function
+
+### Fixes
+1. Added CDN configuration for WASM files (`https://lovasoa.github.io/highs-js/`)
+2. Removed unsupported `setOption` calls
+3. Added `sanitizeVarName()` to ensure LP-compliant variable names (must start with letter)
+4. Fixed LP format to match CPLEX specification
+5. Added variable mapping to correctly extract solution back to original account/rep IDs
+
+### Files Modified
+- `src/services/optimization/solver/highsWrapper.ts`
+
+---
+
+## [2025-12-12] - Feature: Enhanced Balance Score with MSE and Drill-Down
+
+### Summary
+Upgraded the Balance Score metric on the Assignments page to be a comprehensive, MSE-based score with expandable drill-down visualization.
+
+### Changes
+- **New `BalanceScoreDetailCard` component** - Replaces simple balance percentage with full detail:
+  - MSE-based scoring: Score increases as rep loads converge to mean (0-100%)
+  - Quick stats: Shows Avg/Rep, Std Dev, and Coefficient of Variation
+  - Outlier badges: Visual indicators for underloaded, overloaded, and balanced reps
+  - Expandable drill-down with bar chart showing rep ARR distribution
+  - Target reference line and tolerance bands (±15%)
+  - Color-coded bars (red=under, amber=over, green=in range)
+- **Fixed 0% Balance bug**: Added flexible owner matching (rep_id, email, name)
+- **New TypeScript types**: `BalanceMetricsDetail`, `RepLoadDistribution`
+
+### Technical Details
+- Balance score = 70% MSE score + 30% in-range percentage
+- Tolerance configurable (default 15%)
+
+---
+
+## [2025-12-12] - Feature: Duplicate Build Button
+
+### Summary
+Added a "Duplicate Build" button to the Dashboard that creates a complete copy of an existing build with all its data.
+
+### Changes
+- New duplicate button (copy icon) appears on hover next to Edit and Delete buttons
+- Creates new build named "{Original Name} (copy)"
+- Copies all related data: accounts, sales_reps, opportunities, assignment_rules, assignment_configuration, and assignments
+- New duplicated build starts in DRAFT status with approval flags reset
+- Shows loading spinner during duplication process
+- Uses pagination to fetch ALL records (bypasses Supabase 1000 row limit)
+- Inserts records in batches of 500 for reliability
+- Success toast shows count of copied accounts and opportunities
+
+### Files Modified
+- `src/pages/Dashboard.tsx` - Added duplicate functionality with pagination support
+
+---
+
+## [2025-12-12] - Fix: Default Priority Order for Account Continuity
+
+### Summary
+Updated default priority order so Account Continuity is ranked above Geography, and added `geo_and_continuity` to EMEA/APAC modes.
+
+### Changes
+- Added `geo_and_continuity` priority to EMEA and APAC modes (position 2)
+- In ENT mode, swapped `continuity` (now 3) above `geography` (now 4)
+- Adjusted EMEA/APAC positions: continuity=3, geography=4, team_alignment=5, arr_balance=6
+- All modes now consistently have account continuity ranked above geography
+
+### Files Modified
+- `src/config/priorityRegistry.ts` - Added EMEA/APAC to geo_and_continuity, adjusted all positions
+
+---
+
+## [2025-12-13] - Fix: Build Card Layout - Consistent Alignment
+
+### Summary
+Fixed build cards to have consistent alignment across all elements.
+
+### Changes
+- **Title row**: Title on left, action buttons (hover) on right
+- **Badges row**: Status and region badges on their own row below title (left-aligned)
+- **Info grid**: Simplified to always show just Created + Owner (2 columns, consistent height)
+- **Action button**: Always pinned to bottom with `mt-auto`
+- Removed conditional Last Updated and Target Date from info grid to ensure consistent heights
+
+### Files Modified
+- `src/pages/Dashboard.tsx` - Restructured card layout for consistency
+
+---
+
+## [2025-12-13] - Feature: Duplicate Build Button
+
+### Summary
+Added a "Duplicate Build" button to the Dashboard that creates a complete copy of an existing build with all its data.
+
+### Changes
+- New duplicate button (copy icon) appears on hover next to Edit and Delete buttons
+- Creates new build named "{Original Name} (copy)"
+- Copies all related data: accounts, sales_reps, opportunities, assignment_rules, assignment_configuration, and assignments
+- New duplicated build starts in DRAFT status with approval flags reset
+- Shows loading spinner during duplication process
+
+### Files Modified
+- `src/pages/Dashboard.tsx` - Added duplicate functionality and UI button
+
+---
+
+## [2025-12-13] - Refactor: Streamlined Assignment Preview Dialog
+
+### Summary
+Simplified the cluttered Assignment Preview dialog by removing redundant elements.
+
+### Changes
+- Removed duplicate stats display (was showing same info 3 times)
+- Removed empty Statistics tab (data wasn't being populated)
+- Simplified header description (removed verbose "What happens when you Apply" text)
+- Consolidated to compact summary row + 2 tabs (Proposals, Conflicts)
+- Single Apply button in footer, cleaner styling
+
+### Files Modified
+- `src/components/AssignmentPreviewDialog.tsx` - Major simplification
+
+---
+
+## [2025-12-13] - Fix: Progress Dialog Stage Transition
+
+### Summary
+Fixed visual glitch where AI Optimization stage would flash "0%" briefly before showing completion checkmark.
+
+### Change
+- `aiProgressPercentage` now returns 100 when stage is completed, preventing the 0% flash during state transition
+
+### Files Modified
+- `src/components/AssignmentGenerationDialog.tsx`
+
+---
+
+## [2025-12-13] - Fix: Remove HiGHS from User-Facing Text
+
+### Summary
+Removed technical "HiGHS" references from user-facing UI. Internal solver name shouldn't be visible to users.
+
+### Changes
+- Assignment rationale: `(HiGHS Optimized)` → `(Optimized)`
+- Logic explainer: `(HiGHS)` removed from optimization description
+
+### Files Modified
+- `src/services/simplifiedAssignmentEngine.ts`
+- `src/components/WaterfallLogicExplainer.tsx`
+
+---
+
+## [2025-12-13] - Fix: ARR Distribution Chart Scaling
+
+### Summary
+Fixed bar chart scaling to be data-driven instead of scaling to hardcoded thresholds. Previously, bars would appear tiny if data was much smaller than the hardCap fallback (2.9M).
+
+### Change
+- Scale now uses max data value + 10% padding
+- Only extends to `preferredMax` if needed to show target zone
+- No longer stretches to irrelevant hardCap when data is small
+
+### Files Modified
+- `src/components/ARRDistributionChart.tsx` - Data-driven maxValue calculation
+
+---
+
+## [2025-12-13] - Fix: Remove Duplicate Apply Button
+
+### Summary
+Removed redundant green "Apply Proposals" button from the Assignment Engine header. Now only the contextual amber warning banner shows the Apply button (with explanation that assignments are in memory).
+
+### Files Modified
+- `src/pages/AssignmentEngine.tsx` - Removed duplicate header Apply button
+
+---
+
+## [2025-12-13] - Fix: Rep Stats Cards Layout
+
+### Summary
+Fixed awkward 5+1 card layout on the Reps view. Stats cards now display in a clean 2-column grid (1 column on mobile).
+
+### Files Modified
+- `src/components/RepManagement.tsx` - Changed grid from `lg:grid-cols-6` to `sm:grid-cols-2`
+
+---
+
+## [2025-12-13] - Feature: Geographic Scoring in Assignment Optimization
+
+### Summary
+Added soft geographic scoring to the assignment engine. All reps remain eligible based on priority level filtering, but geographic match quality is now a weighted factor in the HiGHS optimization objective. Users can configure how strongly geography is weighted via a slider.
+
+### How It Works
+- **P2 (Geography)**: Still requires geo-matched reps, but now uses geo score as a tiebreaker among matched reps
+- **P4 (Fallback)**: Uses geo score to prefer closer matches when all reps are eligible
+- **Scoring**: Exact match = 100, Sibling region = 60, Parent region = 40, Global = 25
+
+### Database Changes
+- Added `geo_weight` column to `assignment_configuration` (default 0.3)
+
+### Key Features
+1. **Geographic Hierarchy** - Defined region relationships:
+   - AMER: 'North East', 'South East', 'Central', 'West'
+   - EMEA: 'UK', 'DACH', 'France', 'Nordics', 'Benelux'
+   - APAC: 'ANZ', 'Japan', 'Singapore'
+
+2. **Configurable Weight** - Slider in Assignment Config:
+   - 0-30%: "Balance" - Prioritize balanced books over geography
+   - 30-60%: "Mixed" - Balance both factors
+   - 60-100%: "Geo-first" - Strongly prefer exact geo matches
+
+3. **Sibling Regions** - Partial credit when accounts go to neighboring regions (e.g., Central account → West rep gets 60 points vs 100 for exact match)
+
+### Files Modified
+- `src/services/simplifiedAssignmentEngine.ts` - Added REGION_HIERARCHY, REGION_SIBLINGS, getGeographyScore(), getMappedRegion(), geoBonus in HiGHS coefficient
+- `src/components/FullAssignmentConfig.tsx` - Added geo_weight slider UI
+- `src/integrations/supabase/types.ts` - Added geo_weight field
+- `supabase/migrations/20251213000001_add_geo_weight.sql` - Database migration
+
+### Design Notes
+- **P2 filtering unchanged** - Maintains waterfall design where accounts cascade through priority levels
+- **Score affects ranking, not eligibility** - HiGHS uses score as tiebreaker, not to expand/restrict rep pools
+- **Backward compatible** - Default weight of 0.3 maintains similar behavior to before
+
+---
+
+## [2025-12-12] - Feature: Pure Optimization LP Engine - COMPLETE IMPLEMENTATION
+
+### Summary
+Fully implemented the Pure Optimization LP Engine as specified in the v2 plan. This provides a single-solve global optimization alternative to the cascading priority waterfall, using HiGHS WASM solver with weighted objectives and hard constraints.
+
+### New Service Modules (`src/services/optimization/`)
+
+**Core Engine:**
+- `pureOptimizationEngine.ts` - Main orchestrator class with progress tracking
+- `types.ts` - Complete TypeScript interfaces (600+ lines)
+- `index.ts` - Public API exports
+
+**Preprocessing:**
+- `preprocessing/dataLoader.ts` - Load accounts, reps, opportunities, territory mappings
+- `preprocessing/parentChildAggregator.ts` - Aggregate children into parents, cascade post-solve
+- `preprocessing/strategicPoolHandler.ts` - Pre-assign strategic accounts to strategic reps
+
+**Scoring Functions:**
+- `scoring/continuityScore.ts` - Tenure, stability, value components
+- `scoring/geographyScore.ts` - Region hierarchy with sibling detection
+- `scoring/teamAlignmentScore.ts` - Account tier to rep tier matching
+
+**Constraints:**
+- `constraints/stabilityLocks.ts` - 6 lock types (CRE, renewal, PE, recent, manual, backfill)
+- `constraints/lpProblemBuilder.ts` - Build complete LP problem for HiGHS
+
+**Solver:**
+- `solver/highsWrapper.ts` - HiGHS WASM integration with LP format conversion
+
+**Post-Processing:**
+- `postprocessing/rationaleGenerator.ts` - Human-readable assignment explanations
+- `postprocessing/metricsCalculator.ts` - All success metrics (CV, continuity, geo, tier)
+
+**Utilities:**
+- `utils/weightNormalizer.ts` - Linked slider weight normalization
+
+### New UI Components (`src/components/optimization/`)
+- `ModelSelector.tsx` - Toggle between Waterfall and Pure Optimization
+- `ObjectiveWeights.tsx` - Customer/Prospect weight tabs with linked sliders
+- `ConstraintToggles.tsx` - Hard constraint and stability lock toggles
+- `BalanceConfig.tsx` - Balance metric penalty sliders
+- `MetricsDashboard.tsx` - Post-solve metrics display
+
+### Integration
+- `useAssignmentEngine.ts` - Routes to LP engine when `optimization_model = 'pure_optimization'`
+- Progress tracking through all LP solve stages
+- Result transformation to existing AssignmentResult format
+
+### Mathematical Model
+**Objective Function:**
+```
+max Σ(c_{a,r} × x_{a,r}) - Σ(λ_m × deviation_r^m / target^m) - M × Σ(slack_r)
+```
+
+Where `c_{a,r} = w_C×Continuity + w_G×Geography + w_T×TeamAlignment + ε×rank`
+
+**Hard Constraints:** Assignment uniqueness, capacity, stability locks, strategic pool
+
+### Database Migration
+`supabase/migrations/20241212000001_add_pure_optimization.sql` adds:
+- `optimization_model` column ('waterfall' | 'pure_optimization')
+- 8 JSONB columns for LP configuration
+
+### Files Created (25 new files)
+```
+src/services/optimization/
+├── index.ts
+├── types.ts
+├── pureOptimizationEngine.ts
+├── preprocessing/
+│   ├── dataLoader.ts
+│   ├── parentChildAggregator.ts
+│   └── strategicPoolHandler.ts
+├── scoring/
+│   ├── continuityScore.ts
+│   ├── geographyScore.ts
+│   └── teamAlignmentScore.ts
+├── constraints/
+│   ├── stabilityLocks.ts
+│   └── lpProblemBuilder.ts
+├── solver/
+│   └── highsWrapper.ts
+├── postprocessing/
+│   ├── rationaleGenerator.ts
+│   └── metricsCalculator.ts
+└── utils/
+    └── weightNormalizer.ts
+
+src/components/optimization/
+├── index.ts
+├── ModelSelector.tsx
+├── ObjectiveWeights.tsx
+├── ConstraintToggles.tsx
+├── BalanceConfig.tsx
+└── MetricsDashboard.tsx
+```
+
+### Deployment
+- Production: https://book-ops-workbench-c4ird7e0e-seanxmuses-projects.vercel.app
+
+---
+
+## [2025-12-12] - Fix: Pure Optimization LP Engine Bug Fixes
+
+### Summary
+Fixed 6 critical bugs in the Pure Optimization LP Engine found during code review.
+
+### Bugs Fixed
+
+1. **Locked accounts missing from LP problem (CRITICAL)**
+   - Bug: Locked accounts were passed to buildLPProblem but not included in decision variables
+   - Fix: Now creates variables for ALL accounts (unlocked + locked) so they contribute to capacity/balance constraints
+
+2. **Division by zero in balance penalty calculation**
+   - Bug: If `arrTarget = 0`, dividing by it crashed the solver
+   - Fix: Added guards `&& arrTarget > 0` before creating balance constraints
+
+3. **Variable name parsing in HiGHS wrapper**
+   - Bug: Regex `/^x_(.+)_([^_]+)$/` failed for IDs with underscores
+   - Fix: Changed to `lastIndexOf('_')` approach for more reliable parsing
+
+4. **Imports at wrong location in pureOptimizationEngine.ts**
+   - Bug: `AssignmentScores` and `LPMetrics` were imported AFTER the class definition
+   - Fix: Moved all imports to the top with other type imports
+
+5. **Capacity constraints excluded locked accounts**
+   - Bug: Locked accounts didn't consume capacity from their assigned reps
+   - Fix: Capacity constraints now include ALL accounts
+
+6. **Balance constraints excluded locked accounts**
+   - Bug: Locked accounts didn't contribute to balance calculations
+   - Fix: Balance deviation constraints now include ALL accounts
+
+### Files Modified
+- `src/services/optimization/pureOptimizationEngine.ts` - Import fix
+- `src/services/optimization/constraints/lpProblemBuilder.ts` - Locked accounts + div/0 fixes
+- `src/services/optimization/solver/highsWrapper.ts` - Variable parsing fix
+
+### Deployment
+- Production: https://book-ops-workbench-4k2qihqj7-seanxmuses-projects.vercel.app
+
+---
+
+## [2025-12-12] - Feature: Relaxed Optimization Now Ready for Use
+
+### Summary
+Connected all the pieces to make Relaxed Optimization usable:
+
+1. **Database migration applied** - Added all 9 LP config columns to `assignment_configuration`
+2. **UI integrated** - `ModelSelector` component added to Assignment Configuration page
+3. **Full pipeline connected**: Config → Engine routing → LP solve → Results
+
+### What Users Can Do Now
+- Open Assignment Configuration
+- Select "Relaxed Optimization" at the top of the page
+- Save configuration
+- Generate assignments → Will use LP engine instead of waterfall
+
+### Deployment
+- Production: https://book-ops-workbench-65s5chai1-seanxmuses-projects.vercel.app
+
+---
+
+## [2025-12-12] - Refactor: Renamed to "Waterfall" vs "Relaxed Optimization"
+
+### Summary
+Renamed the two assignment models for clarity:
+
+| Old Name | New Name |
+|----------|----------|
+| Waterfall | **Waterfall Optimization** |
+| Pure Optimization | **Relaxed Optimization** |
+
+### Rationale
+- "Relaxed" is an LP term meaning soft constraints with penalties (which is exactly what we do)
+- Suggests flexibility vs the rigid priority cascade of waterfall
+- Both names now include "Optimization" for consistency
+
+### Files Modified
+- `components/optimization/ModelSelector.tsx` - UI labels
+- `services/optimization/types.ts` - Type definition
+- `hooks/useAssignmentEngine.ts` - Routing check
+- `services/optimization/preprocessing/dataLoader.ts` - Default value
+- `supabase/migrations/20241212000001_add_pure_optimization.sql` - CHECK constraint
+
+---
+
+## [2025-12-12] - Docs: Pure Optimization LP Engine Plan v2
+
+### Summary
+Complete rewrite of the Pure Optimization LP Engine implementation plan based on critical review. Fixed 12 critical gaps, 8 ambiguities, and added 4 architectural improvements.
+
+### Critical Fixes Made
+1. **Balance penalty scale mismatch** - Changed from per-dollar penalties to relative (0-1) scale
+2. **Customer vs prospect mode** - Added separate objective configs for each assignment type
+3. **Locked accounts constraint** - Added `locked_accounts_enabled` to lp_constraints schema
+4. **Parent-child constraint explosion** - Changed to pre-aggregate children (no linking constraints)
+5. **Stability locks** - Added all 6 types: CRE, renewal, PE, recent change, manual, backfill migration
+6. **Backfill migration** - Added handling for accounts with leaving reps migrating to replacement
+7. **Data loading specs** - Added complete preprocessing section with data sources
+8. **ARR source field** - Specified `hierarchy_bookings_arr_converted` as primary source
+9. **Rationale generation** - Added detailed spec for human-readable explanations
+10. **Success metrics** - Added full metrics calculation spec with targets
+11. **Tie-breaking** - Changed to rank-based tie-breaker (not per-dollar)
+12. **Weight normalization** - Added linked slider behavior spec
+
+### Files Created
+- `docs/core/pure_optimization_plan.md` - Complete v2 plan document (600+ lines)
+- `supabase/migrations/20241212000001_add_pure_optimization.sql` - Database migration
+- `src/services/optimization/types.ts` - All TypeScript interfaces (450+ lines)
+- `src/services/optimization/index.ts` - Public API exports
+- `src/services/optimization/scoring/continuityScore.ts` - Tenure/stability/value scoring
+- `src/services/optimization/scoring/geographyScore.ts` - Region hierarchy scoring
+- `src/services/optimization/scoring/teamAlignmentScore.ts` - Tier matching scoring
+- `src/services/optimization/utils/weightNormalizer.ts` - Weight normalization utility
+
+### Mathematical Formulation
+The plan now includes complete LP formulation:
+- **Objective**: Maximize scoring coefficients - balance deviation penalties
+- **3 Scoring Functions**: Continuity, Geography, Team Alignment (all 0-1 scale)
+- **Balance Penalties**: Relative (deviation/target), not per-dollar
+- **6 Hard Constraints**: Assignment, capacity, locked, stability, strategic, parent-child
+
+### Database Schema
+Added 10 new JSONB columns to `assignment_configuration`:
+- `optimization_model` - 'waterfall' or 'pure_optimization'
+- `lp_objectives_customer` / `lp_objectives_prospect` - Separate weights by type
+- `lp_balance_config` - Balance metric enables and relative penalties
+- `lp_constraints` - Hard constraint toggles
+- `lp_stability_config` - Stability lock enables and parameters
+- `lp_continuity_params` / `lp_geography_params` / `lp_team_params` - Scoring params
+- `lp_solver_params` - HiGHS solver configuration
+
+### Deployment
+- Production: https://book-ops-workbench-1evrnxuge-seanxmuses-projects.vercel.app
+
+---
+
+## [2025-12-12] - Feature: Phase 4 Analytics Upgrade
+
+### Summary
+Added comprehensive LP Engine success metrics and analytics across three tabs: Data Overview (pre-assignment insights), Assignments (preview before generation), and Balancing (before/after comparison). Surfaces the 5 core success metrics everywhere analytics are displayed.
+
+### LP Success Metrics
+The 5 metrics from the weighted LP engine plan are now visible in all analytics views:
+1. **Balance Score** - How evenly ARR is distributed across reps (0-100%)
+2. **Continuity Score** - % of accounts retaining same owner (0-100%)
+3. **Geography Score** - Weighted geo alignment (exact=100%, sibling=60%, global=25%)
+4. **Team Alignment Score** - Account tier matching rep specialization (0-100%)
+5. **Capacity Utilization** - Average rep load vs target (shown after assignments)
+
+### New Components
+- `src/types/analytics.ts` - TypeScript interfaces for all analytics types
+- `src/components/analytics/` folder with:
+  - `LPScoreCard.tsx` - Individual metric card with color-coded progress bar
+  - `LPScoresSummary.tsx` - Row of 5 LP metric cards
+  - `RegionPieChart.tsx` - Region distribution pie chart
+  - `MetricBarChart.tsx` - ARR/tier distribution bar charts
+  - `BeforeAfterBar.tsx` - Grouped bar comparing original vs proposed
+  - `VarianceIndicator.tsx` - Delta badge with up/down arrows
+- `src/components/DataOverviewAnalytics.tsx` - Full analytics section for Data Overview tab
+- `src/components/AssignmentPreviewMetrics.tsx` - Pre-generation metrics preview
+- `src/components/BeforeAfterComparisonPanel.tsx` - Before/After LP metrics comparison
+
+### Integration Points
+1. **Data Overview Tab** (BuildDetail.tsx) - Shows LP scores + distribution charts after data import
+2. **Assignment Engine** (AssignmentEngine.tsx) - Shows current state metrics before Generate
+3. **Balancing Tab** (EnhancedBalancingDashboard.tsx) - Shows before/after comparison with deltas
+
+### Service Extensions
+- `src/services/buildDataService.ts` - Added LP metric calculation methods:
+  - `calculateBalanceScore()`, `calculateContinuityScore()`, `calculateGeographyScore()`
+  - `calculateTeamAlignmentScore()`, `calculateCapacityUtilization()`
+  - `getAnalyticsMetrics()`, `getMetricsComparison()`
+- `src/hooks/useBuildData.ts` - Added `useAnalyticsMetrics()`, `useMetricsComparison()` hooks
+
+### Deployment
+- Production: https://book-ops-workbench-idpc77a4x-seanxmuses-projects.vercel.app
+
+---
+
+## [2025-12-12] - Fix: Backfill Feature Bug Fixes
+
+### Summary
+Fixed 4 bugs in the Backfill and Open Headcount feature implementation.
+
+### Bugs Fixed
+1. **Silent migration errors** - Account and opportunity migrations now have proper error handling. If any migration fails, the error is thrown and the user is notified.
+
+2. **Missing opportunity cache invalidation** - Added `queryClient.invalidateQueries({ queryKey: ['opportunities'] })` to the onSuccess handler so the UI reflects migrated opportunities.
+
+3. **Double-enable guard** - Added check in mutation to prevent creating duplicate BF reps if someone toggles the switch when already enabled. Also disabled the switch for placeholder reps.
+
+4. **Weak BF rep ID uniqueness** - Added random suffix to BF rep ID generation to match the OPEN- pattern: `BF-${buildId}-${timestamp}-${random}`
+
+### Files Modified
+- `src/components/data-tables/SalesRepDetailDialog.tsx` - All 4 fixes
+
+---
+
+## [2025-12-12 23:45 UTC] - Feature: Backfill & Open Headcount Support
+
+### Summary
+Added support for two key rep transition scenarios:
+1. **Backfill**: Mark leaving reps to exclude from assignments; auto-create replacement rep and migrate accounts
+2. **Open Headcount**: Import reps without Salesforce IDs; placeholder ID auto-generated
+
+### Database Changes
+- Added `is_backfill_source` (boolean) - true for reps leaving the business
+- Added `is_backfill_target` (boolean) - true for auto-created replacement reps  
+- Added `backfill_target_rep_id` (text) - links leaving rep to their replacement
+- Added `is_placeholder` (boolean) - true for open headcount reps
+
+### Key Features
+1. **Backfill Toggle** in SalesRepDetailDialog:
+   - Creates BF-{name} replacement rep with same region/team/FLM/SLM
+   - Migrates all accounts (owner_id and new_owner_id) to backfill rep
+   - Migrates all opportunities similarly
+   - Sets `include_in_assignments = false` on leaving rep
+   - Logs action to audit_log
+
+2. **Open Headcount Import**:
+   - rep_id can be left blank during import
+   - Auto-generates `OPEN-{buildId}-{timestamp}-{random}` ID
+   - Sets `is_placeholder = true` for tracking
+
+3. **UI Badges** in SalesRepsTable:
+   - "Leaving" (orange) - is_backfill_source
+   - "Backfill" (blue) - is_backfill_target
+   - "Placeholder" (gray) - is_placeholder
+
+4. **Import Tooltips**:
+   - Open Headcount explanation near Sales Reps upload
+   - Backfill process explained with link to Reps tab
+
+5. **Assignment Engine Fixes**:
+   - RebalancingAssignmentService now respects `include_in_assignments` flag
+   - Fixed 4 filter locations that only checked `is_active`
+
+### Files Modified
+- `supabase/migrations/20251212000001_add_backfill_columns.sql`
+- `src/integrations/supabase/types.ts`
+- `src/services/batchImportService.ts`
+- `src/pages/DataImport.tsx`
+- `src/components/data-tables/SalesRepDetailDialog.tsx`
+- `src/components/data-tables/SalesRepsTable.tsx`
+- `src/services/rebalancingAssignmentService.ts`
+
+---
+
+## [2025-12-12] - Fix: Auto-Calculate Targets + Prospect Pipeline Limits
+
+### Summary
+Fixed two critical issues preventing 100% assignment rates:
+1. Auto-calculate was setting targets too low for accounts with high individual ARR
+2. Prospect pipeline limits were being bypassed (no capacity enforcement)
+
+### Root Cause Analysis
+Build `423614d8` had accounts with ARR values of $50K-$190K but auto-calculate set target at $33K. Individual accounts exceeded the entire rep capacity limit, making them impossible to assign through normal priorities.
+
+### Key Changes
+1. **Auto-Calculate now considers max account ARR**
+   - Target is set to at least the largest individual account value
+   - Ensures every account CAN be assigned to at least one rep
+   - `recommendedCustomerTarget = Math.max(calculatedTarget, maxAccountARR)`
+
+2. **Prospect pipeline limits now enforced** (from earlier today)
+   - `hasCapacity()` now checks `prospect_max_arr` and `prospect_variance_percent`
+   - Prospects no longer bypass capacity checks entirely
+
+### Files Modified
+- `src/components/FullAssignmentConfig.tsx` - Auto-calculate now includes max account ARR floor
+- `src/services/simplifiedAssignmentEngine.ts` - Prospect capacity checks added
+
+---
+
+## [2025-12-12] - Fix: Force Assignment for Unassigned Accounts
+
+### Summary
+Fixed a critical bug where accounts that couldn't be assigned through normal priority levels would remain unassigned. The force assignment logic existed but was in dead code (`assignSingleAccount`) that was never called.
+
+### Root Cause
+After all priorities completed, accounts without any eligible reps (all at capacity) were only logged as warnings but never actually assigned. This resulted in some accounts showing "Unassigned" status after applying proposals.
+
+### Key Changes
+- Added force assignment loop after all priorities execute in `generateAssignments()`
+- Remaining accounts now get assigned to the least loaded rep
+- Workload tracking updated for force-assigned accounts  
+- Proper warnings generated for forced assignments
+- **100% assignment rate now guaranteed** - no accounts left unassigned
+
+### Files Modified
+- `src/services/simplifiedAssignmentEngine.ts` - Added force assignment for remaining accounts
+
+---
+
+## [2025-12-12 00:15 UTC] - Fix: Priority Rule Labels Complete Fix + UI Cleanup
+
+### Summary
+Completed fix for priority labels - now all assignments show formatted labels like `P1: Continuity + Geography` instead of raw backend IDs. Also removed "How It Worked" section from preview dialog.
+
+### Additional Fixes (from 23:55 UTC entry)
+1. **Fixed solveWithHiGHS calls** - The 4 HiGHS optimization calls were still passing raw IDs:
+   - `batchAssignPriority1`: `'geo_and_continuity'` → `formatPriorityLabel('geo_and_continuity', 1)`
+   - `batchAssignPriority2`: `'geography'` → `formatPriorityLabel('geography', 2)`
+   - `batchAssignPriority3`: `'continuity'` → `formatPriorityLabel('continuity', 3)`
+   - `batchAssignPriority4`: `'arr_balance'` → `formatPriorityLabel('arr_balance', 4)`
+
+2. **Separated Sales Tools from Protected** - Sales Tools now shows distinct orange badge, not amber "Protected"
+
+3. **Removed "How It Worked" section** - Removed verbose configuration summary from AssignmentPreviewDialog
+
+### Files Modified
+- `src/services/simplifiedAssignmentEngine.ts` - Fixed 4 solveWithHiGHS calls
+- `src/components/AssignmentPreviewDialog.tsx` - Removed How It Worked, fixed Sales Tools badge
+
+---
+
+## [2025-12-11 23:55 UTC] - Fix: Priority Rule Labels in Assignment Tables
+
+### Summary
+Fixed inconsistent priority labels in assignment output tables. Rules now display with consistent `P0:`/`P1:`/`P2:`/`P3:`/`P4:`/`RO:` prefix and friendly names. Unassigned accounts show "Unassigned" instead of "-".
+
+### Root Cause
+`simplifiedAssignmentEngine.ts` set `ruleApplied` inconsistently:
+- Some used raw backend IDs: `'sales_tools_bucket'`
+- Some used formatted names: `'Priority 1: Continuity + Geography'`
+
+### Fix Applied
+1. **Added `formatPriorityLabel()` helper** in `simplifiedAssignmentEngine.ts`:
+   - Maps backend IDs to friendly names via `PRIORITY_NAMES` constant
+   - Formats as `P{level}: {friendlyName}` or `RO: {friendlyName}`
+
+2. **Updated 9 ruleApplied assignments** to use the helper:
+   - `sales_tools_bucket` → `P0: Sales Tools Bucket`
+   - `manual_holdover` → `P0: Manual Holdover`
+   - Strategic accounts → `P0: Strategic Pool: Continuity/Distribution`
+   - P1-P4 priorities now use consistent format
+
+3. **Added `formatRuleDisplay()` helper** in `VirtualizedAccountTable.tsx`:
+   - Handles new format, legacy IDs, and missing values
+   - Shows "Unassigned" for accounts without rules
+
+4. **Updated `AssignmentPreviewDialog.tsx`**:
+   - `getRuleAppliedBadge()` now uses pattern matching for P0-P4, RO prefixes
+   - Summary counts use `startsWith()` pattern matching
+   - Added Shield icon for protected accounts
+
+### Files Modified
+- `src/services/simplifiedAssignmentEngine.ts` - Added helper, updated 9 ruleApplied lines
+- `src/components/VirtualizedAccountTable.tsx` - Added formatter, updated display logic
+- `src/components/AssignmentPreviewDialog.tsx` - Updated badge function and summary counts
+
+---
+
+## [2025-12-11 23:30 UTC] - Fix: Assignment Type Database Constraint Violation
+
+### Summary
+Fixed database constraint violation when applying assignments. The `assignment_type` column had a CHECK constraint that rejected values like `'rebalancing'`, `'customer'`, `'prospect'`, and `'SALES_TOOLS'`.
+
+### Root Cause
+The database only allowed: `'AUTO_COMMERCIAL'`, `'MANUAL_ENTERPRISE'`, `'MANAGER_OVERRIDE'`
+But code was inserting invalid values in 5 different files.
+
+### Fix Applied
+1. **Expanded DB constraint** via migration to allow new semantic values:
+   - `'MANUAL_REASSIGNMENT'` - for UI manual reassignments
+   - `'SALES_TOOLS'` - for accounts routed to Sales Tools bucket
+2. **Fixed 4 code files**:
+   - `rebalancingAssignmentService.ts:1047` - `'rebalancing'` → `'AUTO_COMMERCIAL'`
+   - `AssignmentEngine.tsx:1525` - conditional → `'MANUAL_REASSIGNMENT'`
+   - `UnassignedAccountsModal.tsx:263` - conditional → `'MANUAL_REASSIGNMENT'`
+   - `SalesRepDetailModal.tsx:398` - conditional → `'MANUAL_REASSIGNMENT'`
+3. **Added orphan detection** in `useAssignmentEngine.ts` - logs warning for proposals with owner_ids not in sales_reps, prevents "Unknown is 273% over target" warning by filtering orphans from imbalance check.
+
+### Files Modified
+- `supabase/migrations/20251211000002_expand_assignment_type_constraint.sql` - New migration
+- `src/services/rebalancingAssignmentService.ts` - Fixed invalid value
+- `src/pages/AssignmentEngine.tsx` - Fixed invalid value
+- `src/components/UnassignedAccountsModal.tsx` - Fixed invalid value
+- `src/components/SalesRepDetailModal.tsx` - Fixed invalid value
+- `src/hooks/useAssignmentEngine.ts` - Added orphan warning + filtering
+
+---
+
+## [2025-12-11 21:45 UTC] - Feature: Team Alignment Threshold Slider
+
+### Summary
+Added configurable "Minimum Tier Match %" slider to Team Alignment priority. Reps must have at least X% of their accounts matching their tier (SMB/Growth/MM/ENT), enforced as an LP constraint.
+
+### Key Changes
+1. **New `settings` property** on `PriorityConfig` interface for priority-specific settings
+2. **Threshold slider** in Priority Configuration when Team Alignment is expanded (default: 80%)
+3. **LP constraint** in HiGHS solver enforces minimum tier match per rep
+4. **Fixed tier thresholds** - now consistent across all files:
+   - SMB: < 100 employees
+   - Growth: 100-499 employees
+   - MM: 500-2499 employees
+   - ENT: 2500+ employees
+
+### Files Modified
+- `src/config/priorityRegistry.ts` - Added `settings` field, default in `getDefaultPriorityConfig()`
+- `src/components/PriorityWaterfallConfig.tsx` - Added slider UI and `handleSettingsChange()`
+- `src/services/simplifiedAssignmentEngine.ts` - Added LP tier match constraint
+- `src/components/WaterfallLogicExplainer.tsx` - Display configured threshold
+- `src/services/optimization/optimizationSolver.ts` - Fixed tier thresholds
+
+### How It Works
+When Team Alignment is enabled with 80% threshold:
+- SMB rep must have ≥80% SMB-tier accounts
+- If below threshold, further mismatched assignments are heavily penalized
+- Constraint is added to HiGHS LP formulation, not a dynamic penalty
+
+---
+
+## [2025-12-11 21:10 UTC] - Fix: Sub-Condition Count in How It Works Dialog
+
+### Summary
+Fixed "Active sub-conditions (4)" showing 4 when only 1 has data. The count now filters by BOTH enabled AND data availability.
+
+### Key Changes
+- `WaterfallLogicExplainer.tsx`: Added `mappedFields` prop and filter logic using `getAvailableSubConditions()`
+- `AssignmentEngine.tsx`: Added `useMappedFields` hook and passes `mappedFields` to `WaterfallLogicExplainer`
+
+### Root Cause
+The "How It Works" dialog counted all enabled sub-conditions without checking if they have data, unlike the Priority Configuration component which correctly filtered them.
+
+---
+
+## [2025-12-11 20:30 UTC] - Feature: Dynamic Priority Configuration
+
+### Summary
+Fixed critical issue where UI priority configuration was ignored by the assignment engine. The engine now reads and executes priorities in the order configured in the UI.
+
+### Problem
+The Priority Configuration UI saved settings to `priority_config` in the database, but `simplifiedAssignmentEngine.ts` used hardcoded P1-P4 order, completely ignoring user configuration.
+
+### Solution
+Modified the working `simplifiedAssignmentEngine.ts` to:
+1. Load `priority_config` from the database (using existing config fetch, no extra DB call)
+2. Execute priorities in the configured order via new `executePriority()` dispatcher
+3. Use priority IDs in `ruleApplied` field to match UI display
+
+### Key Changes
+- **New methods extracted**:
+  - `handleManualHoldover()` - Strategic accounts + locked accounts
+  - `handleSalesToolsBucket()` - Low-ARR customers (<$25K) to Sales Tools
+  - `executePriority()` - Routes priority ID to appropriate handler
+
+- **Dynamic execution loop** replaces hardcoded P1-P4 sequence
+- **Priority IDs now match** between UI configuration and engine output
+- Console logs show which priorities execute in which order
+
+### Priority ID to Method Mapping
+| Priority ID | Engine Method | Status |
+|-------------|---------------|--------|
+| `manual_holdover` | `handleManualHoldover()` | Implemented |
+| `sales_tools_bucket` | `handleSalesToolsBucket()` | Implemented |
+| `stability_accounts` | - | Phase 2 stub |
+| `team_alignment` | HiGHS solver penalties | Embedded in solver |
+| `geo_and_continuity` | `batchAssignPriority1()` | Implemented |
+| `geography` | `batchAssignPriority2()` | Implemented |
+| `continuity` | `batchAssignPriority3()` | Implemented |
+| `arr_balance` | `batchAssignPriority4()` | Implemented |
+
+### Files Modified
+- `src/services/simplifiedAssignmentEngine.ts`
+
+### Phase 2 (Future)
+- Implement `stability_accounts` logic (CRE risk, renewal soon, PE firm, recent owner change)
+- Consider UI clarification that `team_alignment` is a solver weight, not a discrete step
+
+---
+
+## [2025-12-11 19:00 UTC] - Fix: Auto-Apply Detected Mode & Add APAC
+
+### Summary
+Fixed mode detection to auto-select the detected mode in the dropdown, and added missing APAC option.
+
+### Key Changes
+- **Auto-apply detected mode**: When Priority Configuration opens, it now auto-selects the detected mode (e.g., Commercial) instead of keeping ENT as default
+- **Added APAC to dropdown**: APAC was missing from the mode selector options
+
+### Files Modified
+- `src/components/PriorityWaterfallConfig.tsx`
+
+---
+
+## [2025-12-11 18:45 UTC] - Fix: Mode Detection & Sub-Condition Count
+
+### Summary
+Fixed two issues in Priority Configuration:
+1. **Sub-condition count showed "4/4 active" when only 1 had data** - Now only counts sub-conditions that are both enabled AND have data
+2. **Mode detection didn't suggest COMMERCIAL for Team Alignment data** - Now checks for `employees` + `team` (tier values) to suggest COMMERCIAL mode
+
+### Key Changes
+- `PriorityWaterfallConfig.tsx`: Fixed `enabledSubCount` to only count sub-conditions that are available (have data)
+- `modeDetectionService.ts`: Added Team Alignment data detection (employees in accounts + team tier in reps)
+- Mode detection now suggests COMMERCIAL when Team Alignment data exists
+
+### Mode Detection Logic (Updated)
+| Condition | Suggested Mode |
+|-----------|----------------|
+| Build region = EMEA | EMEA |
+| Build region = APAC | APAC |
+| Team Alignment data exists (employees + team tier) | COMMERCIAL |
+| RS reps OR PE accounts exist | COMMERCIAL |
+| Default | ENT |
+
+---
+
+## [2025-12-11 18:30 UTC] - Fix: Team Alignment Priority Now Uses 'team' Field
+
+### Summary
+Fixed Team Alignment priority showing "Missing data" even when data exists. The system now uses the `team` field (which contains tier values like SMB/Growth/MM/ENT) instead of the empty `team_tier` field.
+
+### Key Changes
+- Updated `priorityRegistry.ts` to require `team` instead of `team_tier` for sales_reps
+- Updated `priorityExecutor.ts` to map `team` → `team_tier` when loading reps
+- Added `team` interface field to SalesRep type
+- Added `employees` to accounts field presence check in `useMappedFields.ts`
+- Added `team` to sales_reps field presence check in `useMappedFields.ts`
+
+### Files Modified
+- `src/config/priorityRegistry.ts`
+- `src/services/priorityExecutor.ts`
+- `src/hooks/useMappedFields.ts`
+
+---
+
+## [2025-12-11 18:15 UTC] - Fix: Assignment Configuration Save Error (Complete)
+
+### Summary
+Fixed schema mismatch errors when saving assignment configuration. The frontend was using field names that didn't match the database columns.
+
+### Key Changes
+**Field Name Mappings (Frontend → Database):**
+- `atr_variance_percent` → `atr_variance`
+- `customer_target_atr` → `atr_target`
+- `customer_min_atr` → `atr_min`
+- `customer_max_atr` → `atr_max`
+
+**Code Updates:**
+- Updated `handleSave()` to explicitly map frontend fields to correct DB columns instead of spreading `...config`
+- Updated load logic to read from correct DB columns (`atr_target`, `atr_min`, `atr_max`)
+- Renamed `atr_variance_percent` to `atr_variance` in `priorityExecutor.ts`
+
+### Files Modified
+- `src/components/FullAssignmentConfig.tsx`
+- `src/services/priorityExecutor.ts`
+
+---
+
+## [2025-12-11 17:55 UTC] - Fix: Priority Configuration UI Shows "RO" for Residual Optimization
+
+### Summary
+Fixed the Priority Configuration UI (`PriorityWaterfallConfig.tsx`) to display "RO" instead of "P5" for the Residual Optimization priority, matching the fix applied earlier to the WaterfallLogicExplainer component.
+
+### Key Changes
+- Updated `SortablePriorityItem` component to check if priority is `arr_balance` and display "RO" instead of `P{position}`
+
+---
+
+## [2025-12-11] - Feature: APAC Region Support & EMEA Priority Reorder
+
+### Summary
+Added APAC as a new assignment mode and region option throughout the app. Updated EMEA priority order to remove combined geo+continuity in favor of separate continuity and geography priorities. Added team alignment to EMEA/APAC modes.
+
+### Key Changes
+
+**New APAC Mode:**
+- Added `'APAC'` to `AssignmentMode` type
+- Added APAC detection in `modeDetectionService.ts`
+- Added APAC to user region options in Auth flow
+- APAC uses same priority structure as EMEA
+
+**EMEA Priority Reorder:**
+- Removed `geo_and_continuity` from EMEA mode (now ENT/COMMERCIAL only)
+- Moved `continuity` to position 2 (was 4)
+- Added `team_alignment` to EMEA at position 4
+
+**Priority Positions (EMEA/APAC):**
+| Pos | Priority |
+|-----|----------|
+| 0 | Manual Holdover |
+| 1 | Stability Accounts |
+| 2 | Account Continuity |
+| 3 | Geographic Match |
+| 4 | Team Alignment |
+| 5 | Residual Optimization |
+
+**Documentation:**
+- Added `cannotGoAbove` constraint comments explaining ENT/COMMERCIAL-only behavior
+- Added ENT threshold pending comment (Daniel feedback: 2500+ vs 1500+)
+- Added engine doc log noting UI-only nature of `assignment_mode`
+
+### Files Modified
+- `src/config/priorityRegistry.ts` - Added APAC mode, updated EMEA positions
+- `src/services/modeDetectionService.ts` - Added APAC detection, labels, descriptions
+- `src/contexts/AuthContext.tsx` - Added APAC to UserRegion type
+- `src/pages/Auth.tsx` - Added APAC to region dropdown
+- `src/services/optimization/optimizationSolver.ts` - Added ENT threshold pending comment
+- `src/services/simplifiedAssignmentEngine.ts` - Added UI-only documentation log
+
+### Important Note
+The assignment engine (`simplifiedAssignmentEngine.ts`) runs hardcoded P1-P4 logic regardless of the selected mode. The `assignment_mode` from config is currently **UI-only** - it affects which priorities are displayed in the configuration interface but does not change actual engine behavior. This is documented with a console log in the engine.
+
+---
+
+## [2025-12-11 18:30] - Critical Fix: Route Features to Active Engine
+
+### Summary
+Discovered that Sales Tools and Team Alignment were implemented in `priorityExecutor.ts` but the **UI actually uses `simplifiedAssignmentEngine.ts`**. This architectural mismatch meant both features were dead code. Fixed by implementing features in the active engine.
+
+### Root Cause
+The codebase has multiple assignment engines:
+- `simplifiedAssignmentEngine.ts` - **ACTIVE** (used by `useAssignmentEngine` hook)
+- `priorityExecutor.ts` - NOT USED by UI (orphaned)
+- `optimizationSolver.ts` - Part of priorityExecutor flow (orphaned)
+- `enhancedAssignmentService.ts` - Legacy
+
+### Fixes Applied
+
+**Sales Tools Bucket:**
+- Added Sales Tools routing to `simplifiedAssignmentEngine.ts`
+- Routes customers < $25K ARR (configurable via `rs_arr_threshold`)
+- Creates pseudo-rep with empty `rep_id` for UI display as "Sales Tools"
+- Updated `assignmentService.ts` to handle null owner:
+  - Separate batch for Sales Tools accounts (no owner cascade)
+  - `assignment_type: 'SALES_TOOLS'` for DB records
+  - Proper audit logging with `SALES_TOOLS_ROUTED` action
+
+**Team Alignment Penalties:**
+- Added `employees` field to Account interface in engine
+- Added `team_tier` field to SalesRep interface in engine
+- Added `classifyAccountTeamTier()` function (SMB/Growth/MM/ENT based on employee count)
+- Added `calculateTeamAlignmentPenalty()` function (GAMMA=100 for 1-level, EPSILON=1000 for 2+ levels)
+- Integrated penalties into HiGHS objective function via coefficient reduction
+- Updated `useAssignmentEngine.ts` to pass `team_tier` from DB to engine
+
+### Files Modified
+- `src/services/simplifiedAssignmentEngine.ts` - Added Sales Tools + Team Alignment
+- `src/services/assignmentService.ts` - Sales Tools null owner handling
+- `src/hooks/useAssignmentEngine.ts` - Pass team_tier to engine
+
+---
+
+## [2025-12-11 19:00] - Cleanup: Documented Orphaned Code
+
+### Summary
+Added clear deprecation notices to files that contain unused execution code. These files export types that ARE used by UI components, so they cannot be deleted entirely.
+
+### Files with Deprecation Notices Added
+
+**`src/config/priorityRegistry.ts`**
+- ✅ USED: Type exports (`AssignmentMode`, `PriorityConfig`, `PriorityDefinition`)
+- ✅ USED: Registry data for UI display (WaterfallLogicExplainer, config components)
+- ⚠️ NOT USED: Priority definitions don't drive actual execution (hardcoded in simplifiedAssignmentEngine)
+
+**`src/services/priorityExecutor.ts`**
+- ✅ USED: Type exports (`Account`, `SalesRep`) by parentalAlignmentService, commercialPriorityHandlers
+- ❌ DEAD: `executeAssignmentWithPriorities()`, `filterAccountsByPriority()`, `combineResults()`, `loadAssignmentConfig()`
+
+**`src/services/optimization/optimizationSolver.ts`**
+- ✅ USED: Type exports via optimization/index.ts (by sandboxMetricsCalculator)
+- ❌ DEAD: All execution functions (`runCustomerOptimization()`, `buildCustomerLPProblem()`, team alignment functions)
+
+### Recommendation
+Future work should either:
+1. Connect these files to the UI flow (replace simplifiedAssignmentEngine calls)
+2. Move shared types to a dedicated types file and delete the dead execution code
+
+---
+
+## [2025-12-11] - Fix: Team Alignment Penalties Integration
+
+### Summary
+Fixed critical bug where team alignment penalties were defined but never applied in the LP solver. The helper functions `classifyAccountTeamTier()` and `calculateTeamAlignmentPenalty()` existed but were never called.
+
+### Fixes
+1. **Added `team_alignment` case in `filterAccountsByPriority()`** - Previously fell through to `default` case
+2. **Integrated GAMMA/EPSILON penalties into LP solver** - Added penalty terms to both `buildCustomerLPProblem()` and `buildProspectLPProblem()` for account-rep tier mismatches
+   - GAMMA (100): 1-level tier mismatch (e.g., Growth account → SMB rep)
+   - EPSILON (1000): 2+ level tier mismatch (e.g., MM account → SMB rep)
+3. **Penalties only apply when rep has `team_tier` set** - Graceful degradation for reps without tier assignment
+
+### Files Modified
+- `priorityExecutor.ts` - Added `team_alignment` case handler
+- `optimizationSolver.ts` - Integrated penalty calculations into customer and prospect LP problems
+
+---
+
+## [2025-12-11] - Feature: Commercial Priority Reconfiguration
+
+### Summary
+Reconfigured Commercial mode priorities to add Sales Tools bucket for sub-$25K customers and Team Alignment optimization with graduated penalties. This replaces the old `rs_routing` optimization priority with a more robust filter-based approach.
+
+### New Priority Stack (Commercial Mode)
+1. P0: Strategic + Manual Locks (filter) - unchanged
+2. PA: Parental Alignment (implicit) - unchanged  
+3. P1: Sales Tools Bucket (filter) - NEW - routes customers under $25K ARR
+4. P2: Stability Accounts (filter) - shifted from P1
+5. P3: Team Alignment (optimization) - NEW - matches accounts to rep tiers
+6. P4: Geo + Continuity (optimization)
+7. P5: Continuity (optimization)
+8. P6: Geography (optimization)
+9. RO: Residual Optimization (locked)
+
+### Key Changes
+
+**Sales Tools Bucket (P1):**
+- Replaced `rs_routing` (optimization) with `sales_tools_bucket` (holdover/filter)
+- Routes customer accounts with ARR < $25K to "Sales Tools" bucket
+- Uses NULL rep assignment with "Sales Tools" display name
+- Does NOT apply to prospects
+- Parental alignment takes precedence (parent stays with children's owner)
+
+**Team Alignment (P3):**
+- NEW optimization priority for Commercial mode
+- Matches account employee count to rep team tier (SMB/Growth/MM/ENT)
+- Tier classification: SMB (0-99), Growth (100-299), MM (300-1499), ENT (1500+)
+- Graduated penalties: GAMMA=100 for 1-level mismatch, EPSILON=1000 for 2+ levels
+- NULL employees default to SMB tier
+
+**Database Changes:**
+- Added `team_tier` column to `sales_reps` table
+- Values: SMB, Growth, MM, ENT (or NULL)
+
+### Files Modified
+- `src/config/priorityRegistry.ts` - Replaced rs_routing, added sales_tools_bucket + team_alignment, updated positions
+- `src/services/priorityExecutor.ts` - Added Sales Tools holdover case with NULL rep pattern, updated combineResults()
+- `src/services/optimization/optimizationSolver.ts` - Added GAMMA/EPSILON penalties, team tier classification functions
+- `src/utils/autoMappingUtils.ts` - Added team_tier field mapping for imports
+- `src/components/WaterfallLogicExplainer.tsx` - Updated UI for new priorities
+- `src/utils/assignmentExportUtils.ts` - Added Sales Tools labeling in exports
+- `src/integrations/supabase/types.ts` - Regenerated with team_tier column
+- `supabase/migrations/20251211000001_add_team_tier_to_sales_reps.sql` - New migration
+
+---
+
+## [2025-12-11 20:35] - Fix: P0 Holdover Now Active in EnhancedAssignmentService
+
+### Summary
+Added P0 holdover logic to `EnhancedAssignmentService` so accounts with `exclude_from_reassignment = true` are actually respected. Previously this flag was in the interface but never checked.
+
+### Changes
+- Accounts with `exclude_from_reassignment = true` are now filtered out before processing
+- Holdover accounts stay with their current owner (no reassignment)
+- Holdover proposals included in results with reason "P0: Excluded from reassignment (manually locked)"
+- Console logging shows holdover count during assignment generation
+
+### Files Modified
+- `enhancedAssignmentService.ts` - Added holdover filtering and proposal generation
+
+---
+
+## [2025-12-11 20:30] - Refactor: Remove Dead Priority Weights & P5 Cleanup
+
+### Summary
+Removed the vestigial "weight" concept from priority configuration (was never used in backend) and cleaned up P5 references to use "RO" (Residual Optimization) consistently.
+
+### Changes
+
+**Removed dead weight code:**
+- Removed `defaultWeight` property from `PriorityDefinition` interface
+- Removed `weight` property from `PriorityConfig` interface
+- Removed all `defaultWeight` values from PRIORITY_REGISTRY entries
+- Updated `getDefaultPriorityConfig()` to not include weight
+
+**UI cleanup in WaterfallLogicExplainer.tsx:**
+- Removed "Weight: {weight}" badges from optimization priority cards
+- Changed "Residual Optimization" badge from dynamic "P5" to static "RO"
+- Removed the "Global Constraints" section (Capacity Hard Cap, Parent-Child Alignment, Regional Alignment cards)
+- Updated header text from "HiGHS Solver Weights" to "Sequential Waterfall"
+
+**Backend rationale cleanup in simplifiedAssignmentEngine.ts:**
+- Changed `ruleApplied: 'Priority 5: Forced Assignment'` to `'RO: Forced Assignment'`
+- Updated console.log messages from "P5:" to "RO:"
+- Updated rationale prefix to include "RO:" for proper analytics categorization
+
+**Files Modified:**
+- `priorityRegistry.ts` - Removed weight from interfaces and data
+- `WaterfallLogicExplainer.tsx` - Removed weight badges, P5→RO, removed Global Constraints
+- `PriorityWaterfallConfig.tsx` - Removed weight from config objects
+- `simplifiedAssignmentEngine.ts` - Changed P5 references to RO
+
+---
+
+## [2025-12-11 20:15] - Feature: Stability Priority Refactor v5
+
+### Summary
+Simplified P1 Stability to 4 sub-conditions with capacity-based override. Reps at capacity limits will have their stability-protected accounts released to optimization.
+
+### Changes
+
+**Sub-conditions:**
+- **Kept**: `cre_risk`, `renewal_soon`, `pe_firm`, `recent_owner_change`
+- **Removed**: `top_10_arr`, `expansion_opps`
+- **Changed**: `recent_owner_change` now `defaultEnabled: true`
+
+**Capacity Override (NEW):**
+- If rep has >= 8 customers OR >= 30 prospects, stability protection is bypassed
+- Configurable via `customer_max_accounts` and `prospect_max_accounts` in assignment_configuration
+- Only applies to P1 stability, NOT P0 manual holdovers
+
+**Database Migrations:**
+- `add_owner_change_date`: Added `owner_change_date DATE` column to accounts
+- `add_max_accounts_config`: Added `customer_max_accounts` and `prospect_max_accounts` to assignment_configuration (NULL defaults)
+
+**Files Modified:**
+- `priorityRegistry.ts` - Removed 2 sub-conditions, enabled recent_owner_change, fixed renewal_soon requiredFields
+- `priorityExecutor.ts` - Capacity override logic, interface updates, dead code removal
+- `batchImportService.ts` - renewal_date rollup from opportunities
+- `autoMappingUtils.ts` - owner_change_date CSV mapping aliases
+- `importUtils.ts` - owner_change_date transform
+- `WaterfallLogicExplainer.tsx` - Removed dead icon cases and if statements
+- `supabase/types.ts` - Regenerated with new columns
+
+---
+
+## [2025-12-11 19:45] - Fix: Expose Parental Alignment Warnings to UI
+
+### Summary
+Added `parentalAlignmentWarnings` to `AssignmentResult` interface so UI can display split ownership warnings.
+
+### Changes
+- Added `parentalAlignmentWarnings?: ParentalAlignmentWarning[]` to `AssignmentResult` interface
+- Include warnings in return object when present
+
+---
+
+## [2025-12-11 19:30] - Fix: Parental Alignment Critical Bugs
+
+### Summary
+Fixed critical bugs in the parental alignment implementation identified during code review.
+
+### Critical Fixes
+
+1. **Dead Code Bug - Integration into wrong service**
+   - Original implementation was in `priorityExecutor.ts` but the UI uses `EnhancedAssignmentService`
+   - **Fix**: Integrated parental alignment into `EnhancedAssignmentService.generateBalancedAssignments()`
+   - Now runs before any assignment rules, creating proposals for resolved parents
+
+2. **Non-deterministic Tiebreaker**
+   - Using `Math.random()` in sort caused non-deterministic results
+   - **Fix**: Changed to `a.sfdc_account_id.localeCompare(b.sfdc_account_id)` for consistency
+
+3. **Opportunities Cascade to Locked Children**
+   - `parentToChildMap` included locked children, so their opportunities got updated
+   - **Fix**: Added `exclude_from_reassignment` to child fetch and filter locked children from map
+
+4. **Non-null Assertion**
+   - Changed `winner.owner_id!` to `winner.owner_id || ''` for defensive coding
+
+### Files Modified
+- `enhancedAssignmentService.ts` - Added parental alignment integration
+- `parentalAlignmentService.ts` - Fixed tiebreaker and non-null assertion
+- `assignmentService.ts` - Fixed opportunities cascade filtering
+
+---
+
+## [2025-12-11 18:00] - Feature: Parental Alignment Rule
+
+### Summary
+Added implicit parent-child alignment logic that resolves parent account ownership when children have conflicting owners. This runs after holdovers but before strategic accounts, and is invisible in the UI.
+
+### Changes
+
+1. **New Service: `parentalAlignmentService.ts`**
+   - `resolveParentChildConflicts()` - main entry point
+   - `determineParentOwner()` - tiebreaker logic
+   - Fetches children via single DB query, builds parent->children map
+   - Returns resolutions + warnings
+
+2. **priorityExecutor.ts** (note: also integrated into EnhancedAssignmentService)
+   - Added Phase 1.5 after holdovers, before strategic
+   - Calls `resolveParentChildConflicts()` to determine parent owners
+   - Converts resolutions to protected accounts with resolved owner (not current owner)
+   - Added `parentalAlignmentWarnings` to result type
+
+3. **assignmentService.ts - Cascade Fix**
+   - Both `cascadeNewAssignments()` and `cascadeToChildAccounts()` now skip locked children
+   - Added filter: `.or('exclude_from_reassignment.is.null,exclude_from_reassignment.eq.false')`
+
+### Tiebreaker Logic
+1. Locked children (`exclude_from_reassignment = true`) get priority
+2. Among candidates: higher child ARR wins
+3. If still tied: deterministic account ID comparison
+
+### Split Ownership Behavior
+- Split only occurs when multiple children are locked to different owners
+- Locking one child: that child's owner wins, cascade unifies all
+- Locking multiple to same owner: that owner wins, no split
+- Locking multiple to different owners: tiebreaker picks winner, locked children retain their owners → split
+
+### UI
+- Rule is completely invisible in the UI (not in priority registry)
+- Rationale shows as "Parent-Child Alignment"
+- Warnings generated for conflicts and splits
+
+---
+
+## [2025-12-11 15:30] - Fix: BalancingAnalyticsRow RO Implementation Bugs
+
+### Summary
+Fixed two bugs discovered during verification of the Residual Optimization (RO) implementation.
+
+### Fixes
+
+1. **Tooltip text outdated** - Changed "P2-P5" to "P2-P4" and added explicit "RO" line
+2. **Strategic accounts not counted as P0** - The strategic rationale uses "Priority 0:" format but parsing only checked for "P0:". Added `'Priority 0:'` to the detection logic.
+
+---
+
+## [2025-12-11] - UI: RepManagement Summary Cards Grid Layout
+
+### Summary
+Changed the Rep Management summary cards from a 5-column layout to a 6-column layout to accommodate the Orphaned Owners card.
+
+### Changes
+- **RepManagement.tsx**: Updated grid classes to `grid-cols-2 md:grid-cols-3 lg:grid-cols-6` for responsive 6-tile layout
+
+---
+
+## [2025-12-11] - Refactor: Residual Optimization UI Rename
+
+### Summary
+Renamed "Next Best Reps" → "Residual Optimization" (RO). RO is now a locked final fallback stage that displays as "RO" in analytics, separate from the numbered priority sequence (P0-P6).
+
+### Changes
+
+1. **priorityRegistry.ts**
+   - Renamed `arr_balance` display name to "Residual Optimization"
+   - Added `isLocked: true` - cannot be disabled or reordered
+
+2. **BalancingAnalyticsRow.tsx**
+   - Added new "RO" key to PRIORITY_COLORS and PRIORITY_DESCRIPTIONS
+   - Removed P5 from the sequence (was only used for Next Best Reps)
+   - Fixed pre-existing bug: P5 parsing was broken (looked for 'Next Best' but actual rationale was 'Optimized:')
+   - Added backward-compatible parsing for legacy patterns
+
+3. **optimizationSolver.ts**
+   - Changed rationale format from `Optimized: <metric>` to `RO: <metric>`
+   - Added maintainability comment linking to BalancingAnalyticsRow.tsx parsing
+
+4. **WaterfallLogicExplainer.tsx**
+   - Updated `arr_balance` bullets to describe HiGHS optimization
+
+### Bug Fix
+Fixed pre-existing analytics bug where P5 accounts were miscategorized as "Other" because the parsing logic looked for 'Next Best', 'Best Available', 'Fallback' but actual rationale was 'Optimized: ARR/ATR/Tier balanced'.
+
+### UI Cleanup
+- Removed redundant "Strategic Pool" section from WaterfallLogicExplainer (was duplicating P0 info)
+- Expanded P0 bullets to clarify difference: holdover = locked, strategic = can rebalance within pool
+
+---
+
+## [2025-12-11] - Refactor: Three-Tier Penalty Structure for HiGHS Optimization
+
+### Summary
+Replaced the heuristic-based objective function with a mathematically rigorous three-tier penalty structure. This provides smoother optimization with proper handling of soft preferences vs hard constraints.
+
+### Penalty Structure
+
+| Zone | Coefficient | Description |
+|------|-------------|-------------|
+| Alpha (α) | 1.0 | Light penalty inside target ± variance band |
+| Beta (β) | 10.0 | Medium penalty in buffer zone (variance to absolute limit) |
+| Big M | 1,000,000 | Prohibitive penalty for violating absolute min/max |
+
+### Changes to `optimizationSolver.ts`
+
+1. **New Constants**: Added `PENALTY` object with ALPHA, BETA, BIG_M coefficients
+
+2. **New Helper Functions**:
+   - `buildMetricPenaltyTerms()`: Generates slack variables, bounds, and constraints for ARR/ATR/Pipeline with 3-tier penalties
+   - `buildTierPenaltyTerms()`: Generates beta-only penalties for tier balancing (no Big M)
+
+3. **Refactored LP Builders** (all now use Minimize instead of Maximize):
+   - `buildCustomerLPProblem()`: ARR + ATR + Tier penalties
+   - `buildProspectLPProblem()`: Pipeline + Tier penalties
+   - `buildStrategicLPProblem()`: All metrics with average-based targets
+
+### LP Formulation
+
+Before (heuristic scoring):
+```
+Maximize: Σ (balance_score[i,j] * x[i,j])
+Subject To: arr >= min, arr <= max (hard constraints)
+```
+
+After (penalty-based):
+```
+Minimize: Σ (α*alpha_slack + β*beta_slack + M*bigM_slack)
+Subject To: arr = target + alpha_over - alpha_under + beta_over - beta_under + bigM_over - bigM_under
+```
+
+### Benefits
+- Prevents infeasibility from hard constraints
+- Smooth penalty gradient guides solver toward optimal balance
+- Normalized penalties ensure ARR, ATR, Pipeline contribute proportionally
+- Tier constraints use soft beta penalties (can exceed average if needed)
+
+---
+
+## [2025-12-10 17:30] - Feature: Strategic Account Optimization (Priority 0)
+
+### Summary
+Added strategic account/rep designation with separate Priority 0 optimization. Strategic accounts are assigned exclusively to strategic reps using average-based balancing.
+
+### Database Changes
+- Added `is_strategic` column to `accounts` table (boolean, default false)
+
+### New Features
+
+1. **Strategic Toggle in Account Management** (`AccountsTable.tsx`)
+   - New "Strategic" column with toggle button (purple sparkles icon)
+   - Strategic accounts are assigned only to strategic reps
+   - Tooltip explains the behavior
+
+2. **Strategic Optimization Solver** (`optimizationSolver.ts`)
+   - New `runStrategicOptimization()` function
+   - Uses average-based balancing (no hard min/max targets)
+   - Same weights: ARR 50%, ATR 25%, Tiers 25% for customers; Pipeline 50%, Tiers 50% for prospects
+   - Minimizes deviation from average rather than enforcing fixed targets
+
+3. **Priority 0 Execution** (`priorityExecutor.ts`)
+   - Strategic optimization runs before all regular priorities
+   - Filters: `is_strategic = true` accounts -> `is_strategic_rep = true` reps
+   - Edge case handling:
+     - No strategic reps: Warning logged, accounts left unassigned
+     - No strategic accounts: Skipped entirely
+   - Assigned strategic accounts removed from regular pool
+
+4. **Import Support** (`importUtils.ts`)
+   - `is_strategic` field mapped during account import
+   - `is_strategic_rep` field (already existed) mapped during rep import
+   - Sample CSVs updated with strategic examples
+
+### Architecture
+
+```
+Priority 0: Strategic Optimization
+  └─> Strategic accounts → Strategic reps only (avg-based)
+  
+Priority 1+: Regular Optimization  
+  └─> Non-strategic accounts → Non-strategic reps (target-based)
+```
+
+---
+
+## [2025-12-10 16:45] - UI Update: Explicit Min/Max Constraints & Balance Limits Cleanup
+
+### Changes
+
+1. **Added Explicit Minimum Fields for All Metrics** (`FullAssignmentConfig.tsx`)
+   - **Customer ARR**: Added "Minimum ARR" input (hard floor ≤ preferred min from variance)
+   - **Customer ATR**: Added "Minimum ATR" input (hard floor ≤ preferred min from variance)
+   - **Prospect Pipeline**: Added "Minimum Pipeline" input (hard floor ≤ preferred min from variance)
+   - All min/max fields now displayed in a clean 2-column grid layout
+
+2. **Removed Balance Limits Section** (`FullAssignmentConfig.tsx`)
+   - Removed: Max CRE per Rep
+   - Removed: Max ATR per Rep (legacy field)
+   - Removed: Max Tier 1 Accounts
+   - Removed: Max Tier 2 Accounts
+   - Removed: Max Renewals/Qtr (%)
+   - These are now handled by the HIGHS optimization constraints
+
+3. **Updated Optimization Solver** (`optimizationSolver.ts`)
+   - `MetricConfig` now includes explicit `min` field alongside `max`
+   - Constraints now use explicit min values instead of calculating from variance
+   - Default configs updated to include min values
+
+4. **Updated Priority Executor** (`priorityExecutor.ts`)
+   - `AssignmentConfig` interface extended with min fields
+   - `buildCustomerConfig()` and `buildProspectConfig()` now pass min values to solver
+
+---
+
+## [2025-12-10] - Feature: HIGHS Multi-Metric Optimization Engine
+
+### Summary
+Major refactor of the optimization engine to use HIGHS MILP solver at each priority level with separate customer/prospect optimization paths and weighted objectives.
+
+### New Optimization Weights
+
+**Customers:**
+- ARR Balance: 50% weight
+- ATR Balance: 25% weight
+- Tier Distribution: 25% weight (all 4 tiers balanced individually)
+
+**Prospects:**
+- Pipeline Balance: 50% weight
+- Tier Distribution: 50% weight (all 4 tiers balanced individually)
+
+### Key Changes
+
+1. **Multi-Priority HIGHS Optimization** (`priorityExecutor.ts`)
+   - Runs HIGHS optimization at each priority level, not just once at the end
+   - Separate optimization paths for customers and prospects
+   - Dynamic weighting: customers prioritized when more prospects exist (ratio-based)
+   - Tracks rep workloads across priority levels for cumulative balancing
+
+2. **New Optimization Solver** (`optimizationSolver.ts`)
+   - Removed geo/continuity from objectives (handled by priority filters)
+   - Added ATR constraints for customer optimization
+   - Added Pipeline constraints for prospect optimization
+   - Added individual tier balancing (Tier 1, 2, 3, 4 each balanced separately)
+   - New functions: `runCustomerOptimization()`, `runProspectOptimization()`
+
+3. **ATR Configuration UI** (`FullAssignmentConfig.tsx`)
+   - New "Customer ATR Targets" section matching ARR pattern
+   - Target ATR per Rep slider
+   - ATR Variance % slider
+   - Maximum ATR per Rep hard cap
+
+4. **Cleanup: Removed Unused AI Components**
+   - Deleted: `aiBalancingOptimizer.ts` (LLM-based, not used)
+   - Deleted: `aiBalancingConfig.ts` (unused config)
+   - Deleted: `AIBalancingOptimizerDialog.tsx`, `AIBalancingOptimizer.tsx`
+   - Deleted: `aiMultiDimensionalBalancer.ts`
+   - Updated: `enhancedAssignmentService.ts` - deprecated AI_BALANCER rule type
+
+5. **Cleanup: Removed Dead Assignment Services**
+   - Deleted: `collaborativeAssignmentService.ts` (not imported anywhere)
+   - Deleted: `ruleBasedAssignmentEngine.ts` (not imported anywhere)
+   - Deleted: `multiCriteriaScoringService.ts` (only imported by deleted service)
+   - Deleted: `algorithmicAssignmentService.ts` (only imported by deleted service)
+   - Deleted: `sophisticatedAssignmentService.ts` (not imported anywhere)
+
+### Active Assignment Services (Remaining)
+- `simplifiedAssignmentEngine.ts` - Main assignment engine
+- `enhancedAssignmentService.ts` - Used by AssignmentEngine page
+- `rebalancingAssignmentService.ts` - Used by hooks
+
+### Files Changed
+- `src/services/optimization/optimizationSolver.ts` - Complete refactor
+- `src/services/priorityExecutor.ts` - Multi-pass optimization per priority
+- `src/components/FullAssignmentConfig.tsx` - ATR configuration UI
+- `src/pages/AssignmentEngine.tsx` - Removed AI optimizer references
+- `src/services/enhancedAssignmentService.ts` - Deprecated AI_BALANCER
+
+### Files Deleted (10 total)
+AI Components:
+- `src/services/aiBalancingOptimizer.ts`
+- `src/config/aiBalancingConfig.ts`
+- `src/components/AIBalancingOptimizerDialog.tsx`
+- `src/components/AIBalancingOptimizer.tsx`
+- `src/services/aiMultiDimensionalBalancer.ts`
+
+Dead Assignment Services:
+- `src/services/collaborativeAssignmentService.ts`
+- `src/services/ruleBasedAssignmentEngine.ts`
+- `src/services/multiCriteriaScoringService.ts`
+- `src/services/algorithmicAssignmentService.ts`
+- `src/services/sophisticatedAssignmentService.ts`
+
+---
+
+## [2025-12-10 15:20 PST] - Fix: 0 Assignments Due to ARR Field Priority Bug
+
+### Summary
+Fixed critical bug where assignment engine was reading `calculated_arr` (always 0) instead of `hierarchy_bookings_arr_converted` (actual ARR data).
+
+### Root Cause
+- `calculated_arr` column was `0` for all accounts (not NULL)
+- JavaScript's `||` operator treats `0` as falsy, so `account.calculated_arr || account.arr || 0` returned `0`
+- The actual ARR data was in `hierarchy_bookings_arr_converted` ($107M total)
+- Result: All capacity checks failed because accounts appeared to have $0 ARR
+
+### Fix
+1. Added `getEffectiveARR()` helper in `simplifiedAssignmentEngine.ts`:
+   - Priority: `hierarchy_bookings_arr_converted` → `calculated_arr` (if > 0) → `arr` → `0`
+2. Updated all ARR calculations in the waterfall engine
+3. Updated `useAssignmentEngine.ts` to use same priority for rep workload calculations
+
+### Files Changed
+- `src/services/simplifiedAssignmentEngine.ts` - New `getEffectiveARR()` method, updated all ARR references
+- `src/hooks/useAssignmentEngine.ts` - Updated rep workload and balance calculations
+
+---
+
+## [2025-12-10] - Fix: Greedy Fallback When HiGHS Solver Fails
+
+### Summary
+Added greedy assignment fallback when HiGHS solver crashes on large batches (5000+ accounts).
+
+### Problem
+HiGHS solver was crashing with "Unable to read LP model" error when processing large prospect batches, resulting in 0 assignments.
+
+### Solution
+When HiGHS fails, now falls back to greedy assignment:
+- Iterates through accounts one by one
+- Assigns each to the rep with most available capacity
+- Logs fallback usage for debugging
+
+---
+
+## [2025-12-10] - Fix: Enable Prospect Assignments by Default
+
+### Summary
+Changed default `assign_prospects` to `true` so prospects are assigned when running "Assign All".
+
+### Changes
+- Default `assign_prospects` changed from `false` to `true` in:
+  - `collaborativeAssignmentService.ts`
+  - `SimpleAssignmentConfiguration.tsx`
+- Existing builds need to enable via config or database update
+
+---
+
+## [2025-12-10] - Fix: Rename FLM Routing & Engine Safety Checks
+
+### Summary
+Renamed FLM Routing priority to "Renewal Specialist (FLM)" and ensured engine handles missing optional fields gracefully.
+
+### Changes
+- **Renamed Priority**: "FLM Routing (≤$25k ARR)" → "Renewal Specialist (FLM)"
+- **Updated Descriptions**: WaterfallLogicExplainer now explains FLM holds until RS is hired
+- **Import Safety**: Added `pe_firm` to account transform (was defined in schema but not imported)
+- **Engine Safety**: All stability sub-conditions use safe null checks (`&& account.field`)
+- **Dashboard Labels**: Updated P6 description to match new name
+
+### No-Error Guarantee
+The engine safely handles missing optional fields:
+- `renewal_event_date` - checked with `&& account.renewal_event_date`
+- `owner_change_date` - checked with `&& account.owner_change_date`  
+- `has_expansion_opp` - checked with `&& account.has_expansion_opp`
+- `pe_firm` - checked with `&& account.pe_firm`
+
+If data is not mapped during import, sub-conditions simply won't match (no errors).
+
+---
+
+## [2025-12-10] - Fix: Engine & Dashboard Compatibility with New Priority Structure
+
+### Summary
+Fixed critical issues with the assignment engine and dashboard to work with the new priority structure including stability_accounts sub-conditions.
+
+### Engine Fixes (`priorityExecutor.ts`)
+- Added `stability_accounts` handler that checks enabled sub-conditions (CRE Risk, Renewal Soon, Top 10% ARR, PE Firm, Expansion Opps, Recent Owner Change)
+- Sub-condition check uses logical OR - account is protected if ANY enabled condition matches
+- Added legacy handlers for backwards compatibility with old configs
+- Rationale format now uses `P0:`, `P1:`, etc. for easier parsing
+
+### Dashboard Fixes (`BalancingAnalyticsRow.tsx`)
+- Updated priority color palette for P0-P6 structure
+- Added `PRIORITY_DESCRIPTIONS` map for legend tooltips
+- Rationale parsing supports new `P#:` format with legacy fallback
+- Legend items now show full description on hover
+
+### Ordering Constraint (`PriorityWaterfallConfig.tsx`)
+- `geography` and `continuity` auto-placed AFTER `geo_and_continuity` when enabled
+- `geo_and_continuity` auto-inserted BEFORE enabled `geography`/`continuity`
+- Ensures proper waterfall ordering is always maintained
+
+---
+
+## [2025-12-10] - UI: Add Copy Link button to Send to Manager dialog
+
+### Changes
+- Added separate "Copy Link" button to generate and copy shareable link
+- Users can now copy the link without needing to send to a manager first
+- Changed "Send" button to "Send & Copy Link" for clarity
+- Link remains copyable in success dialog after sending
+
+---
+
 ## [2025-12-10] - Feature: Priority Waterfall Overhaul with Stability Accounts
 
 ### Summary
@@ -82,6 +2238,12 @@ Automatically calculates and populates the `renewal_quarter` field on **parent a
 - Added `syncRenewalQuarterFromOpportunities()` to `batchImportService.ts`
 - Sync runs automatically after opportunity import completes
 - **Rollup behavior**: Uses `ultimate_parent_id` to roll up child opportunity dates to parent accounts
+
+### UI Updates for New Format
+- Updated `RenewalQuarterBadge` component with `whitespace-nowrap` and `min-w-[4rem]` for wider format
+- Fixed quarter matching in `BalanceThresholdConfig.tsx` to use `startsWith` instead of exact match
+- Fixed quarter matching in `simplifiedAssignmentEngine.ts` for workload tracking
+- Fixed quarter matching in `balanceThresholdCalculator.ts` for threshold calculations
 
 ### Fiscal Year Logic
 - Q1: Feb-Apr, Q2: May-Jul, Q3: Aug-Oct, Q4: Nov-Jan

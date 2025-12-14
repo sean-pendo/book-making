@@ -14,7 +14,7 @@ import TerritoryBalancingDashboard from './TerritoryBalancingDashboard';
 import { AccountsTable } from '@/components/data-tables/AccountsTable';
 import { OpportunitiesTable } from '@/components/data-tables/OpportunitiesTable';
 import { SalesRepsTable } from '@/components/data-tables/SalesRepsTable';
-import { useBuildDataSummary, useInvalidateBuildData } from '@/hooks/useBuildData';
+import { useBuildDataSummary, useInvalidateBuildData, useAnalyticsMetrics } from '@/hooks/useBuildData';
 import { formatCurrency } from '@/utils/accountCalculations';
 import { InteractiveKPICard } from '@/components/InteractiveKPICard';
 import { DataVisualizationCard } from '@/components/DataVisualizationCard';
@@ -27,6 +27,8 @@ import { GlobalClashDetector } from './GlobalClashDetector';
 import { SameBuildClashDetector } from '@/components/SameBuildClashDetector';
 import { ComprehensiveReview } from './ComprehensiveReview';
 import { DataImport } from './DataImport';
+import { DataOverviewAnalytics } from '@/components/DataOverviewAnalytics';
+import { TeamFitPieChart } from '@/components/analytics';
 interface Build {
   id: string;
   name: string;
@@ -125,6 +127,9 @@ export const BuildDetail = () => {
     data: buildData,
     isLoading: summaryLoading
   } = useBuildDataSummary(id);
+  
+  // Get analytics metrics for Coverage and Team Fit cards
+  const { data: analyticsMetrics } = useAnalyticsMetrics(id);
   
   // Hook to invalidate and refresh build data
   const invalidateBuildData = useInvalidateBuildData();
@@ -423,143 +428,244 @@ export const BuildDetail = () => {
         </TabsContent>
 
         <TabsContent value="overview" className="space-y-6">
-          {/* Enhanced Financial Overview with Interactive Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {/* Row 1: Account Summary - Customers, Prospects, All Accounts */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card className="card-elevated card-glass hover-lift group">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-gradient-primary rounded-lg shadow-md">
-                      <DollarSign className="h-5 w-5 text-primary-foreground" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-foreground">Total ARR</h3>
-                      <p className="text-xs text-muted-foreground">Customer ARR</p>
-                    </div>
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-success/20 rounded-lg">
+                    <Building2 className="h-5 w-5 text-success" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Customers</h3>
+                    <p className="text-xs text-muted-foreground">Total accounts</p>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <AnimatedCounter value={buildData?.opportunities.totalARR || 0} formatValue={value => formatCurrency(value)} className="text-2xl font-bold text-gradient" />
-                </div>
-              </CardContent>
-            </Card>
-
-
-            <Card className="card-elevated card-glass hover-lift group">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-success/20 rounded-lg">
-                      <Building2 className="h-5 w-5 text-success" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="cursor-help">
+                      <AnimatedCounter value={buildData?.accounts.totalCustomers || 0} className="text-2xl font-bold text-success" />
                     </div>
-                    <div>
-                      <h3 className="font-semibold text-foreground">Customer Accounts</h3>
-                      <p className="text-xs text-muted-foreground">Parent customers only</p>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-sm">
+                    <div className="space-y-1">
+                      <div className="flex justify-between gap-4">
+                        <span className="text-muted-foreground">Parents:</span>
+                        <span className="font-semibold">{(buildData?.accounts.customers || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-muted-foreground">Children:</span>
+                        <span className="font-semibold">{(buildData?.accounts.childCustomers || 0).toLocaleString()}</span>
+                      </div>
                     </div>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <AnimatedCounter value={buildData?.accounts.customers || 0} className="text-2xl font-bold text-success" />
-                </div>
+                  </TooltipContent>
+                </Tooltip>
               </CardContent>
             </Card>
 
             <Card className="card-elevated card-glass hover-lift group">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-info/20 rounded-lg">
-                      <Target className="h-5 w-5 text-info" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-foreground">Prospect Accounts</h3>
-                      <p className="text-xs text-muted-foreground">Parent prospects only</p>
-                    </div>
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-info/20 rounded-lg">
+                    <Target className="h-5 w-5 text-info" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Prospects</h3>
+                    <p className="text-xs text-muted-foreground">Total accounts</p>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <AnimatedCounter value={buildData?.accounts.prospects || 0} className="text-2xl font-bold text-info" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="cursor-help">
+                      <AnimatedCounter value={buildData?.accounts.totalProspects || 0} className="text-2xl font-bold text-info" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-sm">
+                    <div className="space-y-1">
+                      <div className="flex justify-between gap-4">
+                        <span className="text-muted-foreground">Parents:</span>
+                        <span className="font-semibold">{(buildData?.accounts.prospects || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-muted-foreground">Children:</span>
+                        <span className="font-semibold">{(buildData?.accounts.childProspects || 0).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </CardContent>
+            </Card>
+
+            <Card className="card-elevated card-glass hover-lift group">
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-primary/20 rounded-lg">
+                    <Database className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">All Accounts</h3>
+                    <p className="text-xs text-muted-foreground">Total count</p>
+                  </div>
                 </div>
+                <AnimatedCounter value={buildData?.accounts.total || 0} className="text-2xl font-bold text-primary" />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Parents: {buildData?.accounts.parents || 0} | Children: {buildData?.accounts.children || 0}
+                </p>
               </CardContent>
             </Card>
           </div>
 
-          {/* Enhanced Data Overview */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card className="card-elevated card-glass hover-lift group">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-primary/20 rounded-lg">
-                      <Database className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-foreground">All Accounts</h3>
-                      <p className="text-xs text-muted-foreground">Total account count</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <AnimatedCounter value={buildData?.accounts.total || 0} className="text-2xl font-bold text-primary" />
-                  <p className="text-xs text-muted-foreground">
-                    Parents: {buildData?.accounts.parents || 0} | Children: {buildData?.accounts.children || 0}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
+          {/* Row 2: Pipeline, Team, Coverage, Team Fit */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card className="card-elevated card-glass hover-lift group cursor-pointer" onClick={() => setActiveTab('data-opportunities')}>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-success/20 rounded-lg">
-                      <PieChart className="h-5 w-5 text-success" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-foreground">Sales Pipeline</h3>
-                      <p className="text-xs text-muted-foreground">Opportunity overview</p>
-                    </div>
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-success/20 rounded-lg">
+                    <PieChart className="h-5 w-5 text-success" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Pipeline</h3>
+                    <p className="text-xs text-muted-foreground">Opportunities</p>
                   </div>
                 </div>
-                <div className="space-y-3">
+                <div className="space-y-1.5">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Total Opportunities</span>
+                    <span className="text-xs text-muted-foreground">Total</span>
                     <span className="text-lg font-semibold">{buildData?.opportunities.total || 0}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">With CRE Status</span>
-                    <span className="text-lg font-semibold text-warning">{buildData?.opportunities.withCRE || 0}</span>
+                    <span className="text-xs text-muted-foreground">CRE Risk</span>
+                    <span className="text-sm font-medium text-warning">{buildData?.opportunities.withCRE || 0}</span>
                   </div>
                 </div>
               </CardContent>
             </Card>
 
             <Card className="card-elevated card-glass hover-lift group cursor-pointer" onClick={() => setActiveTab('data-reps')}>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-primary/20 rounded-lg">
-                      <Users className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-foreground">Team Capacity</h3>
-                      <p className="text-xs text-muted-foreground">Sales reps status</p>
-                    </div>
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-primary/20 rounded-lg">
+                    <Users className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Team</h3>
+                    <p className="text-xs text-muted-foreground">Sales reps</p>
                   </div>
                 </div>
-                <div className="space-y-3">
+                <div className="space-y-1.5">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Active Reps</span>
+                    <span className="text-xs text-muted-foreground">Active</span>
                     <span className="text-lg font-semibold">{buildData?.salesReps.activeReps || 0}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Inactive Reps</span>
-                    <span className="text-lg font-semibold text-muted-foreground">{buildData?.salesReps.inactiveReps || 0}</span>
+                    <span className="text-xs text-muted-foreground">Inactive</span>
+                    <span className="text-sm font-medium text-muted-foreground">{buildData?.salesReps.inactiveReps || 0}</span>
                   </div>
                 </div>
               </CardContent>
             </Card>
+
+            {/* Coverage Card */}
+            <Card className="card-elevated card-glass hover-lift group">
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-emerald-500/20 rounded-lg">
+                    <UserCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Coverage</h3>
+                    <p className="text-xs text-muted-foreground">Owner assigned</p>
+                  </div>
+                </div>
+                {analyticsMetrics?.ownerCoverage ? (
+                  <>
+                    <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                      {analyticsMetrics.ownerCoverage.coverageRate.toFixed(1)}%
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {analyticsMetrics.ownerCoverage.withOwner.toLocaleString()} of {(analyticsMetrics.ownerCoverage.withOwner + analyticsMetrics.ownerCoverage.orphaned).toLocaleString()} accounts
+                    </p>
+                  </>
+                ) : (
+                  <div className="text-2xl font-bold text-muted-foreground">N/A</div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Team Fit Card */}
+            <Card className="card-elevated card-glass hover-lift group">
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-violet-500/20 rounded-lg">
+                    <Shield className="h-5 w-5 text-violet-600 dark:text-violet-400" />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <h3 className="font-semibold text-foreground">Team Fit</h3>
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs">
+                        <p className="text-sm font-medium mb-1">Account-Rep Tier Alignment</p>
+                        <p className="text-xs text-muted-foreground">
+                          Measures how well account tiers match rep specializations.
+                        </p>
+                        <ul className="text-xs mt-1 space-y-0.5">
+                          <li>• <strong>SMB</strong> = Small Business (&lt;100 employees)</li>
+                          <li>• <strong>Growth</strong> = Growth (100-499 employees)</li>
+                          <li>• <strong>MM</strong> = Mid-Market (500-1,499 employees)</li>
+                          <li>• <strong>ENT</strong> = Enterprise (1,500+ employees)</li>
+                        </ul>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                </div>
+                {analyticsMetrics?.lpMetrics?.teamAlignmentScore != null && analyticsMetrics.tierAlignmentBreakdown ? (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="text-2xl font-bold text-violet-600 dark:text-violet-400 mb-3 cursor-help">
+                          {(analyticsMetrics.lpMetrics.teamAlignmentScore * 100).toFixed(0)}%
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs">
+                        <p className="text-sm font-medium mb-1">Team Alignment Score</p>
+                        <p className="text-xs text-muted-foreground">
+                          Weighted average of tier alignment across all accounts. Higher scores indicate better matches between account tiers (SMB, Growth, MM, ENT) and rep specializations.
+                        </p>
+                        <ul className="text-xs mt-2 space-y-1">
+                          <li>• <strong>100%</strong> = All accounts perfectly matched</li>
+                          <li>• <strong>85%</strong> = Good alignment (current)</li>
+                          <li>• <strong>&lt;70%</strong> = Needs attention</li>
+                        </ul>
+                      </TooltipContent>
+                    </Tooltip>
+                    {analyticsMetrics.tierAlignmentBreakdown.exactMatch + analyticsMetrics.tierAlignmentBreakdown.oneLevelMismatch + analyticsMetrics.tierAlignmentBreakdown.twoPlusLevelMismatch + analyticsMetrics.tierAlignmentBreakdown.unassigned > 0 ? (
+                      <TeamFitPieChart 
+                        breakdown={analyticsMetrics.tierAlignmentBreakdown}
+                        teamAlignmentScore={analyticsMetrics.lpMetrics.teamAlignmentScore}
+                        compact={true}
+                      />
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-2">No tier data available</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="text-2xl font-bold text-muted-foreground">N/A</div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No tier data available
+                    </p>
+                  </>
+                )}
+              </CardContent>
+            </Card>
           </div>
+
+          {/* Balance Analytics Section */}
+          {buildData && buildData.accounts.total > 0 && (
+            <DataOverviewAnalytics buildId={id!} />
+          )}
 
           {/* Enhanced Action Cards based on data state */}
           {buildData && buildData.accounts.total === 0 && <Card className="card-elevated card-glass">
@@ -680,28 +786,7 @@ export const BuildDetail = () => {
         </TabsContent>
 
         <TabsContent value="clashes">
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight mb-2">Global Clash Detection</h2>
-              <p className="text-muted-foreground">
-                Identify and resolve assignment conflicts where the same account has different assignments across different builds
-              </p>
-            </div>
-            
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Cross-Build Conflicts</CardTitle>
-                  <CardDescription>
-                    Conflicts where the same account has different assignments across different builds
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <GlobalClashDetector />
-                </CardContent>
-              </Card>
-            </div>
-          </div>
+          <GlobalClashDetector />
         </TabsContent>
 
         <TabsContent value="review">

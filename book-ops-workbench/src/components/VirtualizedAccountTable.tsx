@@ -79,6 +79,78 @@ interface VirtualizedAccountTableProps {
   opportunities?: Opportunity[];
 }
 
+/**
+ * Priority number to friendly name mapping
+ * Used to display both the number AND the priority name
+ */
+const PRIORITY_NAMES: Record<string, string> = {
+  'P0': 'Manual Holdover',
+  'P1': 'Stability',
+  'P2': 'Geography', 
+  'P3': 'Parental Alignment',
+  'P4': 'Tenure Balance',
+  'RO': 'Residual Optimization',
+  // Legacy IDs
+  'sales_tools_bucket': 'Sales Tools Bucket',
+  'manual_holdover': 'Manual Holdover',
+  'stability_accounts': 'Stability',
+  'geography_balance': 'Geography',
+  'parental_alignment': 'Parental Alignment',
+  'tenure_balance': 'Tenure Balance',
+  'arr_balance': 'Residual Optimization',
+};
+
+/**
+ * Format rule display for consistent labeling
+ * Shows priority number + name (e.g., "P1: Stability")
+ * Handles new format (P0:, P1:, RO:), legacy IDs, and missing values
+ */
+function formatRuleDisplay(ruleApplied: string | undefined | null): string {
+  if (!ruleApplied || ruleApplied === '-') return 'Unassigned';
+  
+  // Already formatted correctly with full name (e.g., "P1: Stability - Some Reason")
+  if (/^(P\d|RO):\s*\w/.test(ruleApplied)) {
+    // Extract just "P1: Reason" or "RO: Reason" - include priority name if not present
+    const match = ruleApplied.match(/^(P\d|RO):\s*(.+)$/);
+    if (match) {
+      const [, prefix, rest] = match;
+      const priorityName = PRIORITY_NAMES[prefix];
+      // If rest already contains the priority name, return as-is
+      if (rest.toLowerCase().includes(priorityName?.toLowerCase() || '')) {
+        return ruleApplied;
+      }
+      // Otherwise, insert the priority name
+      return `${prefix} ${priorityName}: ${rest}`;
+    }
+    return ruleApplied;
+  }
+  
+  // Just priority code without details (e.g., "P1" or "RO")
+  if (/^(P\d|RO)$/.test(ruleApplied)) {
+    const priorityName = PRIORITY_NAMES[ruleApplied];
+    return priorityName ? `${ruleApplied}: ${priorityName}` : ruleApplied;
+  }
+  
+  // Legacy backend IDs - convert to friendly names with priority prefix
+  const legacyToPriority: Record<string, string> = {
+    'sales_tools_bucket': 'P1: Sales Tools Bucket',
+    'manual_holdover': 'P0: Manual Holdover',
+    'stability_accounts': 'P1: Stability',
+    'geography_balance': 'P2: Geography',
+    'parental_alignment': 'P3: Parental Alignment',
+    'tenure_balance': 'P4: Tenure Balance',
+    'arr_balance': 'RO: Residual Optimization',
+    'CONTINUITY': 'P1: Stability',
+    'GEO_FIRST': 'P2: Geography',
+    'ROUND_ROBIN': 'RO: Round Robin',
+    'TIER_BALANCE': 'Tier Balance',
+    'MIN_MAX_THRESHOLDS': 'Threshold Enforcement',
+    'CAPACITY_OVERFLOW': 'RO: Capacity Overflow',
+  };
+  
+  return legacyToPriority[ruleApplied] || ruleApplied;
+}
+
 export const VirtualizedAccountTable = ({ 
   accounts, 
   onReassign, 
@@ -371,30 +443,69 @@ export const VirtualizedAccountTable = ({
   }, [opportunities]);
 
   const getContinuityRiskBadge = useCallback((account: Account) => {
+    // CRE Risk - different from Assignment Risk!
+    // This is about customer churn/retention risk from renewal events
+    
+    const wrapWithTooltip = (badge: React.ReactNode, description: string) => (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="cursor-help">{badge}</span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-[250px]">
+          <p className="font-semibold mb-1">CRE Risk (Customer Retention)</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </TooltipContent>
+      </Tooltip>
+    );
+    
     // Use cre_status if available (rolled up from opportunities)
     if (account.cre_status) {
       switch (account.cre_status) {
         case 'Confirmed Churn':
-          return <Badge variant="destructive">Confirmed Churn</Badge>;
+          return wrapWithTooltip(
+            <Badge variant="destructive">Confirmed Churn</Badge>,
+            'Customer has confirmed they are leaving. Immediate attention required.'
+          );
         case 'At Risk':
-          return <Badge variant="destructive">At Risk</Badge>;
+          return wrapWithTooltip(
+            <Badge variant="destructive">At Risk</Badge>,
+            'Customer shows signs of churn. Active CRE engagement ongoing.'
+          );
         case 'Monitoring':
-          return <Badge className="bg-amber-500">Monitoring</Badge>;
+          return wrapWithTooltip(
+            <Badge className="bg-amber-500">Monitoring</Badge>,
+            'Customer is being monitored for potential risk signals.'
+          );
         case 'Pre-Risk Discovery':
-          return <Badge variant="outline" className="border-amber-400 text-amber-600">Pre-Risk</Badge>;
+          return wrapWithTooltip(
+            <Badge variant="outline" className="border-amber-400 text-amber-600">Pre-Risk</Badge>,
+            'Early warning signs detected. Investigation in progress.'
+          );
         case 'Closed':
-          return <Badge variant="secondary">Closed</Badge>;
+          return wrapWithTooltip(
+            <Badge variant="secondary">Closed</Badge>,
+            'CRE case was resolved. No current retention concerns.'
+          );
       }
     }
     
     // Fallback to CRE count if no status
     const creCount = account.cre_count || 0;
     if (creCount === 0) {
-      return <Badge variant="outline">No Risk</Badge>;
+      return wrapWithTooltip(
+        <Badge variant="outline">No Risk</Badge>,
+        'No active CRE cases. Customer retention appears healthy.'
+      );
     } else if (creCount <= 2) {
-      return <Badge className="bg-amber-500">Medium</Badge>;
+      return wrapWithTooltip(
+        <Badge className="bg-amber-500">{creCount} CRE</Badge>,
+        `${creCount} active CRE case(s). Customer may have retention concerns.`
+      );
     } else {
-      return <Badge variant="destructive">High</Badge>;
+      return wrapWithTooltip(
+        <Badge variant="destructive">{creCount} CRE</Badge>,
+        `${creCount} active CRE cases. High churn risk - requires attention.`
+      );
     }
   }, []);
 
@@ -549,10 +660,29 @@ export const VirtualizedAccountTable = ({
                 className="min-w-[120px] cursor-pointer hover:bg-muted/50"
                 onClick={() => handleSort('cre_status')}
               >
-                <div className="flex items-center gap-1">
-                  Risk
-                  <SortIcon field="cre_status" />
-                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-1 cursor-help">
+                      Risk
+                      <SortIcon field="cre_status" />
+                      <Info className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-[320px]" side="bottom">
+                    <p className="font-semibold mb-1">Assignment Risk</p>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Indicates how risky it is to change this account's owner:
+                    </p>
+                    <ul className="text-xs space-y-1">
+                      <li><strong className="text-red-500">High Risk:</strong> Reassigning an existing customer (relationship disruption)</li>
+                      <li><strong className="text-orange-500">Medium Risk:</strong> High-value account (ARR &gt; $100K) or has risk flag</li>
+                      <li><strong className="text-green-500">Low Risk:</strong> Safe to reassign (typically prospects or low-value)</li>
+                    </ul>
+                    <p className="text-xs text-muted-foreground mt-2 pt-2 border-t">
+                      <em>Note: This is different from CRE Risk, which measures customer churn probability based on renewal events.</em>
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
               </TableHead>
               <TableHead className="min-w-[250px]">Reason</TableHead>
               <TableHead className="min-w-[100px]">Status</TableHead>
@@ -709,10 +839,11 @@ export const VirtualizedAccountTable = ({
                     const reasonData = assignmentReasons.find(r => r.accountId === account.sfdc_account_id);
                     const proposal = assignmentProposals.find(p => p.accountId === account.sfdc_account_id);
                     
-                    const ruleApplied = proposal?.ruleApplied || (reasonData?.reason?.split(':')[0]?.trim()) || '-';
+                    const rawRule = proposal?.ruleApplied || (reasonData?.reason?.split(':')[0]?.trim()) || null;
+                    const ruleApplied = formatRuleDisplay(rawRule);
                     
-                    if (ruleApplied === '-') {
-                      return <span className="text-muted-foreground text-sm">-</span>;
+                    if (ruleApplied === 'Unassigned') {
+                      return <span className="text-muted-foreground text-sm italic">Unassigned</span>;
                     }
                     
                     return (
@@ -724,21 +855,49 @@ export const VirtualizedAccountTable = ({
                 </TableCell>
                 <TableCell>
                   {(() => {
-                    // Use conflict risk from proposal if available
+                    // Use conflict risk from proposal if available (Assignment Risk)
                     const proposal = assignmentProposals.find(p => p.accountId === account.sfdc_account_id);
                     
                     if (proposal?.conflictRisk) {
                       const risk = proposal.conflictRisk;
-                      if (risk === 'LOW') {
-                        return <Badge className="bg-green-500 text-white">Low Risk</Badge>;
-                      } else if (risk === 'MEDIUM') {
-                        return <Badge className="bg-orange-500 text-white">Medium Risk</Badge>;
-                      } else if (risk === 'HIGH') {
-                        return <Badge variant="destructive">High Risk</Badge>;
-                      }
+                      const riskInfo = {
+                        LOW: {
+                          label: 'Low Risk',
+                          className: 'bg-green-500 text-white',
+                          description: 'Safe to reassign. Typically a prospect or low-value account.'
+                        },
+                        MEDIUM: {
+                          label: 'Medium Risk',
+                          className: 'bg-orange-500 text-white',
+                          description: 'High-value account (ARR > $100K) or has a risk flag. Review before approving.'
+                        },
+                        HIGH: {
+                          label: 'High Risk',
+                          className: '',
+                          variant: 'destructive' as const,
+                          description: 'Reassigning an existing customer. May disrupt established relationships.'
+                        }
+                      };
+                      const info = riskInfo[risk];
+                      return (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge 
+                              variant={risk === 'HIGH' ? 'destructive' : 'default'} 
+                              className={`${info.className} cursor-help`}
+                            >
+                              {info.label}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-[250px]">
+                            <p className="font-semibold mb-1">Assignment Risk</p>
+                            <p className="text-xs text-muted-foreground">{info.description}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      );
                     }
                     
-                    // Fallback to CRE-based risk if no proposal
+                    // Fallback to CRE-based risk if no proposal (different concept!)
                     return getContinuityRiskBadge(account);
                   })()}
                 </TableCell>

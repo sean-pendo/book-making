@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, PlayCircle, Eye, Trash2, Edit3, Calendar, User, Clock, Target } from 'lucide-react';
+import { Plus, PlayCircle, Eye, Trash2, Edit3, Calendar, User, Clock, Target, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -71,6 +71,7 @@ const Dashboard = () => {
   const [buildToEdit, setBuildToEdit] = useState<Build | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [isDuplicating, setIsDuplicating] = useState<string | null>(null);
   const [revopsUsers, setRevopsUsers] = useState<RevOpsUser[]>([]);
   const { profile, effectiveProfile, loading: authLoading } = useAuth();
   const { toast } = useToast();
@@ -201,6 +202,158 @@ const Dashboard = () => {
     setNewBuildTargetDate(build.target_date || '');
     setNewBuildOwnerId(build.owner_id || '');
     setEditDialogOpen(true);
+  };
+
+  const handleDuplicateBuild = async (build: Build, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsDuplicating(build.id);
+    
+    try {
+      const currentUser = await supabase.auth.getUser();
+      const userId = currentUser.data.user?.id;
+      if (!userId) throw new Error('User not authenticated');
+
+      // Helper to fetch ALL rows from a table (paginated to bypass 1000 row limit)
+      const fetchAllRows = async (table: string, buildId: string) => {
+        const allRows: any[] = [];
+        const pageSize = 1000;
+        let offset = 0;
+        let hasMore = true;
+
+        while (hasMore) {
+          const { data, error } = await supabase
+            .from(table)
+            .select('*')
+            .eq('build_id', buildId)
+            .range(offset, offset + pageSize - 1);
+
+          if (error) throw error;
+          
+          if (data && data.length > 0) {
+            allRows.push(...data);
+            offset += pageSize;
+            hasMore = data.length === pageSize;
+          } else {
+            hasMore = false;
+          }
+        }
+        return allRows;
+      };
+
+      // Helper to insert rows in batches (Supabase has limits on insert size)
+      const insertInBatches = async (table: string, rows: any[], batchSize = 500) => {
+        for (let i = 0; i < rows.length; i += batchSize) {
+          const batch = rows.slice(i, i + batchSize);
+          const { error } = await supabase.from(table).insert(batch);
+          if (error) throw error;
+        }
+      };
+
+      // 1. Create new build with "(copy)" appended to name
+      const { data: newBuild, error: buildError } = await supabase
+        .from('builds')
+        .insert({
+          name: `${build.name} (copy)`,
+          description: build.description,
+          status: 'DRAFT', // Always start as DRAFT
+          target_date: build.target_date,
+          owner_id: build.owner_id,
+          region: build.region,
+          apply_50k_rule: null,
+          enterprise_threshold: null,
+          holdover_policy: null,
+          geo_emea_mappings: null,
+          created_by: userId,
+        })
+        .select()
+        .single();
+
+      if (buildError) throw buildError;
+      const newBuildId = newBuild.id;
+
+      // 2. Copy accounts (fetch all, then batch insert)
+      const accounts = await fetchAllRows('accounts', build.id);
+      if (accounts.length > 0) {
+        const accountsToInsert = accounts.map(({ id, created_at, ...rest }) => ({
+          ...rest,
+          build_id: newBuildId,
+        }));
+        await insertInBatches('accounts', accountsToInsert);
+      }
+
+      // 3. Copy sales_reps
+      const salesReps = await fetchAllRows('sales_reps', build.id);
+      if (salesReps.length > 0) {
+        const repsToInsert = salesReps.map(({ id, created_at, updated_at, ...rest }) => ({
+          ...rest,
+          build_id: newBuildId,
+        }));
+        await insertInBatches('sales_reps', repsToInsert);
+      }
+
+      // 4. Copy opportunities
+      const opportunities = await fetchAllRows('opportunities', build.id);
+      if (opportunities.length > 0) {
+        const oppsToInsert = opportunities.map(({ id, ...rest }) => ({
+          ...rest,
+          build_id: newBuildId,
+        }));
+        await insertInBatches('opportunities', oppsToInsert);
+      }
+
+      // 5. Copy assignment_rules
+      const rules = await fetchAllRows('assignment_rules', build.id);
+      if (rules.length > 0) {
+        const rulesToInsert = rules.map(({ id, created_at, updated_at, ...rest }) => ({
+          ...rest,
+          build_id: newBuildId,
+        }));
+        await insertInBatches('assignment_rules', rulesToInsert);
+      }
+
+      // 6. Copy assignment_configuration
+      const { data: config } = await supabase
+        .from('assignment_configuration')
+        .select('*')
+        .eq('build_id', build.id)
+        .single();
+
+      if (config) {
+        const { id, created_at, updated_at, ...configRest } = config;
+        await supabase.from('assignment_configuration').insert({
+          ...configRest,
+          build_id: newBuildId,
+        });
+      }
+
+      // 7. Copy assignments
+      const assignments = await fetchAllRows('assignments', build.id);
+      if (assignments.length > 0) {
+        const assignmentsToInsert = assignments.map(({ id, created_at, ...rest }) => ({
+          ...rest,
+          build_id: newBuildId,
+          is_approved: false, // Reset approval status
+        }));
+        await insertInBatches('assignments', assignmentsToInsert);
+      }
+
+      toast({
+        title: 'Success',
+        description: `Build duplicated as "${build.name} (copy)" with all ${accounts.length} accounts, ${opportunities.length} opportunities`,
+      });
+
+      // Reload builds to show the new one
+      await loadBuilds();
+    } catch (error) {
+      console.error('Error duplicating build:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to duplicate build',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsDuplicating(null);
+    }
   };
 
   const updateBuild = async () => {
@@ -387,9 +540,9 @@ const Dashboard = () => {
         {canCreateBuild && (
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="lg" className="btn-gradient hover-scale shadow-lg">
-                <Plus className="mr-2 h-5 w-5" />
-                New Build
+              <Button size="lg" className="btn-gradient hover-scale shadow-lg flex items-center justify-center font-semibold">
+                <Plus className="h-5 w-5 mr-2" />
+                <span>New Build</span>
               </Button>
             </DialogTrigger>
             <DialogContent className="card-elevated">
@@ -530,55 +683,66 @@ const Dashboard = () => {
             return (
               <Card 
                 key={build.id} 
-                className="group cursor-pointer transition-all duration-300 hover:scale-[1.01] hover:shadow-xl border-border/40 hover:border-primary/50 bg-gradient-to-br from-card to-card/80 backdrop-blur-sm"
+                className="group cursor-pointer transition-all duration-300 hover:scale-[1.01] hover:shadow-xl border-border/40 hover:border-primary/50 bg-gradient-to-br from-card to-card/80 backdrop-blur-sm flex flex-col h-full"
                 onClick={() => navigate(`/build/${build.id}`)}
               >
                 <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <CardTitle className="text-xl font-bold group-hover:text-primary transition-colors leading-tight">
-                          {build.name}
-                        </CardTitle>
-                        <span className={`inline-flex items-center rounded-full ${getStatusColor(build.status)} font-medium px-3 py-1 text-xs shrink-0 border`}>
-                          {build.status.replace('_', ' ')}
-                        </span>
-                        <Badge variant="outline" className="text-xs">
-                          {build.region}
-                        </Badge>
-                      </div>
-                      {build.description && (
-                        <CardDescription className="text-sm line-clamp-2 mt-1">
-                          {build.description}
-                        </CardDescription>
-                      )}
-                    </div>
+                  {/* Top row: Title with actions on right */}
+                  <div className="flex items-start justify-between gap-3">
+                    <CardTitle className="text-xl font-bold group-hover:text-primary transition-colors leading-tight">
+                      {build.name}
+                    </CardTitle>
                     {canCreateBuild && (
-                      <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ml-2">
+                      <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => handleDuplicateBuild(build, e)}
+                          disabled={isDuplicating === build.id}
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                          title="Duplicate Build"
+                        >
+                          {isDuplicating === build.id ? (
+                            <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-primary/30 border-t-primary"></div>
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={(e) => handleEditBuild(build, e)}
-                          className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                          title="Edit Build"
                         >
-                          <Edit3 className="h-4 w-4" />
+                          <Edit3 className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={(e) => handleDeleteBuild(build, e)}
-                          className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-200"
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-200"
+                          title="Delete Build"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     )}
                   </div>
+                  {/* Badges row - always same height */}
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className={`inline-flex items-center rounded-full ${getStatusColor(build.status)} font-medium px-2.5 py-0.5 text-xs border`}>
+                      {build.status.replace('_', ' ')}
+                    </span>
+                    <Badge variant="outline" className="text-xs">
+                      {build.region}
+                    </Badge>
+                  </div>
                 </CardHeader>
                 
-                <CardContent className="space-y-4 pt-0">
-                  {/* Information Grid */}
-                  <div className="grid grid-cols-2 gap-3 p-4 bg-muted/30 rounded-lg">
+                <CardContent className="flex-1 flex flex-col pt-0">
+                  {/* Information Grid - consistent 2 columns */}
+                  <div className="grid grid-cols-2 gap-3 p-4 bg-muted/30 rounded-lg mb-4">
                     <div className="flex items-center gap-2 text-sm">
                       <Calendar className="h-4 w-4 text-primary/70" />
                       <div className="flex flex-col">
@@ -586,52 +750,18 @@ const Dashboard = () => {
                         <span className="text-xs font-medium">{new Date(build.created_at).toLocaleDateString()}</span>
                       </div>
                     </div>
-                    
-                    {build.updated_at !== build.created_at && (
-                      <div className="flex items-center gap-2 text-sm">
-                        <Clock className="h-4 w-4 text-accent/70" />
-                        <div className="flex flex-col">
-                          <span className="text-xs text-muted-foreground font-medium">Last Updated</span>
-                          <span className="text-xs font-medium">
-                            {(() => {
-                              const now = new Date();
-                              const updated = new Date(build.updated_at);
-                              const diffInHours = Math.floor((now.getTime() - updated.getTime()) / (1000 * 60 * 60));
-                              
-                              if (diffInHours < 1) return 'Just now';
-                              if (diffInHours < 24) return `${diffInHours}h ago`;
-                              if (diffInHours < 48) return 'Yesterday';
-                              return updated.toLocaleDateString();
-                            })()}
-                          </span>
-                        </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <User className="h-4 w-4 text-muted-foreground/70" />
+                      <div className="flex flex-col">
+                        <span className="text-xs text-muted-foreground font-medium">Owner</span>
+                        <span className="text-xs font-medium">{build.owner_name || 'Unassigned'}</span>
                       </div>
-                    )}
-                    
-                    {build.target_date && (
-                      <div className="flex items-center gap-2 text-sm">
-                        <Target className="h-4 w-4 text-secondary/70" />
-                        <div className="flex flex-col">
-                          <span className="text-xs text-muted-foreground font-medium">Target Date</span>
-                          <span className="text-xs font-medium">{new Date(build.target_date).toLocaleDateString()}</span>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {build.owner_name && (
-                      <div className="flex items-center gap-2 text-sm">
-                        <User className="h-4 w-4 text-muted-foreground/70" />
-                        <div className="flex flex-col">
-                          <span className="text-xs text-muted-foreground font-medium">Owner</span>
-                          <span className="text-xs font-medium">{build.owner_name}</span>
-                        </div>
-                      </div>
-                    )}
+                    </div>
                   </div>
 
-                  {/* Action Button */}
+                  {/* Action Button - always at bottom */}
                   <Button 
-                    className="w-full bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-primary-foreground shadow-lg hover:shadow-xl transition-all duration-300 group-hover:scale-[1.02]" 
+                    className="w-full mt-auto bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-primary-foreground shadow-lg hover:shadow-xl transition-all duration-300 group-hover:scale-[1.02]" 
                     onClick={(e) => {
                       e.stopPropagation();
                       navigate(`/build/${build.id}`);

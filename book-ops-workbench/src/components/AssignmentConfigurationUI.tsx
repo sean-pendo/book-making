@@ -219,7 +219,7 @@ export const AssignmentConfigurationUI: React.FC = () => {
             <p className="font-medium">Balance thresholds not calculated</p>
             <p className="text-sm mt-1">
               Workload balancing requires calculated thresholds for CRE, ATR, and Tier distribution.
-              Go to <strong>Territory Balancing Dashboard</strong> and click "Recalculate" in the Balance Thresholds section.
+              Go to <strong>Book Balancing Dashboard</strong> and click "Recalculate" in the Balance Thresholds section.
             </p>
           </AlertDescription>
         </Alert>

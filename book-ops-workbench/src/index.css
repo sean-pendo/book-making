@@ -368,12 +368,12 @@ All colors MUST be HSL.
     }
   }
 
-  /* Unlock flash animation - prominent green glow that pulses and fades */
+  /* Unlock flash animation - prominent glow that pulses and fades using primary color */
   .unlock-flash {
     animation: unlock-flash 2.5s ease-out forwards;
-    background: linear-gradient(135deg, hsl(142 76% 45%) 0%, hsl(142 76% 35%) 100%) !important;
+    background: linear-gradient(135deg, hsl(345 100% 64%) 0%, hsl(345 100% 54%) 100%) !important;
     color: white !important;
-    border: 2px solid hsl(142 76% 60%) !important;
+    border: 2px solid hsl(345 100% 74%) !important;
   }
 
   .unlock-flash * {
@@ -382,24 +382,51 @@ All colors MUST be HSL.
 
   @keyframes unlock-flash {
     0% {
-      box-shadow: 0 0 30px hsl(142 76% 50% / 0.8), 0 0 60px hsl(142 76% 50% / 0.4), inset 0 0 20px hsl(142 76% 70% / 0.3);
+      box-shadow: 0 0 30px hsl(345 100% 64% / 0.8), 0 0 60px hsl(345 100% 64% / 0.4), inset 0 0 20px hsl(345 100% 80% / 0.3);
       transform: scale(1.02);
     }
     25% {
-      box-shadow: 0 0 40px hsl(142 76% 50% / 0.9), 0 0 80px hsl(142 76% 50% / 0.5), inset 0 0 25px hsl(142 76% 70% / 0.4);
+      box-shadow: 0 0 40px hsl(345 100% 64% / 0.9), 0 0 80px hsl(345 100% 64% / 0.5), inset 0 0 25px hsl(345 100% 80% / 0.4);
       transform: scale(1.03);
     }
     50% {
-      box-shadow: 0 0 30px hsl(142 76% 50% / 0.7), 0 0 50px hsl(142 76% 50% / 0.3), inset 0 0 15px hsl(142 76% 70% / 0.2);
+      box-shadow: 0 0 30px hsl(345 100% 64% / 0.7), 0 0 50px hsl(345 100% 64% / 0.3), inset 0 0 15px hsl(345 100% 80% / 0.2);
       transform: scale(1.01);
     }
     75% {
-      box-shadow: 0 0 15px hsl(142 76% 50% / 0.4), 0 0 30px hsl(142 76% 50% / 0.2);
+      box-shadow: 0 0 15px hsl(345 100% 64% / 0.4), 0 0 30px hsl(345 100% 64% / 0.2);
       transform: scale(1);
     }
     100% {
       box-shadow: none;
       transform: scale(1);
+    }
+  }
+
+  /* Subtle glow animations for attention states */
+  .glow-amber {
+    animation: glow-amber 3s ease-in-out infinite;
+  }
+
+  @keyframes glow-amber {
+    0%, 100% {
+      box-shadow: 0 0 8px hsl(38 92% 50% / 0.3), 0 0 20px hsl(38 92% 50% / 0.15);
+    }
+    50% {
+      box-shadow: 0 0 15px hsl(38 92% 50% / 0.5), 0 0 35px hsl(38 92% 50% / 0.25);
+    }
+  }
+
+  .glow-primary {
+    animation: glow-primary 3s ease-in-out infinite;
+  }
+
+  @keyframes glow-primary {
+    0%, 100% {
+      box-shadow: 0 0 8px hsl(var(--primary) / 0.3), 0 0 20px hsl(var(--primary) / 0.15);
+    }
+    50% {
+      box-shadow: 0 0 15px hsl(var(--primary) / 0.5), 0 0 35px hsl(var(--primary) / 0.25);
     }
   }
 }

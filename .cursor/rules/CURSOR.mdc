@@ -13,7 +13,56 @@ globs: **/*
 - **State Management**: TanStack Query (React Query).
 - **Persistence**: `localStorage` (for import state) + Supabase (for data).
 
-## 3. Architecture & System Map
+## 3. Business Logic Documentation
+
+### 📚 IMPORTANT: Single Source of Truth
+
+**Before modifying ANY calculation logic, consult these docs first:**
+
+| Resource | Purpose |
+|----------|---------|
+| **[`docs/core/business_logic.md`](../../docs/core/business_logic.md)** | Glossary, calculation rules, tier definitions, geo mapping |
+| **[`src/domain/`](../../book-ops-workbench/src/domain/)** | Code implementation of business rules |
+
+**The `src/domain/` module contains:**
+- `calculations.ts` - ARR, ATR, Pipeline calculations
+- `tiers.ts` - Team tier (SMB/Growth/MM/ENT) and expansion tier logic
+- `geography.ts` - Region hierarchy and territory mapping
+- `constants.ts` - Thresholds, defaults, configuration values
+
+**Rule**: When changing business logic:
+1. Update `docs/core/business_logic.md` first
+2. Update the corresponding file in `src/domain/`
+3. Update any consuming code that uses the old logic
+
+### 🔍 Gradual Refactoring Rule
+
+When working on ANY file in the codebase:
+
+1. **Detect Hardcoded Logic**: Look for inline calculations that should use `@/domain`:
+   - ARR calculations (priority chains like `calculated_arr || arr || 0`)
+   - ATR calculations (filtering by `opportunity_type = 'Renewals'`)
+   - Tier thresholds (magic numbers like `100`, `500`, `1500`)
+   - Region/territory mappings
+   - PE firm name handling
+
+2. **Flag Discrepancies**: If you find hardcoded logic that **differs** from `src/domain/`:
+   - **STOP and ASK the user** before changing anything
+   - Example: "I found `employees < 150` for SMB in this file, but `TIER_THRESHOLDS.SMB_MAX` is 99. Which is correct?"
+
+3. **Propose Refactor**: If the hardcoded logic **matches** `src/domain/`:
+   - Suggest replacing with the import
+   - Example: "This file has inline ARR calculation. Want me to refactor to use `getAccountARR()` from `@/domain`?"
+
+4. **Never Silently Change**: Business logic discrepancies may be intentional edge cases. Always confirm with user.
+
+**Questions to Ask When Discrepancy Found:**
+- "Is this intentional or a bug?"
+- "Should we update `src/domain/` to match this, or vice versa?"
+- "Is this an exception for this specific use case?"
+- "Should we add this as a new constant/function in the domain module?"
+
+## 4. Architecture & System Map
 ### Data Pipeline
 1.  **Import**: `DataImport.tsx` -> `BatchImportService.ts` -> Supabase.
     *   *Note*: Uses "Optimized Import" which deletes existing records before inserting. High risk of data loss if insert fails.
@@ -25,7 +74,7 @@ Multiple services exist (fragmentation risk). Always verify which is active:
 2.  **`CollaborativeAssignmentService.ts`**: Rule-based legacy engine.
 3.  **`SophisticatedAssignmentService.ts`**: Multi-pass legacy engine.
 
-## 4. QA Status & Known Issues (v1.0)
+## 5. QA Status & Known Issues (v1.0)
 We are currently in **QA Mode**. The codebase is unstable.
 
 ### Critical Blockers
@@ -37,7 +86,7 @@ We are currently in **QA Mode**. The codebase is unstable.
 2.  **Isolate Flow**: When fixing Generation, check `RebalancingAssignmentService` logs first.
 3.  **Local Dev**: Debug locally with a connected Supabase instance to reproduce "0 Accounts" bug.
 
-## 5. Rules & Guidelines
+## 6. Rules & Guidelines
 
 ### 📜 Documentation Rules
 *   **Structure**:
@@ -53,6 +102,7 @@ We are currently in **QA Mode**. The codebase is unstable.
 ### 🛡️ Safety & Coding
 *   **File Operations**: Always check if a file exists before creation. Prefer `edit` over `overwrite`.
 *   **No Magic**: Do not assume deployment environments. Check env vars first.
+*   **Browser Tools**: Only use browser/testing tools (navigate, snapshot, click, screenshot, etc.) when the user **explicitly asks** to test in the browser or view the app. Do NOT proactively open browser tabs or test features without being asked.
 *   **Pre-Deploy Code Review**: **MANDATORY**. Before deploying ANY change to Vercel:
     1. Re-read the code you modified to verify it makes sense
     2. Check for edge cases (null values, empty arrays, race conditions)
@@ -61,7 +111,7 @@ We are currently in **QA Mode**. The codebase is unstable.
     5. Ensure notifications go to the right people
     6. Run linter checks on modified files
 
-## 6. Versioning & Releases
+## 7. Versioning & Releases
 
 ### Version Display
 The app version is shown in **Settings** at the bottom. It pulls from `package.json` at build time.
@@ -92,7 +142,7 @@ When the user says "release", "push to GitHub", or "create a version", follow th
 ### Current Version
 Check `book-ops-workbench/package.json` for the current version number.
 
-## 7. Git & GitHub
+## 8. Git & GitHub
 
 ### When to Push
 Push to GitHub when:
@@ -104,7 +154,7 @@ Push to GitHub when:
 `Release vX.X.X - Brief summary` for releases
 `Fix: description` or `Feature: description` for regular commits
 
-## 8. Developer & Notifications
+## 9. Developer & Notifications
 
 ### Developer Info
 - **Developer Slack**: `@sean.muse` (pendo.io workspace)
@@ -146,5 +196,27 @@ All errors include: stack trace, URL, user agent, app version, timestamp.
 
 **Important**: GitHub and Vercel are intentionally separate. Push to GitHub for version control, use `vercel --prod` CLI for deployments.
 
-## 9. Learning Log
+## 10. Terminology & Glossary
+
+> **Full Reference**: See [`docs/core/business_logic.md`](../../docs/core/business_logic.md) for complete glossary with calculation formulas.
+
+### Quick Reference
+
+| Term | Meaning |
+|------|---------|
+| **ARR** | Annual Recurring Revenue (customers only) |
+| **ATR** | Available to Renew - revenue timing, NOT risk |
+| **Pipeline** | Prospect opportunity value (`net_arr`) |
+| **CRE** | Customer Renewal at Risk - churn indicator |
+| **Team Tier** | SMB/Growth/MM/ENT based on employee count |
+
+### Key Calculation Rules
+
+```
+ARR Priority:  calculated_arr → hierarchy_bookings_arr_converted → arr → 0
+ATR Source:    SUM(available_to_renew) WHERE opportunity_type = 'Renewals'
+Team Tier:     SMB (<100 emp) | Growth (100-499) | MM (500-1499) | ENT (1500+)
+```
+
+## 11. Learning Log
 Maintain a learning log so as we build this app I continue to understand what we are doing, and why

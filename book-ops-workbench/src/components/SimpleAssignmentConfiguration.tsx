@@ -22,7 +22,7 @@ export const SimpleAssignmentConfiguration: React.FC<SimpleAssignmentConfigurati
     customer_target_arr: 1300000,
     customer_max_arr: 3000000,
     max_cre_per_rep: 3,
-    assign_prospects: false,
+    assign_prospects: true,
     prospect_min_arr: 300000,
     prospect_target_arr: 500000,
     prospect_max_arr: 2000000,

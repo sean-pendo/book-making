@@ -10,6 +10,7 @@ import { useEnhancedAccountCalculations } from '@/hooks/useEnhancedAccountCalcul
 import { SalesRepDetailModal } from '@/components/SalesRepDetailModal';
 import { ARRDistributionChart } from '@/components/ARRDistributionChart';
 import { BalancingAnalyticsRow } from '@/components/BalancingAnalyticsRow';
+import { BeforeAfterComparisonPanel } from '@/components/BeforeAfterComparisonPanel';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
@@ -314,7 +315,7 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
       <div className="p-6 space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Territory Balancing Dashboard</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Book Balancing Dashboard</h1>
             <p className="text-muted-foreground mt-1">
               Analyze account distribution and rep performance across territories
             </p>
@@ -375,6 +376,11 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
           buildId={buildId}
           customerMetrics={data.customerMetrics}
         />
+
+        {/* Before/After Comparison Panel - LP Success Metrics */}
+        {buildId && data.repMetrics.length > 0 && (
+          <BeforeAfterComparisonPanel buildId={buildId} />
+        )}
 
         {/* ARR Distribution Chart - Visual analytics */}
         {arrDistributionData.length > 0 && (

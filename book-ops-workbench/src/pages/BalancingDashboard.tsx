@@ -129,7 +129,7 @@ export const BalancingDashboard = ({ buildId: propBuildId }: BalancingDashboardP
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Territory Balancing</h1>
+          <h1 className="text-2xl font-bold text-foreground">Book Balancing</h1>
           <p className="text-muted-foreground">
             Analyze workload distribution and simulate territory adjustments
           </p>

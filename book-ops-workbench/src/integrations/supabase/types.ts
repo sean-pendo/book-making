@@ -49,9 +49,11 @@ export type Database = {
           is_2_0: boolean | null
           is_customer: boolean | null
           is_parent: boolean | null
+          is_strategic: boolean | null
           new_owner_id: string | null
           new_owner_name: string | null
           open_atr_count: number | null
+          owner_change_date: string | null
           owner_id: string | null
           owner_name: string | null
           owners_lifetime_count: number | null
@@ -101,9 +103,11 @@ export type Database = {
           is_2_0?: boolean | null
           is_customer?: boolean | null
           is_parent?: boolean | null
+          is_strategic?: boolean | null
           new_owner_id?: string | null
           new_owner_name?: string | null
           open_atr_count?: number | null
+          owner_change_date?: string | null
           owner_id?: string | null
           owner_name?: string | null
           owners_lifetime_count?: number | null
@@ -153,9 +157,11 @@ export type Database = {
           is_2_0?: boolean | null
           is_customer?: boolean | null
           is_parent?: boolean | null
+          is_strategic?: boolean | null
           new_owner_id?: string | null
           new_owner_name?: string | null
           open_atr_count?: number | null
+          owner_change_date?: string | null
           owner_id?: string | null
           owner_name?: string | null
           owners_lifetime_count?: number | null
@@ -185,9 +191,11 @@ export type Database = {
         Row: {
           account_scope: string
           assign_prospects: boolean | null
+          assignment_mode: string | null
           atr_max: number | null
           atr_max_override: number | null
           atr_min: number | null
+          atr_min_override: number | null
           atr_target: number | null
           atr_variance: number | null
           based_on_account_count: number | null
@@ -202,17 +210,32 @@ export type Database = {
           cre_variance: number | null
           created_at: string | null
           created_by: string | null
+          customer_max_accounts: number | null
           customer_max_arr: number | null
           customer_min_arr: number | null
           customer_target_arr: number | null
           description: string
+          geo_weight: number | null
+          high_priority_tier_max: number | null
+          high_priority_tier_min: number | null
+          high_priority_tier_target: number | null
           id: string
+          is_custom_priority: boolean | null
           last_calculated_at: string | null
           max_cre_per_rep: number | null
           max_tier1_per_rep: number | null
           max_tier2_per_rep: number | null
+          optimization_weights: Json | null
+          pipeline_max: number | null
+          pipeline_max_override: number | null
+          pipeline_min: number | null
+          pipeline_min_override: number | null
+          pipeline_target: number | null
+          pipeline_variance: number | null
           prefer_continuity: boolean | null
           prefer_geographic_match: boolean | null
+          priority_config: Json | null
+          prospect_max_accounts: number | null
           prospect_max_arr: number | null
           prospect_min_arr: number | null
           prospect_target_arr: number | null
@@ -235,7 +258,12 @@ export type Database = {
           q4_renewal_target: number | null
           renewal_concentration_max: number | null
           renewal_concentration_max_override: number | null
+          rs_arr_threshold: number | null
+          standard_tier_max: number | null
+          standard_tier_min: number | null
+          standard_tier_target: number | null
           territory_mappings: Json | null
+          tier_variance: number | null
           tier1_max: number | null
           tier1_max_override: number | null
           tier1_min: number | null
@@ -248,17 +276,15 @@ export type Database = {
           tier2_variance: number | null
           updated_at: string | null
           use_ai_optimization: boolean | null
-          assignment_mode: string | null
-          priority_config: Json | null
-          rs_arr_threshold: number | null
-          is_custom_priority: boolean | null
         }
         Insert: {
           account_scope?: string
           assign_prospects?: boolean | null
+          assignment_mode?: string | null
           atr_max?: number | null
           atr_max_override?: number | null
           atr_min?: number | null
+          atr_min_override?: number | null
           atr_target?: number | null
           atr_variance?: number | null
           based_on_account_count?: number | null
@@ -273,17 +299,32 @@ export type Database = {
           cre_variance?: number | null
           created_at?: string | null
           created_by?: string | null
+          customer_max_accounts?: number | null
           customer_max_arr?: number | null
           customer_min_arr?: number | null
           customer_target_arr?: number | null
           description?: string
+          geo_weight?: number | null
+          high_priority_tier_max?: number | null
+          high_priority_tier_min?: number | null
+          high_priority_tier_target?: number | null
           id?: string
+          is_custom_priority?: boolean | null
           last_calculated_at?: string | null
           max_cre_per_rep?: number | null
           max_tier1_per_rep?: number | null
           max_tier2_per_rep?: number | null
+          optimization_weights?: Json | null
+          pipeline_max?: number | null
+          pipeline_max_override?: number | null
+          pipeline_min?: number | null
+          pipeline_min_override?: number | null
+          pipeline_target?: number | null
+          pipeline_variance?: number | null
           prefer_continuity?: boolean | null
           prefer_geographic_match?: boolean | null
+          priority_config?: Json | null
+          prospect_max_accounts?: number | null
           prospect_max_arr?: number | null
           prospect_min_arr?: number | null
           prospect_target_arr?: number | null
@@ -306,7 +347,12 @@ export type Database = {
           q4_renewal_target?: number | null
           renewal_concentration_max?: number | null
           renewal_concentration_max_override?: number | null
+          rs_arr_threshold?: number | null
+          standard_tier_max?: number | null
+          standard_tier_min?: number | null
+          standard_tier_target?: number | null
           territory_mappings?: Json | null
+          tier_variance?: number | null
           tier1_max?: number | null
           tier1_max_override?: number | null
           tier1_min?: number | null
@@ -319,17 +365,15 @@ export type Database = {
           tier2_variance?: number | null
           updated_at?: string | null
           use_ai_optimization?: boolean | null
-          assignment_mode?: string | null
-          priority_config?: Json | null
-          rs_arr_threshold?: number | null
-          is_custom_priority?: boolean | null
         }
         Update: {
           account_scope?: string
           assign_prospects?: boolean | null
+          assignment_mode?: string | null
           atr_max?: number | null
           atr_max_override?: number | null
           atr_min?: number | null
+          atr_min_override?: number | null
           atr_target?: number | null
           atr_variance?: number | null
           based_on_account_count?: number | null
@@ -344,17 +388,32 @@ export type Database = {
           cre_variance?: number | null
           created_at?: string | null
           created_by?: string | null
+          customer_max_accounts?: number | null
           customer_max_arr?: number | null
           customer_min_arr?: number | null
           customer_target_arr?: number | null
           description?: string
+          geo_weight?: number | null
+          high_priority_tier_max?: number | null
+          high_priority_tier_min?: number | null
+          high_priority_tier_target?: number | null
           id?: string
+          is_custom_priority?: boolean | null
           last_calculated_at?: string | null
           max_cre_per_rep?: number | null
           max_tier1_per_rep?: number | null
           max_tier2_per_rep?: number | null
+          optimization_weights?: Json | null
+          pipeline_max?: number | null
+          pipeline_max_override?: number | null
+          pipeline_min?: number | null
+          pipeline_min_override?: number | null
+          pipeline_target?: number | null
+          pipeline_variance?: number | null
           prefer_continuity?: boolean | null
           prefer_geographic_match?: boolean | null
+          priority_config?: Json | null
+          prospect_max_accounts?: number | null
           prospect_max_arr?: number | null
           prospect_min_arr?: number | null
           prospect_target_arr?: number | null
@@ -377,7 +436,12 @@ export type Database = {
           q4_renewal_target?: number | null
           renewal_concentration_max?: number | null
           renewal_concentration_max_override?: number | null
+          rs_arr_threshold?: number | null
+          standard_tier_max?: number | null
+          standard_tier_min?: number | null
+          standard_tier_target?: number | null
           territory_mappings?: Json | null
+          tier_variance?: number | null
           tier1_max?: number | null
           tier1_max_override?: number | null
           tier1_min?: number | null
@@ -390,10 +454,6 @@ export type Database = {
           tier2_variance?: number | null
           updated_at?: string | null
           use_ai_optimization?: boolean | null
-          assignment_mode?: string | null
-          priority_config?: Json | null
-          rs_arr_threshold?: number | null
-          is_custom_priority?: boolean | null
         }
         Relationships: [
           {
@@ -1319,63 +1379,78 @@ export type Database = {
       }
       sales_reps: {
         Row: {
+          backfill_target_rep_id: string | null
           build_id: string | null
           created_at: string
           flm: string | null
           id: string
           include_in_assignments: boolean | null
           is_active: boolean | null
+          is_backfill_source: boolean | null
+          is_backfill_target: boolean | null
           is_manager: boolean | null
+          is_placeholder: boolean | null
           is_renewal_specialist: boolean | null
           is_strategic_rep: boolean
           manager: string | null
           name: string
           region: string | null
-          sub_region: string | null
           rep_id: string
           slm: string | null
           status_notes: string | null
+          sub_region: string | null
           team: string | null
+          team_tier: string | null
           updated_at: string
         }
         Insert: {
+          backfill_target_rep_id?: string | null
           build_id?: string | null
           created_at?: string
           flm?: string | null
           id?: string
           include_in_assignments?: boolean | null
           is_active?: boolean | null
+          is_backfill_source?: boolean | null
+          is_backfill_target?: boolean | null
           is_manager?: boolean | null
+          is_placeholder?: boolean | null
           is_renewal_specialist?: boolean | null
           is_strategic_rep?: boolean
           manager?: string | null
           name: string
           region?: string | null
-          sub_region?: string | null
           rep_id: string
           slm?: string | null
           status_notes?: string | null
+          sub_region?: string | null
           team?: string | null
+          team_tier?: string | null
           updated_at?: string
         }
         Update: {
+          backfill_target_rep_id?: string | null
           build_id?: string | null
           created_at?: string
           flm?: string | null
           id?: string
           include_in_assignments?: boolean | null
           is_active?: boolean | null
+          is_backfill_source?: boolean | null
+          is_backfill_target?: boolean | null
           is_manager?: boolean | null
+          is_placeholder?: boolean | null
           is_renewal_specialist?: boolean | null
           is_strategic_rep?: boolean
           manager?: string | null
           name?: string
           region?: string | null
-          sub_region?: string | null
           rep_id?: string
           slm?: string | null
           status_notes?: string | null
+          sub_region?: string | null
           team?: string | null
+          team_tier?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -1446,6 +1521,51 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      slack_notifications_log: {
+        Row: {
+          created_at: string | null
+          error_message: string | null
+          id: string
+          message: string
+          metadata: Json | null
+          notification_type: string
+          recipient_email: string | null
+          recipient_slack_user: string | null
+          sent_at: string | null
+          slack_response: Json | null
+          status: string
+          title: string
+        }
+        Insert: {
+          created_at?: string | null
+          error_message?: string | null
+          id?: string
+          message: string
+          metadata?: Json | null
+          notification_type: string
+          recipient_email?: string | null
+          recipient_slack_user?: string | null
+          sent_at?: string | null
+          slack_response?: Json | null
+          status: string
+          title: string
+        }
+        Update: {
+          created_at?: string | null
+          error_message?: string | null
+          id?: string
+          message?: string
+          metadata?: Json | null
+          notification_type?: string
+          recipient_email?: string | null
+          recipient_slack_user?: string | null
+          sent_at?: string | null
+          slack_response?: Json | null
+          status?: string
+          title?: string
+        }
+        Relationships: []
       }
     }
     Views: {

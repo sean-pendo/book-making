@@ -551,14 +551,14 @@ export const generateSampleAccountsCSV = (): string => {
     'Account ID (18)', 'Account Name', 'Ultimate Parent Id', 'Ultimate Parent Name', 
     'Owner Full Name', 'Owner ID', 'Billing Country (HQ Country)', 
     'Sales Territory', 'GEO', 'Employee Count (Account)', 'Employee Count (Ultimate Parent)', 
-    'Is Customer (Y/N)', 'ARR (current)', 'Expansion Tier', 'Initial Sale Tier', 'Type', 'Industry'
+    'Is Customer (Y/N)', 'ARR (current)', 'Expansion Tier', 'Initial Sale Tier', 'Type', 'Industry', 'Is Strategic'
   ];
   const sampleData = [
-    ['ACC001', 'Global Enterprise Corp', 'ACC001', 'Global Enterprise Corp', 'John Smith', 'USR001', 'United States', 'Enterprise AMER', 'AMER', '5000', '5000', 'true', '850000', 'Tier1', 'Enterprise', 'Customer', 'Technology'],
-    ['ACC002', 'Tech Solutions Ltd', 'ACC001', 'Global Enterprise Corp', 'Sarah Johnson', 'USR002', 'United Kingdom', 'UKI', 'EMEA', '1200', '5000', 'true', '420000', 'Tier2', 'Commercial', 'Customer', 'Software'],
-    ['ACC003', 'Startup Innovations', 'ACC003', 'Startup Innovations', 'Mike Wilson', 'USR003', 'Canada', 'DAC', 'AMER', '150', '150', 'false', '65000', 'Tier3', 'Commercial', 'Prospect', 'SaaS'],
-    ['ACC004', 'Manufacturing Co', 'ACC004', 'Manufacturing Co', 'Emma Davis', 'USR004', 'Germany', 'France', 'EMEA', '800', '800', 'true', '180000', 'Tier2', 'Commercial', 'Customer', 'Manufacturing'],
-    ['ACC005', 'Regional Branch', 'ACC001', 'Global Enterprise Corp', 'Sarah Johnson', 'USR002', 'France', 'France', 'EMEA', '300', '5000', 'true', '125000', 'Tier1', 'Enterprise', 'Customer', 'Technology']
+    ['ACC001', 'Global Enterprise Corp', 'ACC001', 'Global Enterprise Corp', 'John Smith', 'USR001', 'United States', 'Enterprise AMER', 'AMER', '5000', '5000', 'true', '850000', 'Tier1', 'Enterprise', 'Customer', 'Technology', 'true'],
+    ['ACC002', 'Tech Solutions Ltd', 'ACC001', 'Global Enterprise Corp', 'Sarah Johnson', 'USR002', 'United Kingdom', 'UKI', 'EMEA', '1200', '5000', 'true', '420000', 'Tier2', 'Commercial', 'Customer', 'Software', 'true'],
+    ['ACC003', 'Startup Innovations', 'ACC003', 'Startup Innovations', 'Mike Wilson', 'USR003', 'Canada', 'DAC', 'AMER', '150', '150', 'false', '65000', 'Tier3', 'Commercial', 'Prospect', 'SaaS', 'false'],
+    ['ACC004', 'Manufacturing Co', 'ACC004', 'Manufacturing Co', 'Emma Davis', 'USR004', 'Germany', 'France', 'EMEA', '800', '800', 'true', '180000', 'Tier2', 'Commercial', 'Customer', 'Manufacturing', 'false'],
+    ['ACC005', 'Regional Branch', 'ACC001', 'Global Enterprise Corp', 'Sarah Johnson', 'USR002', 'France', 'France', 'EMEA', '300', '5000', 'true', '125000', 'Tier1', 'Enterprise', 'Customer', 'Technology', 'false']
   ];
   
   return [headers.join(','), ...sampleData.map(row => row.join(','))].join('\n');
@@ -578,13 +578,13 @@ export const generateSampleOpportunitiesCSV = (): string => {
 };
 
 export const generateSampleSalesRepsCSV = (): string => {
-  const headers = ['RepId', 'Name', 'Manager', 'Team', 'Region', 'FLM', 'SLM'];
+  const headers = ['RepId', 'Name', 'Manager', 'Team', 'Region', 'FLM', 'SLM', 'Is Strategic'];
   const sampleData = [
-    ['REP001', 'John Smith', 'Alice Manager', 'Enterprise Sales', 'AMER', 'Alice Manager', 'VP Sales AMER'],
-    ['REP002', 'Sarah Johnson', 'Bob Director', 'Commercial Sales', 'EMEA', 'Bob Director', 'VP Sales EMEA'],
-    ['REP003', 'Mike Wilson', 'Alice Manager', 'Enterprise Sales', 'AMER', 'Alice Manager', 'VP Sales AMER'],
-    ['REP004', 'Emma Davis', 'Carol Lead', 'SMB Sales', 'EMEA', 'Carol Lead', 'Director SMB'],
-    ['REP005', 'David Chen', 'Dan Manager', 'Commercial Sales', 'APAC', 'Dan Manager', 'VP Sales APAC']
+    ['REP001', 'John Smith', 'Alice Manager', 'Enterprise Sales', 'AMER', 'Alice Manager', 'VP Sales AMER', 'true'],
+    ['REP002', 'Sarah Johnson', 'Bob Director', 'Commercial Sales', 'EMEA', 'Bob Director', 'VP Sales EMEA', 'true'],
+    ['REP003', 'Mike Wilson', 'Alice Manager', 'Enterprise Sales', 'AMER', 'Alice Manager', 'VP Sales AMER', 'false'],
+    ['REP004', 'Emma Davis', 'Carol Lead', 'SMB Sales', 'EMEA', 'Carol Lead', 'Director SMB', 'false'],
+    ['REP005', 'David Chen', 'Dan Manager', 'Commercial Sales', 'APAC', 'Dan Manager', 'VP Sales APAC', 'false']
   ];
   
   return [headers.join(','), ...sampleData.map(row => row.join(','))].join('\n');
@@ -687,6 +687,7 @@ export const transformAccountData = (mappedData: any[], buildId: string) => {
       arr: toNumber(row.arr),
       atr: toNumber(row.atr),
       renewal_date: toDateString(row.renewal_date),
+      owner_change_date: toDateString(row.owner_change_date) || toDateString(row.edit_date) || null,
       expansion_tier: row.expansion_tier || null,
       account_type: row.account_type || null,
       enterprise_vs_commercial: row.enterprise_vs_commercial || null,
@@ -713,6 +714,10 @@ export const transformAccountData = (mappedData: any[], buildId: string) => {
       risk_flag: toBoolean(row.risk_flag),
       cre_risk: toBoolean(row.cre_risk),
       hierarchy_bookings_arr_converted: toNumber(row.hierarchy_bookings_arr_converted),
+      // Optional stability fields - no error if missing
+      pe_firm: row.pe_firm || null,
+      // Strategic flag for Priority 0 optimization
+      is_strategic: toBoolean(row.is_strategic),
       build_id: buildId
     };
   });
@@ -808,6 +813,14 @@ export const transformSalesRepData = (mappedData: any[], buildId: string) => {
     return [];
   }
   
+  // Helper function to safely convert to boolean
+  const toBoolean = (value: any) => {
+    if (value === null || value === undefined || value === '') return false;
+    if (typeof value === 'boolean') return value;
+    const str = value.toString().toLowerCase();
+    return ['true', 'yes', 'y', '1'].includes(str);
+  };
+
   return mappedData.map(row => {
     console.log('Transform sales rep row:', row); // Debug logging
     // The data is already transformed through field mapping, so use it directly
@@ -819,6 +832,8 @@ export const transformSalesRepData = (mappedData: any[], buildId: string) => {
       region: row.region || null,
       flm: row.flm || null,
       slm: row.slm || null,
+      // Strategic rep flag - can be imported or set manually in UI
+      is_strategic_rep: toBoolean(row.is_strategic_rep || row.is_strategic),
       build_id: buildId
     };
   });

@@ -244,17 +244,43 @@ export const useEnhancedBalancing = (buildId?: string) => {
         const customerRetentionRate = assignedCustomerAccounts.length > 0 ?
           (customerRetentionCount / assignedCustomerAccounts.length) * 100 : 0;
 
-        // Phase 3: Calculate customer-only regional alignment using dynamic territory mappings
+        // Phase 3: Calculate customer-only regional alignment
+        // Uses same logic as assignment engine: territory mappings first, then direct geo match
         let alignedCustomerCount = 0;
+        const hasCustomMappings = Object.keys(territoryMappings).length > 0;
         
         if (customerAccounts.length > 0) {
           customerAccounts.forEach(acc => {
-            const accountTerritory = acc.sales_territory;
-            const expectedRegion = territoryMappings[accountTerritory || ''];
             const actualRegion = rep.region;
+            let isAligned = false;
             
-            // Check if the rep's region matches the expected region from the GEO_FIRST rule
-            if (expectedRegion && actualRegion && expectedRegion === actualRegion) {
+            if (hasCustomMappings) {
+              // Use territory mappings if configured
+              const accountTerritory = acc.sales_territory;
+              const expectedRegion = territoryMappings[accountTerritory || ''];
+              if (expectedRegion && actualRegion && expectedRegion === actualRegion) {
+                isAligned = true;
+              }
+              // Fallback: check geo field against territory mappings
+              if (!isAligned && acc.geo) {
+                const geoRegion = territoryMappings[acc.geo];
+                if (geoRegion && actualRegion && geoRegion === actualRegion) {
+                  isAligned = true;
+                }
+              }
+            } else {
+              // Direct matching when no custom mappings exist (same as assignment engine)
+              // Compare account.geo directly to rep.region
+              if (acc.geo && actualRegion && acc.geo === actualRegion) {
+                isAligned = true;
+              }
+              // Also check sales_territory as direct region match
+              if (!isAligned && acc.sales_territory && actualRegion && acc.sales_territory === actualRegion) {
+                isAligned = true;
+              }
+            }
+            
+            if (isAligned) {
               alignedCustomerCount++;
             }
           });

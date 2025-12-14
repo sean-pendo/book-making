@@ -1,6 +1,5 @@
 ---
-alwaysApply: true
+alwaysApply: false
 ---
-
 The testing Environment is the production Environment so please deploy changes to vercel whenever they are made.
 

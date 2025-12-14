@@ -50,8 +50,14 @@ export const ARRDistributionChart: React.FC<ARRDistributionChartProps> = ({
   // Sort by ARR descending
   const sortedData = [...data].sort((a, b) => b.customerARR - a.customerARR);
   
-  // Calculate the maximum for scaling (use hardCap or max value, whichever is higher)
-  const maxValue = Math.max(hardCap, ...sortedData.map(d => d.customerARR));
+  // Calculate data-driven scale: use max data value with 10% padding
+  // Only extend to hardCap if data actually approaches it
+  const maxDataValue = Math.max(...sortedData.map(d => d.customerARR), 0);
+  const dataWithPadding = maxDataValue * 1.1; // 10% headroom
+  
+  // Use whichever is larger: data with padding, or preferredMax (to show the target zone)
+  // But don't stretch to hardCap unless data is actually near it
+  const maxValue = Math.max(dataWithPadding, preferredMax * 1.1);
   
   // Calculate bar width as percentage
   const getBarWidth = (arr: number) => {

@@ -129,6 +129,11 @@ export const fetchAssignmentExportData = async (
       return 'High Risk';
     };
 
+    // Helper function to detect Sales Tools bucket accounts
+    const isSalesToolsAccount = (rationale: string | undefined): boolean => {
+      return rationale?.includes('Routed to Sales Tools') ?? false;
+    };
+
     // Transform data for export
     const exportData: AssignmentExportData[] = accounts?.map(account => {
       const assignmentData = reasoningMap.get(account.sfdc_account_id);
@@ -140,6 +145,11 @@ export const fetchAssignmentExportData = async (
 
       const arr = account.hierarchy_bookings_arr_converted || account.calculated_arr || account.arr || 0;
 
+      // Handle Sales Tools labeling - show "Sales Tools" instead of empty/unassigned
+      const isSalesTools = isSalesToolsAccount(assignmentData?.rationale);
+      const newOwnerName = isSalesTools ? 'Sales Tools' : (account.new_owner_name || '');
+      const newOwnerId = isSalesTools ? '' : (account.new_owner_id || '');
+
       return {
         account_id: account.sfdc_account_id,
         account_name: account.account_name,
@@ -148,8 +158,8 @@ export const fetchAssignmentExportData = async (
         arr,
         current_owner_id: account.owner_id || '',
         current_owner_name: account.owner_name || '',
-        new_owner_id: account.new_owner_id || '',
-        new_owner_name: account.new_owner_name || '',
+        new_owner_id: newOwnerId,
+        new_owner_name: newOwnerName,
         assignment_reasoning: assignmentData?.rationale || '',
         risk_level: calculateRiskLevel(account),
         assignment_status: getAssignmentStatus(account),

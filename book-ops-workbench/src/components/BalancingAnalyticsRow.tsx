@@ -37,14 +37,28 @@ interface BalancingAnalyticsRowProps {
   };
 }
 
-// Muted color palette
-const PRIORITY_COLORS = {
-  P1: '#22c55e', // green - Continuity + Geo
-  P2: '#3b82f6', // blue - Geo Match
-  P3: '#eab308', // yellow - Continuity Only
-  P4: '#f97316', // orange - Fallback
-  Manual: '#a855f7', // purple - Manual
+// Priority color palette matching P0-P4 + P6 + RO structure
+const PRIORITY_COLORS: Record<string, string> = {
+  P0: '#a855f7', // purple - Manual Holdover & Strategic
+  P1: '#22c55e', // green - Stability Accounts
+  P2: '#14b8a6', // teal - Geography + Continuity
+  P3: '#3b82f6', // blue - Geographic Match
+  P4: '#eab308', // yellow - Account Continuity
+  P6: '#ec4899', // pink - Renewal Specialist (FLM)
+  RO: '#f97316', // orange - Residual Optimization (not a numbered priority)
   Other: '#6b7280', // gray - Other
+};
+
+// Priority descriptions for tooltips
+const PRIORITY_DESCRIPTIONS: Record<string, string> = {
+  P0: 'Manual Holdover & Strategic Accounts',
+  P1: 'Stability Accounts (CRE Risk, Renewals, Top 10%, PE)',
+  P2: 'Geography + Continuity Match',
+  P3: 'Geographic Match',
+  P4: 'Account Continuity',
+  P6: 'Renewal Specialist (FLM)',
+  RO: 'Residual Optimization',
+  Other: 'Other assignments',
 };
 
 const formatCurrency = (value: number): string => {
@@ -86,30 +100,58 @@ export const BalancingAnalyticsRow: React.FC<BalancingAnalyticsRowProps> = ({
       
       if (error) throw error;
       
-      // Parse rationale to extract priority
+      // Parse rationale to extract priority (supports P0-P4 + P6 + RO format)
       const priorityCounts: Record<string, number> = {
+        P0: 0,
         P1: 0,
         P2: 0,
         P3: 0,
         P4: 0,
-        Manual: 0,
+        P6: 0,
+        RO: 0,  // Residual Optimization (not a numbered priority)
         Other: 0
       };
       
       (data || []).forEach(assignment => {
         const rationale = assignment.rationale || '';
-        if (rationale.includes('Priority 1') || rationale.includes('Continuity + Geo')) {
+        
+        // New format: "P0:", "P1:", "P2:", etc.
+        // Note: Strategic accounts use "Priority 0:" format from optimizationSolver.ts
+        if (rationale.includes('P0:') || rationale.includes('Priority 0:') || rationale.includes('Excluded from reassignment') || rationale.toUpperCase().includes('MANUAL')) {
+          priorityCounts.P0++;
+        } else if (rationale.includes('P1:') || rationale.includes('Stability')) {
           priorityCounts.P1++;
-        } else if (rationale.includes('Priority 2') || rationale.includes('Geography Match')) {
+        } else if (rationale.includes('P2:') || rationale.includes('Geography + Continuity')) {
           priorityCounts.P2++;
-        } else if (rationale.includes('Priority 3') || rationale.includes('Current Owner')) {
+        } else if (rationale.includes('P3:') || rationale.includes('Geographic Match') || rationale.includes('Geography Match')) {
           priorityCounts.P3++;
-        } else if (rationale.includes('Priority 4') || rationale.includes('Priority 5') || rationale.includes('Best Available') || rationale.includes('Fallback')) {
+        } else if (rationale.includes('P4:') || rationale.includes('Account Continuity') || rationale.includes('Current Owner')) {
           priorityCounts.P4++;
-        } else if (rationale.toUpperCase().includes('MANUAL')) {
-          priorityCounts.Manual++;
+        } else if (
+          rationale.includes('RO:') ||
+          rationale.includes('Residual Optimization') ||
+          rationale.includes('Optimized:') ||
+          // Legacy patterns (backward compat for existing data + simplifiedAssignmentEngine)
+          rationale.includes('Next Best') || 
+          rationale.includes('Best Available') || 
+          rationale.includes('Fallback')
+        ) {
+          priorityCounts.RO++;
+        } else if (rationale.includes('P6:') || rationale.includes('Renewal Specialist') || rationale.includes('FLM Routing')) {
+          priorityCounts.P6++;
         } else if (rationale) {
-          priorityCounts.Other++;
+          // Legacy format fallback
+          if (rationale.includes('Priority 1') || rationale.includes('Continuity + Geo')) {
+            priorityCounts.P2++;
+          } else if (rationale.includes('Priority 2')) {
+            priorityCounts.P3++;
+          } else if (rationale.includes('Priority 3')) {
+            priorityCounts.P4++;
+          } else if (rationale.includes('Priority 4') || rationale.includes('Priority 5')) {
+            priorityCounts.RO++;  // Legacy P4/P5 → now RO
+          } else {
+            priorityCounts.Other++;
+          }
         }
       });
       
@@ -119,7 +161,8 @@ export const BalancingAnalyticsRow: React.FC<BalancingAnalyticsRowProps> = ({
         .map(([name, value]) => ({
           name,
           value,
-          color: PRIORITY_COLORS[name as keyof typeof PRIORITY_COLORS]
+          color: PRIORITY_COLORS[name],
+          description: PRIORITY_DESCRIPTIONS[name] || name
         }));
     },
     enabled: !!buildId
@@ -291,7 +334,13 @@ export const BalancingAnalyticsRow: React.FC<BalancingAnalyticsRowProps> = ({
                   <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs">
-                  <p className="text-sm">Shows how accounts were assigned: P1 = best match (same owner + region), P2 = geo match only, P3 = continuity only, P4 = fallback, Manual = user reassignment.</p>
+                  <p className="text-sm mb-2">Assignment priorities (hover legend for details):</p>
+                  <ul className="text-xs space-y-0.5">
+                    <li><strong>P0</strong>: Manual Holdover & Strategic</li>
+                    <li><strong>P1</strong>: Stability (CRE, Renewals, Top 10%)</li>
+                    <li><strong>P2-P4</strong>: Optimization priorities</li>
+                    <li><strong>RO</strong>: Residual Optimization (final fallback)</li>
+                  </ul>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -319,18 +368,25 @@ export const BalancingAnalyticsRow: React.FC<BalancingAnalyticsRowProps> = ({
                 </div>
                 <div className="flex-1 grid grid-cols-3 gap-x-4 gap-y-1">
                   {priorityData.map((entry) => (
-                    <div key={entry.name} className="flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-1.5">
-                        <div 
-                          className="w-2 h-2 rounded-full flex-shrink-0" 
-                          style={{ backgroundColor: entry.color }}
-                        />
-                        <span className="text-muted-foreground">{entry.name}</span>
-                      </div>
-                      <span className="font-medium tabular-nums ml-2">
-                        {entry.value} <span className="text-muted-foreground">({Math.round((entry.value / totalAssignments) * 100)}%)</span>
-                      </span>
-                    </div>
+                    <Tooltip key={entry.name}>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center justify-between text-xs cursor-help">
+                          <div className="flex items-center gap-1.5">
+                            <div 
+                              className="w-2 h-2 rounded-full flex-shrink-0" 
+                              style={{ backgroundColor: entry.color }}
+                            />
+                            <span className="text-muted-foreground">{entry.name}</span>
+                          </div>
+                          <span className="font-medium tabular-nums ml-2">
+                            {entry.value} <span className="text-muted-foreground">({Math.round((entry.value / totalAssignments) * 100)}%)</span>
+                          </span>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="text-sm">{(entry as any).description || entry.name}</p>
+                      </TooltipContent>
+                    </Tooltip>
                   ))}
                 </div>
               </div>

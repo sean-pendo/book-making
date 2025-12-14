@@ -11,6 +11,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useInvalidateBuildData } from '@/hooks/useBuildData';
 import type { AssignmentResult, AssignmentProgress } from '@/services/rebalancingAssignmentService';
 import { createAssignmentStages } from '@/components/AssignmentProgressDialog';
+import { runPureOptimization, type LPSolveResult, type LPProgress } from '@/services/optimization';
 
 interface Account {
   sfdc_account_id: string;
@@ -491,12 +492,22 @@ export const useAssignmentEngine = (buildId?: string) => {
         }
       }
       
+      // Cast to include new LP columns (not yet in generated types)
+      const config = configData as typeof configData & { optimization_model?: string };
+      
       console.log(`[AssignmentEngine] ✅ Assignment configuration loaded:`, {
         customer_target_arr: configData.customer_target_arr,
         customer_max_arr: configData.customer_max_arr,
         prospect_target_arr: configData.prospect_target_arr,
-        territory_mappings: configData.territory_mappings
+        territory_mappings: configData.territory_mappings,
+        optimization_model: config.optimization_model
       });
+      
+      // Check if Relaxed Optimization model is selected
+      if (config.optimization_model === 'relaxed_optimization') {
+        console.log(`[AssignmentEngine] 🧪 Using Relaxed Optimization LP Engine`);
+        return await handlePureOptimization(buildId, accountType, filteredAccounts);
+      }
       
       // Transform owners to match SimplifiedAssignmentEngine interface
       const repsForEngine = owners.map(owner => {
@@ -504,8 +515,9 @@ export const useAssignmentEngine = (buildId?: string) => {
           acc => acc.owner_id === owner.rep_id || acc.new_owner_id === owner.rep_id
         );
         
+        // Use hierarchy_bookings_arr_converted as primary ARR source (matches simplifiedAssignmentEngine)
         const currentARR = repAccounts.reduce((sum, acc) => 
-          sum + (acc.calculated_arr || acc.arr || 0), 0
+          sum + (acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0), 0
         );
         const currentAccountCount = repAccounts.length;
         const currentCRECount = repAccounts.reduce((sum, acc) => sum + (acc.cre_count || 0), 0);
@@ -518,6 +530,7 @@ export const useAssignmentEngine = (buildId?: string) => {
           is_active: owner.is_active ?? true,
           is_strategic_rep: (owner as any).is_strategic_rep ?? false,
           include_in_assignments: owner.include_in_assignments ?? true,
+          team_tier: (owner as any).team_tier || null,  // For team alignment
           current_arr: currentARR,
           current_accounts: currentAccountCount,
           current_cre_count: currentCRECount
@@ -694,7 +707,7 @@ export const useAssignmentEngine = (buildId?: string) => {
           totalAccounts: filteredAccounts.length,
           assignedAccounts: proposals.length,
           balanceScore: 0.85,
-          avgARRPerRep: proposals.reduce((sum, p) => sum + (p.account.calculated_arr || p.account.arr), 0) / repsForEngine.length
+          avgARRPerRep: proposals.reduce((sum, p) => sum + (p.account.hierarchy_bookings_arr_converted || p.account.calculated_arr || p.account.arr || 0), 0) / repsForEngine.length
         }
       } as AssignmentResult;
       
@@ -767,30 +780,45 @@ export const useAssignmentEngine = (buildId?: string) => {
       const proposals = assignmentResult.proposals;
       const repARRMap = new Map<string, number>();
       
-      // Calculate ARR per rep
+      // Check for orphaned proposals (owner_ids not in sales_reps)
+      const validRepIds = new Set(owners.map(o => o.rep_id));
+      const orphanedProposals = proposals.filter(p => p.proposedOwnerId && !validRepIds.has(p.proposedOwnerId));
+      if (orphanedProposals.length > 0) {
+        console.warn(`[Imbalance Check] ${orphanedProposals.length} proposals have owner_ids not in sales_reps:`, 
+          orphanedProposals.slice(0, 5).map(p => ({ accountId: p.accountId, proposedOwnerId: p.proposedOwnerId }))
+        );
+      }
+      
+      // Calculate ARR per rep (only for valid reps to avoid "Unknown" in warning)
       proposals.forEach(p => {
+        // Skip orphaned proposals from ARR calculation to avoid "Unknown" rep warning
+        if (!validRepIds.has(p.proposedOwnerId)) return;
+        
         const current = repARRMap.get(p.proposedOwnerId) || 0;
         const accountARR = accounts.find(a => a.sfdc_account_id === p.accountId);
-        const arr = accountARR?.calculated_arr || accountARR?.arr || 0;
+        // Use hierarchy_bookings_arr_converted as primary ARR source (matches simplifiedAssignmentEngine)
+        const arr = accountARR?.hierarchy_bookings_arr_converted || accountARR?.calculated_arr || accountARR?.arr || 0;
         repARRMap.set(p.proposedOwnerId, current + arr);
       });
       
       const arrValues = Array.from(repARRMap.values());
-      const totalARR = arrValues.reduce((sum, arr) => sum + arr, 0);
-      const avgARR = totalARR / arrValues.length;
-      const maxARR = Math.max(...arrValues);
-      const maxRepEntry = Array.from(repARRMap.entries()).find(([_, arr]) => arr === maxARR);
-      const maxRepName = owners.find(o => o.rep_id === maxRepEntry?.[0])?.name || 'Unknown';
-      
-      // Check if any rep is >30% over target - show warning toast but continue applying
-      if (maxARR / avgARR > 1.3) {
-        const overloadPercent = Math.round((maxARR / avgARR - 1) * 100);
-        toast({
-          title: "⚠️ Imbalanced Assignment",
-          description: `${maxRepName} is ${overloadPercent}% over target ARR. Consider adjusting thresholds after applying.`,
-          variant: "default",
-        });
-        // Continue applying - no blocking dialog
+      if (arrValues.length > 0) {
+        const totalARR = arrValues.reduce((sum, arr) => sum + arr, 0);
+        const avgARR = totalARR / arrValues.length;
+        const maxARR = Math.max(...arrValues);
+        const maxRepEntry = Array.from(repARRMap.entries()).find(([_, arr]) => arr === maxARR);
+        const maxRepName = owners.find(o => o.rep_id === maxRepEntry?.[0])?.name || 'Unknown';
+        
+        // Check if any rep is >30% over target - show warning toast but continue applying
+        if (maxARR / avgARR > 1.3) {
+          const overloadPercent = Math.round((maxARR / avgARR - 1) * 100);
+          toast({
+            title: "⚠️ Imbalanced Assignment",
+            description: `${maxRepName} is ${overloadPercent}% over target ARR. Consider adjusting thresholds after applying.`,
+            variant: "default",
+          });
+          // Continue applying - no blocking dialog
+        }
       }
     }
 
@@ -978,6 +1006,142 @@ export const useAssignmentEngine = (buildId?: string) => {
       totalAccounts: assignmentProgress.totalAccounts,
       error: assignmentProgress.error
     };
+  };
+
+  // Handle Pure Optimization LP Engine
+  const handlePureOptimization = async (
+    buildId: string,
+    accountType: 'customers' | 'prospects' | 'all',
+    filteredAccounts: Account[]
+  ): Promise<AssignmentResult> => {
+    console.log(`[PureOptimization] Starting LP optimization for ${accountType}...`);
+    
+    // Map accountType to LP engine format
+    const lpAccountType = accountType === 'customers' ? 'customer' : 'prospect';
+    
+    // Progress callback to update UI
+    const onLPProgress = (progress: LPProgress) => {
+      setAssignmentProgress({
+        stage: progress.stage === 'solving' ? 'analyzing' : 
+               progress.stage === 'postprocessing' ? 'finalizing' : 
+               progress.stage as any,
+        status: progress.status,
+        progress: progress.progress,
+        rulesCompleted: 0,
+        totalRules: 1, // LP is a single solve
+        accountsProcessed: progress.accountsProcessed || 0,
+        totalAccounts: progress.totalAccounts || filteredAccounts.length,
+        assignmentsMade: 0,
+        conflicts: 0
+      });
+    };
+    
+    let allProposals: LPSolveResult['proposals'] = [];
+    let allWarnings: string[] = [];
+    let combinedMetrics: LPSolveResult['metrics'] | null = null;
+    
+    if (accountType === 'all') {
+      // Run both customer and prospect solves
+      console.log(`[PureOptimization] Running customer solve...`);
+      const customerResult = await runPureOptimization(buildId, 'customer', onLPProgress);
+      
+      if (!customerResult.success && customerResult.error) {
+        throw new Error(`Customer optimization failed: ${customerResult.error}`);
+      }
+      
+      allProposals.push(...customerResult.proposals);
+      allWarnings.push(...customerResult.warnings);
+      combinedMetrics = customerResult.metrics;
+      
+      console.log(`[PureOptimization] Running prospect solve...`);
+      const prospectResult = await runPureOptimization(buildId, 'prospect', onLPProgress);
+      
+      if (!prospectResult.success && prospectResult.error) {
+        throw new Error(`Prospect optimization failed: ${prospectResult.error}`);
+      }
+      
+      allProposals.push(...prospectResult.proposals);
+      allWarnings.push(...prospectResult.warnings);
+      
+      console.log(`[PureOptimization] Combined: ${allProposals.length} proposals`);
+    } else {
+      // Single type
+      const result = await runPureOptimization(buildId, lpAccountType, onLPProgress);
+      
+      if (!result.success && result.error) {
+        throw new Error(`LP optimization failed: ${result.error}`);
+      }
+      
+      allProposals = result.proposals;
+      allWarnings = result.warnings;
+      combinedMetrics = result.metrics;
+    }
+    
+    // Transform LP proposals to AssignmentResult format
+    const originalOwners = new Map(filteredAccounts.map(a => [a.sfdc_account_id, a.owner_id]));
+    
+    const result: AssignmentResult = {
+      totalAccounts: filteredAccounts.length,
+      assignedAccounts: allProposals.length,
+      unassignedAccounts: filteredAccounts.length - allProposals.length,
+      proposals: allProposals.map(p => ({
+        accountId: p.accountId,
+        accountName: p.accountName,
+        currentOwnerId: originalOwners.get(p.accountId) || undefined,
+        currentOwnerName: undefined, // Not tracked in LP proposals
+        proposedOwnerId: p.repId,
+        proposedOwnerName: p.repName,
+        proposedOwnerRegion: p.repRegion || undefined,
+        assignmentReason: p.rationale,
+        ruleApplied: p.lockResult?.lockType || 'LP Optimization',
+        conflictRisk: p.totalScore < 0.3 ? 'MEDIUM' : 'LOW'
+      })),
+      conflicts: allProposals
+        .filter(p => p.totalScore < 0.3 || allWarnings.length > 0)
+        .map(p => ({
+          accountId: p.accountId,
+          accountName: p.accountName,
+          currentOwnerId: originalOwners.get(p.accountId) || undefined,
+          currentOwnerName: undefined,
+          proposedOwnerId: p.repId,
+          proposedOwnerName: p.repName,
+          proposedOwnerRegion: p.repRegion || undefined,
+          assignmentReason: p.rationale,
+          ruleApplied: 'LP Optimization',
+          conflictRisk: 'MEDIUM' as const
+        })),
+      statistics: {
+        totalAccounts: filteredAccounts.length,
+        assignedAccounts: allProposals.length,
+        balanceScore: combinedMetrics ? 1 - (combinedMetrics.arr_variance_percent / 100) : 0.85,
+        avgARRPerRep: combinedMetrics ? 
+          allProposals.reduce((sum, p) => {
+            const account = filteredAccounts.find(a => a.sfdc_account_id === p.accountId);
+            return sum + (account?.hierarchy_bookings_arr_converted || account?.arr || 0);
+          }, 0) / (combinedMetrics.total_reps || 1) : 0
+      }
+    };
+    
+    // Show LP-specific toast
+    toast({
+      title: "LP Optimization Complete",
+      description: `Generated ${allProposals.length} assignments (${combinedMetrics?.continuity_rate.toFixed(0)}% continuity, ${combinedMetrics?.arr_variance_percent.toFixed(1)}% variance)`,
+    });
+    
+    // Show warnings if any
+    if (allWarnings.length > 0) {
+      console.warn(`[PureOptimization] Warnings:`, allWarnings);
+      toast({
+        title: "Optimization Warnings",
+        description: allWarnings.slice(0, 2).join('; '),
+        variant: "default",
+      });
+    }
+    
+    setAssignmentResult(result);
+    setAssignmentProgress(null);
+    
+    return result;
   };
 
   // Handle imbalance warning confirmation - proceed with execution

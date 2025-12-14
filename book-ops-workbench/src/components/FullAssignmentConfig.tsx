@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { useQueryClient } from '@tanstack/react-query';
 import { 
   mapTerritoriesWithGemini, 
   NOT_APPLICABLE, 
@@ -27,6 +28,7 @@ import {
 import { detectAssignmentMode, getModeLabel } from '@/services/modeDetectionService';
 import { PriorityWaterfallConfig } from './PriorityWaterfallConfig';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { ModelSelector } from '@/components/optimization/ModelSelector';
 
 interface FullAssignmentConfigProps {
   buildId: string;
@@ -35,19 +37,28 @@ interface FullAssignmentConfigProps {
 }
 
 interface ConfigState {
+  // Customer ARR
   customer_target_arr: number;
+  customer_min_arr: number;
   customer_max_arr: number;
-  prospect_target_arr: number;
-  prospect_max_arr: number;
   capacity_variance_percent: number;
+  // Customer ATR
+  customer_target_atr: number;
+  customer_min_atr: number;
+  customer_max_atr: number;
+  atr_variance: number;
+  // Prospect Pipeline
+  prospect_target_arr: number;  // Using arr naming for DB compatibility
+  prospect_min_arr: number;
+  prospect_max_arr: number;
   prospect_variance_percent: number;
+  // Shared
   territory_mappings: Record<string, string>;
-  // Balance limits (using actual DB column names)
   max_cre_per_rep: number;
-  atr_max: number;
-  max_tier1_per_rep: number;
-  max_tier2_per_rep: number;
-  renewal_concentration_max: number;
+  // Geographic scoring weight (0-1)
+  geo_weight: number;
+  // Optimization model
+  optimization_model: 'waterfall' | 'relaxed_optimization';
   // Priority configuration
   assignment_mode: AssignmentMode;
   priority_config: PriorityConfig[];
@@ -61,22 +72,30 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
   onConfigurationComplete 
 }) => {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   
   const [config, setConfig] = useState<ConfigState>({
+    // Customer ARR
     customer_target_arr: 2000000,
+    customer_min_arr: 1800000,  // target * (1 - 10%)
     customer_max_arr: 3000000,
-    prospect_target_arr: 2000000,
-    prospect_max_arr: 3000000,
     capacity_variance_percent: 10,
-    prospect_variance_percent: 10,
+    // Customer ATR
+    customer_target_atr: 500000,
+    customer_min_atr: 425000,   // target * (1 - 15%)
+    customer_max_atr: 750000,
+    atr_variance: 15,
+    // Prospect Pipeline
+    prospect_target_arr: 2000000,
+    prospect_min_arr: 1700000,  // target * (1 - 15%)
+    prospect_max_arr: 3000000,
+    prospect_variance_percent: 15,
+    // Shared
     territory_mappings: {},
-    // Balance limits defaults
     max_cre_per_rep: 3,
-    atr_max: 150000,
-    max_tier1_per_rep: 5,
-    max_tier2_per_rep: 8,
-    renewal_concentration_max: 25,
-    // Priority configuration defaults
+    geo_weight: 0.3,  // Default: 30% weight for geographic scoring
+    optimization_model: 'waterfall',  // Default: waterfall optimization
+    // Priority configuration
     assignment_mode: 'ENT',
     priority_config: getDefaultPriorityConfig('ENT'),
     rs_arr_threshold: 25000,
@@ -126,20 +145,36 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
           const savedMode = (data.assignment_mode as AssignmentMode) || 'ENT';
           const savedPriorityConfig = (data.priority_config as PriorityConfig[]) || [];
           
+          // Calculate default mins from target and variance
+          // Note: DB uses atr_target/atr_min/atr_max, frontend uses customer_target_atr etc.
+          const arrVariance = data.capacity_variance_percent || 10;
+          const atrVariance = data.atr_variance || 15;
+          const pipelineVariance = data.prospect_variance_percent || 15;
+          const targetArr = data.customer_target_arr || 2000000;
+          const targetAtr = data.atr_target || 500000;  // DB column is atr_target
+          const targetPipeline = data.prospect_target_arr || 2000000;
+          
           setConfig({
-            customer_target_arr: data.customer_target_arr || 2000000,
+            // Customer ARR
+            customer_target_arr: targetArr,
+            customer_min_arr: data.customer_min_arr || Math.round(targetArr * (1 - arrVariance / 100)),
             customer_max_arr: data.customer_max_arr || 3000000,
-            prospect_target_arr: data.prospect_target_arr || 2000000,
+            capacity_variance_percent: arrVariance,
+            // Customer ATR - map from DB columns (atr_target, atr_min, atr_max)
+            customer_target_atr: targetAtr,
+            customer_min_atr: data.atr_min || Math.round(targetAtr * (1 - atrVariance / 100)),
+            customer_max_atr: data.atr_max || 750000,
+            atr_variance: atrVariance,
+            // Prospect Pipeline
+            prospect_target_arr: targetPipeline,
+            prospect_min_arr: data.prospect_min_arr || Math.round(targetPipeline * (1 - pipelineVariance / 100)),
             prospect_max_arr: data.prospect_max_arr || 3000000,
-            capacity_variance_percent: data.capacity_variance_percent || 10,
-            prospect_variance_percent: data.prospect_variance_percent || 10,
+            prospect_variance_percent: pipelineVariance,
+            // Shared
             territory_mappings: (data.territory_mappings as Record<string, string>) || {},
-            // Balance limits
             max_cre_per_rep: data.max_cre_per_rep || 3,
-            atr_max: data.atr_max || 150000,
-            max_tier1_per_rep: data.max_tier1_per_rep || 5,
-            max_tier2_per_rep: data.max_tier2_per_rep || 8,
-            renewal_concentration_max: data.renewal_concentration_max || 25,
+            geo_weight: data.geo_weight ?? 0.3,  // Default 30% if not set
+            optimization_model: ((data as any).optimization_model as 'waterfall' | 'relaxed_optimization') || 'waterfall',
             // Priority configuration
             assignment_mode: savedMode,
             priority_config: savedPriorityConfig.length > 0 
@@ -270,10 +305,10 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
           .eq('build_id', buildId)
           .eq('is_active', true)
           .eq('include_in_assignments', true),
-        // Get account data for balance limits calculation
+        // Get account data for balance limits calculation (including ARR for max account check)
         supabase
           .from('accounts')
-          .select('cre_count, calculated_atr, expansion_tier, renewal_quarter')
+          .select('cre_count, calculated_atr, expansion_tier, renewal_quarter, arr')
           .eq('build_id', buildId)
           .eq('is_parent', true)
           .eq('is_customer', true)
@@ -309,10 +344,15 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       let totalTier1 = 0;
       let totalTier2 = 0;
       let accountATR = 0;
+      let maxAccountARR = 0; // Track largest individual account for floor calculation
       
       accounts.forEach(account => {
         totalCRE += account.cre_count || 0;
         accountATR += account.calculated_atr || 0;
+        const accountArr = Number(account.arr) || 0;
+        if (accountArr > maxAccountARR) {
+          maxAccountARR = accountArr;
+        }
         const tier = account.expansion_tier?.toLowerCase();
         if (tier === 'tier 1' || tier === 'tier1') totalTier1++;
         if (tier === 'tier 2' || tier === 'tier2') totalTier2++;
@@ -324,11 +364,15 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       
       console.log('[CalculateTargets] Customer ARR:', totalCustomerARR, 'Prospect Pipeline:', totalProspectPipeline, 'Reps:', normalRepCount);
       console.log('[CalculateTargets] CRE:', totalCRE, 'ATR (from opps):', totalATR, 'Tier1:', totalTier1, 'Tier2:', totalTier2);
+      console.log('[CalculateTargets] Max individual account ARR:', maxAccountARR);
       
       // Calculate recommended ARR targets
-      const recommendedCustomerTarget = normalRepCount > 0 && totalCustomerARR > 0 
+      // IMPORTANT: Target must be at least as large as the biggest account so every account can be assigned
+      const calculatedTarget = normalRepCount > 0 && totalCustomerARR > 0 
         ? Math.round(totalCustomerARR / normalRepCount) 
         : 2000000;
+      // Ensure target is at least as large as the largest individual account
+      const recommendedCustomerTarget = Math.max(calculatedTarget, maxAccountARR);
       const recommendedCustomerMax = Math.round(recommendedCustomerTarget * 1.5);
       
       const recommendedProspectTarget = normalRepCount > 0 && totalProspectPipeline > 0
@@ -504,10 +548,36 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         .eq('account_scope', 'all')
         .maybeSingle();
       
+      // Map frontend field names to database column names
       const configData = {
         build_id: buildId,
         account_scope: 'all',
-        ...config,
+        // Customer ARR - these match DB columns
+        customer_target_arr: config.customer_target_arr,
+        customer_min_arr: config.customer_min_arr,
+        customer_max_arr: config.customer_max_arr,
+        capacity_variance_percent: config.capacity_variance_percent,
+        // Customer ATR - map to DB columns (atr_target, atr_min, atr_max)
+        atr_target: config.customer_target_atr,
+        atr_min: config.customer_min_atr,
+        atr_max: config.customer_max_atr,
+        atr_variance: config.atr_variance,
+        // Prospect Pipeline - these match DB columns
+        prospect_target_arr: config.prospect_target_arr,
+        prospect_min_arr: config.prospect_min_arr,
+        prospect_max_arr: config.prospect_max_arr,
+        prospect_variance_percent: config.prospect_variance_percent,
+        // Shared
+        territory_mappings: config.territory_mappings,
+        max_cre_per_rep: config.max_cre_per_rep,
+        geo_weight: config.geo_weight,
+        optimization_model: config.optimization_model,
+        // Priority configuration
+        assignment_mode: config.assignment_mode,
+        priority_config: config.priority_config,
+        rs_arr_threshold: config.rs_arr_threshold,
+        is_custom_priority: config.is_custom_priority,
+        // Metadata
         last_calculated_at: lastCalculatedAt,
         updated_at: new Date().toISOString()
       };
@@ -541,6 +611,9 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         setShowSuccess(true);
         setIsDirty(false);
         
+        // Invalidate assignment config queries so other components (like WaterfallLogicExplainer) update
+        queryClient.invalidateQueries({ queryKey: ['assignment-config-full', buildId] });
+        
         onConfigurationComplete?.();
         
         setTimeout(() => {
@@ -571,6 +644,17 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
     <div className="flex flex-col h-full max-h-[80vh]">
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto space-y-6 pr-2">
+      {/* Optimization Model Selector */}
+      <ModelSelector
+        value={config.optimization_model}
+        onChange={(value) => {
+          setConfig(prev => ({ ...prev, optimization_model: value }));
+          setIsDirty(true);
+          setShowSuccess(false);
+        }}
+        disabled={isSaving}
+      />
+      
       {/* Quick Actions Bar - Calculate Thresholds at top */}
       <Card className="border-primary/30 bg-gradient-to-r from-primary/5 to-primary/10">
         <CardContent className="py-4">
@@ -731,45 +815,78 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             </p>
           </div>
 
-          <div className="space-y-2">
-            {(() => {
-              // Calculate the minimum allowed Maximum ARR (must be >= preferred max from variance band)
-              const preferredMax = Math.round(config.customer_target_arr * (1 + config.capacity_variance_percent / 100));
-              const minMaxARR = Math.max(preferredMax, 1000000); // At least the preferred max or $1M
-              
-              // Auto-adjust if current max is below the minimum
-              if (config.customer_max_arr < minMaxARR) {
-                // Use setTimeout to avoid state update during render
-                setTimeout(() => handleChange('customer_max_arr', minMaxARR), 0);
-              }
-              
-              return (
-                <>
-                  <Label className="flex items-center justify-between">
-                    <span className="flex items-center gap-2">
-                      Maximum ARR per Rep
-                      <Tooltip>
-                        <TooltipTrigger>
-                          <HelpCircle className="h-4 w-4 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-xs">
-                          <p>Hard cap that reps cannot exceed. Must be at least {formatCurrency(preferredMax)} (the preferred max from your variance band).</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </span>
-                    <span className="text-muted-foreground font-normal">
-                      {formatCurrency(config.customer_max_arr)}
-                    </span>
-                  </Label>
-                  <div className="flex items-center gap-4">
-                    <Slider
-                      value={[Math.max(config.customer_max_arr, minMaxARR)]}
-                      onValueChange={([value]) => handleChange('customer_max_arr', value)}
-                      min={minMaxARR}
-                      max={Math.round(customerSliderMax * 2)}
-                      step={100000}
-                      className="flex-1"
+          {/* Min/Max ARR controls */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* Minimum ARR */}
+            <div className="space-y-2">
+              {(() => {
+                const preferredMin = Math.round(config.customer_target_arr * (1 - config.capacity_variance_percent / 100));
+                const maxMinARR = preferredMin; // Can't be higher than preferred min
+                
+                if (config.customer_min_arr > maxMinARR) {
+                  setTimeout(() => handleChange('customer_min_arr', maxMinARR), 0);
+                }
+                
+                return (
+                  <>
+                    <Label className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-1">
+                        Minimum ARR
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            <p>Hard floor for rep ARR. Must be ≤ {formatCurrency(preferredMin)} (preferred min from variance).</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="text-muted-foreground font-normal text-xs">
+                        {formatCurrency(config.customer_min_arr)}
+                      </span>
+                    </Label>
+                    <Input
+                      type="text"
+                      value={formatNumber(config.customer_min_arr)}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value.replace(/,/g, '')) || 0;
+                        handleChange('customer_min_arr', Math.min(value, maxMinARR));
+                      }}
+                      className="h-9"
                     />
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Maximum ARR */}
+            <div className="space-y-2">
+              {(() => {
+                const preferredMax = Math.round(config.customer_target_arr * (1 + config.capacity_variance_percent / 100));
+                const minMaxARR = preferredMax; // Can't be lower than preferred max
+                
+                if (config.customer_max_arr < minMaxARR) {
+                  setTimeout(() => handleChange('customer_max_arr', minMaxARR), 0);
+                }
+                
+                return (
+                  <>
+                    <Label className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-1">
+                        Maximum ARR
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            <p>Hard cap for rep ARR. Must be ≥ {formatCurrency(preferredMax)} (preferred max from variance).</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="text-muted-foreground font-normal text-xs">
+                        {formatCurrency(config.customer_max_arr)}
+                      </span>
+                    </Label>
                     <Input
                       type="text"
                       value={formatNumber(config.customer_max_arr)}
@@ -777,15 +894,181 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
                         const value = parseInt(e.target.value.replace(/,/g, '')) || minMaxARR;
                         handleChange('customer_max_arr', Math.max(value, minMaxARR));
                       }}
-                      className="w-36"
+                      className="h-9"
                     />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Must be ≥ {formatCurrency(preferredMax)} (preferred max from variance band)
-                  </p>
-                </>
-              );
-            })()}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Customer ATR Targets */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Customer ATR Targets</CardTitle>
+              <CardDescription>Available to Renew (ATR) goals - revenue coming up for renewal</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        
+        <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label className="flex items-center justify-between">
+              Target ATR per Rep
+              <span className="text-muted-foreground font-normal">
+                {formatCurrency(config.customer_target_atr)}
+              </span>
+            </Label>
+            <div className="flex items-center gap-4">
+              <Slider
+                value={[config.customer_target_atr]}
+                onValueChange={([value]) => handleChange('customer_target_atr', value)}
+                min={0}
+                max={2000000}
+                step={50000}
+                className="flex-1"
+              />
+              <Input
+                type="text"
+                value={formatNumber(config.customer_target_atr)}
+                onChange={(e) => handleChange('customer_target_atr', parseInt(e.target.value.replace(/,/g, '')) || 0)}
+                className="w-36"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                ATR Variance %
+                <Tooltip>
+                  <TooltipTrigger>
+                    <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">
+                    <p className="font-medium">How evenly should ATR be distributed?</p>
+                    <p className="mt-2">Controls how closely reps should be to the target ATR.</p>
+                    <p className="mt-2">• <strong>Lower %</strong> = Tighter ATR balance across reps</p>
+                    <p className="mt-1">• <strong>Higher %</strong> = More variance allowed in ATR distribution</p>
+                  </TooltipContent>
+                </Tooltip>
+              </span>
+              <span className="text-muted-foreground font-normal">
+                {config.atr_variance}%
+              </span>
+            </Label>
+            <div className="flex items-center gap-4">
+              <Slider
+                value={[config.atr_variance]}
+                onValueChange={([value]) => handleChange('atr_variance', value)}
+                min={5}
+                max={30}
+                step={1}
+                className="flex-1"
+              />
+              <Input
+                type="number"
+                value={config.atr_variance}
+                onChange={(e) => handleChange('atr_variance', parseInt(e.target.value) || 15)}
+                className="w-20"
+                min={5}
+                max={30}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Band: {formatCurrency(config.customer_target_atr * (1 - config.atr_variance / 100))} – {formatCurrency(config.customer_target_atr * (1 + config.atr_variance / 100))}
+            </p>
+          </div>
+
+          {/* Min/Max ATR controls */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* Minimum ATR */}
+            <div className="space-y-2">
+              {(() => {
+                const preferredMin = Math.round(config.customer_target_atr * (1 - config.atr_variance / 100));
+                const maxMinATR = preferredMin;
+                
+                if (config.customer_min_atr > maxMinATR) {
+                  setTimeout(() => handleChange('customer_min_atr', maxMinATR), 0);
+                }
+                
+                return (
+                  <>
+                    <Label className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-1">
+                        Minimum ATR
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            <p>Hard floor for rep ATR. Must be ≤ {formatCurrency(preferredMin)}.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="text-muted-foreground font-normal text-xs">
+                        {formatCurrency(config.customer_min_atr)}
+                      </span>
+                    </Label>
+                    <Input
+                      type="text"
+                      value={formatNumber(config.customer_min_atr)}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value.replace(/,/g, '')) || 0;
+                        handleChange('customer_min_atr', Math.min(value, maxMinATR));
+                      }}
+                      className="h-9"
+                    />
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Maximum ATR */}
+            <div className="space-y-2">
+              {(() => {
+                const preferredMax = Math.round(config.customer_target_atr * (1 + config.atr_variance / 100));
+                const minMaxATR = preferredMax;
+                
+                if (config.customer_max_atr < minMaxATR) {
+                  setTimeout(() => handleChange('customer_max_atr', minMaxATR), 0);
+                }
+                
+                return (
+                  <>
+                    <Label className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-1">
+                        Maximum ATR
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            <p>Hard cap for rep ATR. Must be ≥ {formatCurrency(preferredMax)}.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="text-muted-foreground font-normal text-xs">
+                        {formatCurrency(config.customer_max_atr)}
+                      </span>
+                    </Label>
+                    <Input
+                      type="text"
+                      value={formatNumber(config.customer_max_atr)}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value.replace(/,/g, '')) || minMaxATR;
+                        handleChange('customer_max_atr', Math.max(value, minMaxATR));
+                      }}
+                      className="h-9"
+                    />
+                  </>
+                );
+              })()}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -876,44 +1159,78 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             </p>
           </div>
 
-          <div className="space-y-2">
-            {(() => {
-              // Calculate the minimum allowed Maximum Pipeline (must be >= preferred max from variance band)
-              const preferredMax = Math.round(config.prospect_target_arr * (1 + config.prospect_variance_percent / 100));
-              const minMaxPipeline = Math.max(preferredMax, 0);
-              
-              // Auto-adjust if current max is below the minimum
-              if (config.prospect_max_arr < minMaxPipeline && config.prospect_target_arr > 0) {
-                setTimeout(() => handleChange('prospect_max_arr', minMaxPipeline), 0);
-              }
-              
-              return (
-                <>
-                  <Label className="flex items-center justify-between">
-                    <span className="flex items-center gap-2">
-                      Maximum Pipeline per Rep
-                      <Tooltip>
-                        <TooltipTrigger>
-                          <HelpCircle className="h-4 w-4 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-xs">
-                          <p>Hard cap that reps cannot exceed. Must be at least ${formatNumber(preferredMax)} (the preferred max from your variance band).</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </span>
-                    <span className="text-muted-foreground font-normal">
-                      ${formatNumber(config.prospect_max_arr)}
-                    </span>
-                  </Label>
-                  <div className="flex items-center gap-4">
-                    <Slider
-                      value={[Math.max(config.prospect_max_arr, minMaxPipeline)]}
-                      onValueChange={([value]) => handleChange('prospect_max_arr', value)}
-                      min={minMaxPipeline}
-                      max={Math.round(prospectSliderMax * 2)}
-                      step={10000}
-                      className="flex-1"
+          {/* Min/Max Pipeline controls */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* Minimum Pipeline */}
+            <div className="space-y-2">
+              {(() => {
+                const preferredMin = Math.round(config.prospect_target_arr * (1 - config.prospect_variance_percent / 100));
+                const maxMinPipeline = preferredMin;
+                
+                if (config.prospect_min_arr > maxMinPipeline && config.prospect_target_arr > 0) {
+                  setTimeout(() => handleChange('prospect_min_arr', maxMinPipeline), 0);
+                }
+                
+                return (
+                  <>
+                    <Label className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-1">
+                        Minimum Pipeline
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            <p>Hard floor for rep pipeline. Must be ≤ ${formatNumber(preferredMin)}.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="text-muted-foreground font-normal text-xs">
+                        ${formatNumber(config.prospect_min_arr)}
+                      </span>
+                    </Label>
+                    <Input
+                      type="text"
+                      value={formatNumber(config.prospect_min_arr)}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value.replace(/,/g, '')) || 0;
+                        handleChange('prospect_min_arr', Math.min(value, maxMinPipeline));
+                      }}
+                      className="h-9"
                     />
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Maximum Pipeline */}
+            <div className="space-y-2">
+              {(() => {
+                const preferredMax = Math.round(config.prospect_target_arr * (1 + config.prospect_variance_percent / 100));
+                const minMaxPipeline = preferredMax;
+                
+                if (config.prospect_max_arr < minMaxPipeline && config.prospect_target_arr > 0) {
+                  setTimeout(() => handleChange('prospect_max_arr', minMaxPipeline), 0);
+                }
+                
+                return (
+                  <>
+                    <Label className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-1">
+                        Maximum Pipeline
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            <p>Hard cap for rep pipeline. Must be ≥ ${formatNumber(preferredMax)}.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="text-muted-foreground font-normal text-xs">
+                        ${formatNumber(config.prospect_max_arr)}
+                      </span>
+                    </Label>
                     <Input
                       type="text"
                       value={formatNumber(config.prospect_max_arr)}
@@ -921,77 +1238,65 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
                         const value = parseInt(e.target.value.replace(/,/g, '')) || minMaxPipeline;
                         handleChange('prospect_max_arr', Math.max(value, minMaxPipeline));
                       }}
-                      className="w-36"
+                      className="h-9"
                     />
-                  </div>
-                  {config.prospect_target_arr > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Must be ≥ ${formatNumber(preferredMax)} (preferred max from variance band)
-                    </p>
-                  )}
-                </>
-              );
-            })()}
+                  </>
+                );
+              })()}
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Balance Limits - Compact inline */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Calculator className="w-4 h-4" />
-            Balance Limits
+      {/* Balance Limits removed - now handled by ARR/ATR/Pipeline min/max constraints in HIGHS optimization */}
+
+      {/* Geographic Preference Weight */}
+      <Card className="border-0 shadow-none bg-transparent">
+        <CardHeader className="px-0 pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <MapPin className="w-4 h-4" />
+            Geographic Preference
           </CardTitle>
-          <CardDescription>Maximum values per rep to ensure fair distribution</CardDescription>
+          <CardDescription className="text-xs">
+            How strongly should assignments prefer exact geography matches?
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            <div className="space-y-1.5">
-              <Label className="text-sm">Max CRE per Rep</Label>
-              <Input
-                type="number"
-                value={config.max_cre_per_rep}
-                onChange={(e) => handleChange('max_cre_per_rep', parseInt(e.target.value) || 0)}
-                className="h-9"
-              />
+        <CardContent className="px-0 pb-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="flex items-center gap-2 text-sm">
+                Geography Weight
+                <Tooltip>
+                  <TooltipTrigger>
+                    <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">
+                    <p className="font-medium mb-1">Controls geographic match preference</p>
+                    <p className="text-xs">• <strong>Low (0-30%)</strong>: Prioritize balanced books over geography</p>
+                    <p className="text-xs">• <strong>Medium (30-60%)</strong>: Balance geography and book size</p>
+                    <p className="text-xs">• <strong>High (60-100%)</strong>: Strongly prefer exact geo matches</p>
+                    <p className="text-xs mt-2 text-muted-foreground">
+                      Note: Accounts still cascade through priority levels. This affects ranking within each level.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </Label>
+              <span className="text-sm text-muted-foreground">
+                {Math.round(config.geo_weight * 100)}%
+              </span>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-sm">Max ATR per Rep ($)</Label>
-              <Input
-                type="text"
-                value={formatNumber(config.atr_max)}
-                onChange={(e) => handleChange('atr_max', parseInt(e.target.value.replace(/,/g, '')) || 0)}
-                className="h-9"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-sm">Max Tier 1 Accounts</Label>
-              <Input
-                type="number"
-                value={config.max_tier1_per_rep}
-                onChange={(e) => handleChange('max_tier1_per_rep', parseInt(e.target.value) || 0)}
-                className="h-9"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-sm">Max Tier 2 Accounts</Label>
-              <Input
-                type="number"
-                value={config.max_tier2_per_rep}
-                onChange={(e) => handleChange('max_tier2_per_rep', parseInt(e.target.value) || 0)}
-                className="h-9"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-sm">Max Renewals/Qtr (%)</Label>
-              <Input
-                type="number"
-                value={config.renewal_concentration_max}
-                onChange={(e) => handleChange('renewal_concentration_max', parseInt(e.target.value) || 0)}
-                className="h-9"
+            <div className="flex items-center gap-4">
+              <Slider
+                value={[config.geo_weight * 100]}
+                onValueChange={([value]) => handleChange('geo_weight', value / 100)}
+                min={0}
                 max={100}
+                step={10}
+                className="flex-1"
               />
+              <div className="w-20 text-xs text-muted-foreground text-right">
+                {config.geo_weight < 0.3 ? 'Balance' : config.geo_weight < 0.6 ? 'Mixed' : 'Geo-first'}
+              </div>
             </div>
           </div>
         </CardContent>

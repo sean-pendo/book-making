@@ -3,14 +3,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Info, Settings, CheckCircle, AlertTriangle, TrendingDown, Users, MapPin, Zap, Shield, Lock, Scale, Building2, Clock, Briefcase, RefreshCw } from 'lucide-react';
-import { PriorityConfig, getPriorityById, PriorityDefinition, SubCondition } from '@/config/priorityRegistry';
+import { Info, Settings, CheckCircle, AlertTriangle, Users, MapPin, Zap, Shield, Lock, Scale, Building2, Clock, RefreshCw, Briefcase, Target } from 'lucide-react';
+import { PriorityConfig, getPriorityById, PriorityDefinition, SubCondition, getAvailableSubConditions } from '@/config/priorityRegistry';
+
+interface MappedFields {
+  accounts: Set<string>;
+  sales_reps: Set<string>;
+  opportunities: Set<string>;
+}
 
 interface WaterfallLogicExplainerProps {
   buildId: string;
   priorityConfig: PriorityConfig[];
   assignmentMode: string;
   onConfigureClick?: () => void;
+  mappedFields?: MappedFields;
 }
 
 // Color schemes for priority cards
@@ -30,12 +37,14 @@ function getPriorityIcon(priorityId: string, className: string) {
   switch (priorityId) {
     case 'manual_holdover':
       return <Lock className={className} />;
+    case 'sales_tools_bucket':
+      return <Briefcase className={className} />;
     case 'stability_accounts':
       return <Shield className={className} />;
+    case 'team_alignment':
+      return <Target className={className} />;
     case 'geo_and_continuity':
       return <CheckCircle className={className} />;
-    case 'rs_routing':
-      return <Users className={className} />;
     case 'geography':
       return <MapPin className={className} />;
     case 'continuity':
@@ -54,12 +63,8 @@ function getSubConditionIcon(subConditionId: string, className: string) {
       return <AlertTriangle className={className} />;
     case 'renewal_soon':
       return <Clock className={className} />;
-    case 'top_10_arr':
-      return <TrendingDown className={className} />;
     case 'pe_firm':
       return <Building2 className={className} />;
-    case 'expansion_opps':
-      return <Briefcase className={className} />;
     case 'recent_owner_change':
       return <RefreshCw className={className} />;
     default:
@@ -73,10 +78,19 @@ function getPriorityDetails(priorityId: string, config?: PriorityConfig): { bull
     case 'manual_holdover':
       return {
         bullets: [
-          'Accounts marked "exclude from reassignment"',
-          'Strategic accounts stay with strategic reps'
+          'Excluded accounts: locked to current owner (no movement)',
+          'Strategic accounts: stay within strategic rep pool (can rebalance between strategic reps)'
         ],
-        result: 'Protected accounts never move'
+        result: 'Holdover accounts never move, strategic accounts stay with strategic reps'
+      };
+    case 'sales_tools_bucket':
+      return {
+        bullets: [
+          'Customer accounts with ARR under $25K',
+          'Routed to Sales Tools bucket (no SLM/FLM hierarchy)',
+          'Does NOT apply to prospects'
+        ],
+        result: 'Low-value customers managed via Sales Tools system'
       };
     case 'stability_accounts':
       // Dynamic bullets based on enabled sub-conditions
@@ -84,13 +98,22 @@ function getPriorityDetails(priorityId: string, config?: PriorityConfig): { bull
       const bullets: string[] = [];
       if (enabledSubs.includes('cre_risk')) bullets.push('CRE at-risk accounts stay with current owner');
       if (enabledSubs.includes('renewal_soon')) bullets.push('Accounts with renewal in 90 days stay');
-      if (enabledSubs.includes('top_10_arr')) bullets.push('Top 10% ARR accounts (per FLM) stay');
       if (enabledSubs.includes('pe_firm')) bullets.push('PE-owned accounts stay with majority owner');
-      if (enabledSubs.includes('expansion_opps')) bullets.push('Accounts with open expansions stay');
-      if (enabledSubs.includes('recent_owner_change')) bullets.push('Recently changed accounts stay');
+      if (enabledSubs.includes('recent_owner_change')) bullets.push('Recently changed accounts (90 days) stay');
       return {
         bullets: bullets.length > 0 ? bullets : ['Configure sub-conditions to define stability criteria'],
-        result: 'Account stays if ANY enabled condition matches'
+        result: 'Account stays if ANY enabled condition matches (unless rep at capacity)'
+      };
+    case 'team_alignment':
+      const minPct = (config?.settings?.minTierMatchPct as number) ?? 80;
+      return {
+        bullets: [
+          'Matches account employee count to rep team tier',
+          'SMB: <100 | Growth: 100-499 | MM: 500-1499 | ENT: 1500+',
+          `Reps must have ≥${minPct}% accounts matching their tier`,
+          'Graduated penalties for mismatches'
+        ],
+        result: 'Account assigned to rep in appropriate team tier'
       };
     case 'geo_and_continuity':
       return {
@@ -99,14 +122,6 @@ function getPriorityDetails(priorityId: string, config?: PriorityConfig): { bull
           'Rep has capacity (hasn\'t reached capacity limit)'
         ],
         result: 'Account stays with current owner - no disruption'
-      };
-    case 'rs_routing':
-      return {
-        bullets: [
-          'Account ARR is at or below $25K threshold',
-          'Routes to FLM (First Line Manager)'
-        ],
-        result: 'Low-ARR accounts assigned to FLM'
       };
     case 'geography':
       return {
@@ -127,10 +142,10 @@ function getPriorityDetails(priorityId: string, config?: PriorityConfig): { bull
     case 'arr_balance':
       return {
         bullets: [
-          'Assigns to reps with most available capacity',
-          'Ensures balanced distribution across team'
+          'Final fallback for remaining accounts',
+          'Uses weighted multi-metric optimization'
         ],
-        result: 'Account goes to next best available rep'
+        result: 'Accounts distributed to balance ARR/ATR/Pipeline across reps'
       };
     default:
       return {
@@ -144,7 +159,8 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
   buildId, 
   priorityConfig,
   assignmentMode,
-  onConfigureClick 
+  onConfigureClick,
+  mappedFields
 }) => {
   // Get enabled priorities sorted by position
   const enabledPriorities = priorityConfig
@@ -206,31 +222,6 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Strategic Accounts - Always shown */}
-          <div className="flex gap-4 p-4 bg-purple-50 dark:bg-purple-950 rounded-lg border-2 border-purple-500 dark:border-purple-700">
-            <div className="flex-shrink-0">
-              <Badge className="bg-purple-600 text-white">Strategic Pool</Badge>
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2">
-                <Users className="w-5 h-5 text-purple-600" />
-                <h4 className="font-semibold">Strategic Accounts - Always Stay Together</h4>
-              </div>
-              <p className="text-sm text-muted-foreground mb-2">
-                Strategic accounts (currently owned by strategic reps) have special handling:
-              </p>
-              <ul className="text-sm space-y-1 ml-4 list-disc text-muted-foreground">
-                <li><strong>Always stay with strategic reps</strong> - never overflow to normal reps</li>
-                <li><strong>No capacity limits</strong> - strategic reps share the load evenly</li>
-                <li><strong>Even distribution</strong> - assigned to strategic rep with least load</li>
-              </ul>
-            </div>
-          </div>
-
-          <div className="border-t pt-6">
-            <h3 className="font-semibold mb-4 text-sm text-muted-foreground">NORMAL ACCOUNTS - PRIORITY WATERFALL</h3>
-          </div>
-
           {/* Holdover Priorities Section */}
           {holdoverPriorities.length > 0 && (
             <>
@@ -242,7 +233,14 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
                 const colors = PRIORITY_COLORS[index % PRIORITY_COLORS.length];
                 const details = getPriorityDetails(priority.config.id, priority.config);
                 const hasSubConditions = priority.definition?.subConditions && priority.definition.subConditions.length > 0;
-                const enabledSubConditions = priority.config.subConditions?.filter(sc => sc.enabled) || [];
+                
+                // Filter sub-conditions to only show those that are enabled AND have data available
+                const { available: availableSubs } = priority.definition 
+                  ? getAvailableSubConditions(priority.definition, mappedFields || { accounts: new Set(), sales_reps: new Set(), opportunities: new Set() })
+                  : { available: [] };
+                const enabledSubConditions = priority.config.subConditions?.filter(sc => 
+                  sc.enabled && availableSubs.some(avail => avail.id === sc.id)
+                ) || [];
                 
                 return (
                   <div 
@@ -306,13 +304,16 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
             <>
               <div className="flex items-center gap-2 mb-2 mt-6">
                 <Scale className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm font-medium text-muted-foreground">OPTIMIZATION PRIORITIES (HiGHS Solver Weights)</span>
+                <span className="text-sm font-medium text-muted-foreground">OPTIMIZATION PRIORITIES (Sequential Waterfall)</span>
               </div>
               {optimizationPriorities.map((priority, index) => {
                 const colorIndex = (holdoverPriorities.length + index) % PRIORITY_COLORS.length;
                 const colors = PRIORITY_COLORS[colorIndex];
                 const details = getPriorityDetails(priority.config.id, priority.config);
                 const priorityNumber = holdoverPriorities.length + index;
+                // Residual Optimization (arr_balance) gets special "RO" badge instead of numbered priority
+                const isResidualOptimization = priority.config.id === 'arr_balance';
+                const badgeLabel = isResidualOptimization ? 'RO' : `P${priorityNumber}`;
                 
                 return (
                   <div 
@@ -320,14 +321,13 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
                     className={`flex gap-4 p-4 ${colors.bg} rounded-lg border ${colors.border}`}
                   >
                     <div className="flex-shrink-0">
-                      <Badge className={`${colors.badge} text-white font-mono`}>P{priorityNumber}</Badge>
+                      <Badge className={`${colors.badge} text-white font-mono`}>{badgeLabel}</Badge>
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-2">
                         {getPriorityIcon(priority.config.id, `w-5 h-5 ${colors.icon}`)}
                         <h4 className="font-semibold">{priority.definition?.name}</h4>
-                        <Badge variant="outline" className="text-xs">Optimize</Badge>
-                        <Badge variant="secondary" className="text-xs">Weight: {priority.config.weight}</Badge>
+                        <Badge variant="outline" className="text-xs">{isResidualOptimization ? 'Final' : 'Optimize'}</Badge>
                       </div>
                       <p className="text-sm text-muted-foreground mb-2">
                         {priority.definition?.description}
@@ -346,59 +346,6 @@ export const WaterfallLogicExplainer: React.FC<WaterfallLogicExplainerProps> = (
               })}
             </>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Global Constraints */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5" />
-            Global Constraints (Always Enforced)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 bg-red-50 dark:bg-red-950 rounded-lg border border-red-200 dark:border-red-800">
-              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                <TrendingDown className="w-4 h-4 text-red-600" />
-                Capacity Hard Cap
-              </h4>
-              <p className="text-sm text-muted-foreground">
-                No rep can exceed: <strong>Maximum ARR</strong> (configured limit)
-              </p>
-            </div>
-
-            <div className="p-4 bg-purple-50 dark:bg-purple-950 rounded-lg border-2 border-purple-500 dark:border-purple-700">
-              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                <Users className="w-4 h-4 text-purple-600" />
-                Strategic Pool - Always Together
-              </h4>
-              <p className="text-sm text-muted-foreground">
-                Strategic accounts <strong>always</strong> stay with strategic reps
-              </p>
-            </div>
-
-            <div className="p-4 bg-purple-50 dark:bg-purple-950 rounded-lg border border-purple-200 dark:border-purple-800">
-              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-purple-600" />
-                Parent-Child Alignment
-              </h4>
-              <p className="text-sm text-muted-foreground">
-                Parent and child accounts keep same owner
-              </p>
-            </div>
-
-            <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
-              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-blue-600" />
-                Regional Alignment
-              </h4>
-              <p className="text-sm text-muted-foreground">
-                EMEA accounts use region field (DACH, UKI, etc.) for routing
-              </p>
-            </div>
-          </div>
         </CardContent>
       </Card>
 

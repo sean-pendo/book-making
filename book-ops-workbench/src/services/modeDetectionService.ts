@@ -24,8 +24,11 @@ interface BuildInfo {
 interface DataCharacteristics {
   hasRenewalSpecialists: boolean;
   hasPEAccounts: boolean;
+  hasTeamAlignmentData: boolean;  // employees in accounts + team tier values in reps
   renewalSpecialistCount: number;
   peAccountCount: number;
+  teamAlignmentAccountCount: number;
+  teamAlignmentRepCount: number;
 }
 
 /**
@@ -43,6 +46,16 @@ export async function detectAssignmentMode(buildId: string): Promise<ModeDetecti
     let suggestedMode: Exclude<AssignmentMode, 'CUSTOM'> = 'ENT';
     let confidence: 'high' | 'medium' | 'low' = 'medium';
 
+    // APAC: Primary signal is build region
+    if (buildInfo.region === 'APAC') {
+      suggestedMode = 'APAC';
+      reasons.push('Build region is APAC');
+      reasons.push('APAC uses same priority structure as EMEA (stability, continuity, geography, team)');
+      confidence = 'high';
+      
+      return { suggestedMode, confidence, reasons };
+    }
+
     // EMEA: Primary signal is build region
     if (buildInfo.region === 'EMEA') {
       suggestedMode = 'EMEA';
@@ -53,9 +66,13 @@ export async function detectAssignmentMode(buildId: string): Promise<ModeDetecti
       return { suggestedMode, confidence, reasons };
     }
 
-    // COMMERCIAL: RS reps exist OR PE accounts exist
-    if (dataChars.hasRenewalSpecialists || dataChars.hasPEAccounts) {
+    // COMMERCIAL: Team Alignment data exists OR RS reps exist OR PE accounts exist
+    if (dataChars.hasTeamAlignmentData || dataChars.hasRenewalSpecialists || dataChars.hasPEAccounts) {
       suggestedMode = 'COMMERCIAL';
+      
+      if (dataChars.hasTeamAlignmentData) {
+        reasons.push(`Team Alignment data found: ${dataChars.teamAlignmentAccountCount} accounts with employees, ${dataChars.teamAlignmentRepCount} reps with team tier`);
+      }
       
       if (dataChars.hasRenewalSpecialists) {
         reasons.push(`${dataChars.renewalSpecialistCount} Renewal Specialist reps found`);
@@ -65,8 +82,10 @@ export async function detectAssignmentMode(buildId: string): Promise<ModeDetecti
         reasons.push(`${dataChars.peAccountCount} PE-owned accounts found`);
       }
       
-      // High confidence if both signals present
-      if (dataChars.hasRenewalSpecialists && dataChars.hasPEAccounts) {
+      // High confidence if team alignment data present (strongest signal)
+      if (dataChars.hasTeamAlignmentData) {
+        confidence = 'high';
+      } else if (dataChars.hasRenewalSpecialists && dataChars.hasPEAccounts) {
         confidence = 'high';
       } else {
         confidence = 'medium';
@@ -118,25 +137,56 @@ async function getBuildInfo(buildId: string): Promise<BuildInfo> {
  * Get data characteristics for mode detection
  */
 async function getDataCharacteristics(buildId: string): Promise<DataCharacteristics> {
-  // Check for Renewal Specialists
-  const { count: rsCount } = await supabase
-    .from('sales_reps')
-    .select('*', { count: 'exact', head: true })
-    .eq('build_id', buildId)
-    .eq('is_renewal_specialist', true);
+  // Run all checks in parallel for performance
+  const [rsResult, peResult, employeesResult, teamResult] = await Promise.all([
+    // Check for Renewal Specialists
+    supabase
+      .from('sales_reps')
+      .select('*', { count: 'exact', head: true })
+      .eq('build_id', buildId)
+      .eq('is_renewal_specialist', true),
+    
+    // Check for PE accounts
+    supabase
+      .from('accounts')
+      .select('*', { count: 'exact', head: true })
+      .eq('build_id', buildId)
+      .not('pe_firm', 'is', null),
+    
+    // Check for accounts with employee data (for Team Alignment)
+    supabase
+      .from('accounts')
+      .select('*', { count: 'exact', head: true })
+      .eq('build_id', buildId)
+      .eq('is_parent', true)
+      .not('employees', 'is', null)
+      .gt('employees', 0),
+    
+    // Check for reps with team tier values (SMB, Growth, MM, ENT)
+    supabase
+      .from('sales_reps')
+      .select('*', { count: 'exact', head: true })
+      .eq('build_id', buildId)
+      .not('team', 'is', null)
+      .in('team', ['SMB', 'Growth', 'MM', 'ENT'])
+  ]);
 
-  // Check for PE accounts
-  const { count: peCount } = await supabase
-    .from('accounts')
-    .select('*', { count: 'exact', head: true })
-    .eq('build_id', buildId)
-    .not('pe_firm', 'is', null);
+  const rsCount = rsResult.count || 0;
+  const peCount = peResult.count || 0;
+  const employeesCount = employeesResult.count || 0;
+  const teamCount = teamResult.count || 0;
+  
+  // Team Alignment requires BOTH employees in accounts AND team tier in reps
+  const hasTeamAlignmentData = employeesCount > 0 && teamCount > 0;
 
   return {
-    hasRenewalSpecialists: (rsCount || 0) > 0,
-    hasPEAccounts: (peCount || 0) > 0,
-    renewalSpecialistCount: rsCount || 0,
-    peAccountCount: peCount || 0
+    hasRenewalSpecialists: rsCount > 0,
+    hasPEAccounts: peCount > 0,
+    hasTeamAlignmentData,
+    renewalSpecialistCount: rsCount,
+    peAccountCount: peCount,
+    teamAlignmentAccountCount: employeesCount,
+    teamAlignmentRepCount: teamCount
   };
 }
 
@@ -151,6 +201,8 @@ export function getModeLabel(mode: AssignmentMode): string {
       return 'Commercial';
     case 'EMEA':
       return 'EMEA';
+    case 'APAC':
+      return 'APAC';
     case 'CUSTOM':
       return 'Custom';
     default:
@@ -168,7 +220,9 @@ export function getModeDescription(mode: AssignmentMode): string {
     case 'COMMERCIAL':
       return 'Commercial mode with FLM routing for low-ARR accounts and PE firm protection';
     case 'EMEA':
-      return 'EMEA regional routing using region field (DACH, UKI, Nordics, etc.)';
+      return 'EMEA regional routing with stability, continuity, geography, and team alignment';
+    case 'APAC':
+      return 'APAC regional routing with stability, continuity, geography, and team alignment';
     case 'CUSTOM':
       return 'Custom priority configuration - shows all available priorities';
     default:

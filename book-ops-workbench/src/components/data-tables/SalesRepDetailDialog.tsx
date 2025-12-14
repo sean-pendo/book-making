@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { calculateSalesRepMetrics, getAccountCustomerStatus } from '@/utils/salesRepCalculations';
 import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
@@ -10,10 +11,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Search, Building2, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Search, Building2, TrendingUp, AlertTriangle, Users, ChevronDown, ChevronRight, UserMinus, UserPlus, Loader2, HelpCircle, ArrowRightLeft, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
 import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
+import { useToast } from '@/hooks/use-toast';
 
 interface SalesRepDetailDialogProps {
   open: boolean;
@@ -26,6 +31,8 @@ interface SalesRepDetailDialogProps {
     slm: string | null;
   } | null;
   buildId: string;
+  /** Callback when data changes (e.g., backfill enabled/disabled) for live sync */
+  onDataRefresh?: () => void;
 }
 
 interface AccountWithHierarchy {
@@ -59,13 +66,267 @@ interface AccountWithHierarchy {
   isParent: boolean;
 }
 
-export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: SalesRepDetailDialogProps) => {
+export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataRefresh }: SalesRepDetailDialogProps) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<FilterValues>({});
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   // Fetch prospect opportunity data (Net ARR and Close Date)
   const { getNetARR, getCloseDate, getNetARRColorClass } = useProspectOpportunities(buildId);
+
+  // Fetch accounts being gained/lost by this rep
+  const { data: accountChanges, isLoading: changesLoading } = useQuery({
+    queryKey: ['rep-account-changes', rep?.rep_id, buildId],
+    queryFn: async () => {
+      if (!rep) return { gaining: [], losing: [] };
+
+      // Accounts being GAINED: new_owner_id = rep_id AND owner_id != rep_id
+      const { data: gainingAccounts, error: gainingError } = await supabase
+        .from('accounts')
+        .select(`
+          sfdc_account_id,
+          account_name,
+          is_customer,
+          is_parent,
+          ultimate_parent_id,
+          ultimate_parent_name,
+          owner_id,
+          owner_name,
+          new_owner_id,
+          new_owner_name,
+          arr,
+          calculated_arr,
+          hierarchy_bookings_arr_converted,
+          geo,
+          sales_territory,
+          expansion_tier,
+          initial_sale_tier
+        `)
+        .eq('build_id', buildId)
+        .eq('new_owner_id', rep.rep_id)
+        .neq('owner_id', rep.rep_id);
+
+      if (gainingError) throw gainingError;
+
+      // Accounts being LOST: owner_id = rep_id AND new_owner_id IS NOT NULL AND new_owner_id != rep_id
+      const { data: losingAccounts, error: losingError } = await supabase
+        .from('accounts')
+        .select(`
+          sfdc_account_id,
+          account_name,
+          is_customer,
+          is_parent,
+          ultimate_parent_id,
+          ultimate_parent_name,
+          owner_id,
+          owner_name,
+          new_owner_id,
+          new_owner_name,
+          arr,
+          calculated_arr,
+          hierarchy_bookings_arr_converted,
+          geo,
+          sales_territory,
+          expansion_tier,
+          initial_sale_tier
+        `)
+        .eq('build_id', buildId)
+        .eq('owner_id', rep.rep_id)
+        .not('new_owner_id', 'is', null)
+        .neq('new_owner_id', rep.rep_id);
+
+      if (losingError) throw losingError;
+
+      // Calculate ARR for each account
+      const getARR = (acc: any): number => {
+        return parseFloat(acc.hierarchy_bookings_arr_converted) ||
+               parseFloat(acc.calculated_arr) ||
+               parseFloat(acc.arr) ||
+               0;
+      };
+
+      // Filter to parent accounts only for cleaner view
+      const gainingParents = (gainingAccounts || []).filter(a => 
+        !a.ultimate_parent_id || a.ultimate_parent_id.trim() === ''
+      );
+      const losingParents = (losingAccounts || []).filter(a => 
+        !a.ultimate_parent_id || a.ultimate_parent_id.trim() === ''
+      );
+
+      return {
+        gaining: gainingParents.map(a => ({
+          ...a,
+          arrValue: getARR(a),
+          isCustomer: getARR(a) > 0
+        })).sort((a, b) => b.arrValue - a.arrValue),
+        losing: losingParents.map(a => ({
+          ...a,
+          arrValue: getARR(a),
+          isCustomer: getARR(a) > 0
+        })).sort((a, b) => b.arrValue - a.arrValue),
+      };
+    },
+    enabled: open && !!rep && !!buildId,
+  });
+
+  // Fetch rep's backfill status
+  const { data: repInfo, refetch: refetchRepInfo } = useQuery({
+    queryKey: ['rep-backfill-status', rep?.rep_id, buildId],
+    queryFn: async () => {
+      if (!rep) return null;
+      const { data, error } = await supabase
+        .from('sales_reps')
+        .select('id, is_backfill_source, is_backfill_target, backfill_target_rep_id, is_placeholder, include_in_assignments, region, team, flm, slm, sub_region, team_tier')
+        .eq('build_id', buildId)
+        .eq('rep_id', rep.rep_id)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: open && !!rep && !!buildId,
+  });
+
+  // Mutation to toggle backfill status
+  const backfillMutation = useMutation({
+    mutationFn: async ({ enable }: { enable: boolean }) => {
+      if (!rep || !repInfo) throw new Error('Rep info not available');
+
+      if (enable) {
+        // === ENABLE BACKFILL ===
+        // Guard: Don't create duplicate if already a backfill source
+        if (repInfo.is_backfill_source) {
+          throw new Error('Rep is already marked as leaving');
+        }
+
+        // 1. Create backfill rep (with random suffix for uniqueness)
+        const bfRepId = `BF-${buildId.slice(0, 8)}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const bfRepName = `BF-${rep.name}`;
+
+        const { error: insertError } = await supabase.from('sales_reps').insert({
+          rep_id: bfRepId,
+          name: bfRepName,
+          build_id: buildId,
+          region: repInfo.region,
+          team: repInfo.team,
+          flm: repInfo.flm,
+          slm: repInfo.slm,
+          sub_region: repInfo.sub_region,
+          team_tier: repInfo.team_tier,
+          is_active: true,
+          include_in_assignments: true,
+          is_backfill_target: true,
+        });
+        if (insertError) throw insertError;
+
+        // 2. Update leaving rep
+        const { error: updateRepError } = await supabase.from('sales_reps').update({
+          is_backfill_source: true,
+          backfill_target_rep_id: bfRepId,
+          include_in_assignments: false,
+        }).eq('id', repInfo.id);
+        if (updateRepError) throw updateRepError;
+
+        // 3. Migrate accounts (both owner_id and new_owner_id cases)
+        // Case 1: Accounts already assigned via new_owner_id
+        const { error: migrateAccounts1Error } = await supabase.from('accounts').update({
+          new_owner_id: bfRepId,
+          new_owner_name: bfRepName,
+        }).eq('build_id', buildId).eq('new_owner_id', rep.rep_id);
+        if (migrateAccounts1Error) throw migrateAccounts1Error;
+
+        // Case 2: Accounts still on original owner (no assignment yet)
+        const { error: migrateAccounts2Error } = await supabase.from('accounts').update({
+          new_owner_id: bfRepId,
+          new_owner_name: bfRepName,
+        }).eq('build_id', buildId).eq('owner_id', rep.rep_id).is('new_owner_id', null);
+        if (migrateAccounts2Error) throw migrateAccounts2Error;
+
+        // 4. Migrate opportunities
+        const { error: migrateOpps1Error } = await supabase.from('opportunities').update({
+          new_owner_id: bfRepId,
+          new_owner_name: bfRepName,
+        }).eq('build_id', buildId).eq('new_owner_id', rep.rep_id);
+        if (migrateOpps1Error) throw migrateOpps1Error;
+
+        const { error: migrateOpps2Error } = await supabase.from('opportunities').update({
+          new_owner_id: bfRepId,
+          new_owner_name: bfRepName,
+        }).eq('build_id', buildId).eq('owner_id', rep.rep_id).is('new_owner_id', null);
+        if (migrateOpps2Error) throw migrateOpps2Error;
+
+        // 5. Audit log
+        await supabase.from('audit_log').insert({
+          action: 'BACKFILL_CREATED',
+          table_name: 'sales_reps',
+          record_id: repInfo.id,
+          build_id: buildId,
+          created_by: user?.id || 'unknown',
+          old_values: { is_backfill_source: false },
+          new_values: { is_backfill_source: true, backfill_target_rep_id: bfRepId },
+        });
+
+        return { bfRepId, bfRepName };
+      } else {
+        // === DISABLE BACKFILL (ROLLBACK) ===
+        // Restore leaving rep (but keep BF rep and accounts)
+        const { error: updateError } = await supabase.from('sales_reps').update({
+          is_backfill_source: false,
+          include_in_assignments: true,
+        }).eq('id', repInfo.id);
+        if (updateError) throw updateError;
+
+        // Audit log for rollback
+        await supabase.from('audit_log').insert({
+          action: 'BACKFILL_ROLLBACK',
+          table_name: 'sales_reps',
+          record_id: repInfo.id,
+          build_id: buildId,
+          created_by: user?.id || 'unknown',
+          old_values: { is_backfill_source: true },
+          new_values: { is_backfill_source: false },
+        });
+
+        return null;
+      }
+    },
+    onSuccess: (result, { enable }) => {
+      refetchRepInfo();
+      queryClient.invalidateQueries({ queryKey: ['sales-reps'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+      // Also invalidate balancing-related queries for live sync
+      queryClient.invalidateQueries({ queryKey: ['analytics-metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['priority-distribution'] });
+      queryClient.invalidateQueries({ queryKey: ['last-assignment-timestamp'] });
+      queryClient.invalidateQueries({ queryKey: ['enhanced-balancing'] });
+      
+      // Call parent refresh callback if provided
+      onDataRefresh?.();
+      
+      if (enable && result) {
+        toast({
+          title: 'Backfill Created',
+          description: `Created ${result.bfRepName} and migrated accounts. ${rep?.name} is now excluded from assignments.`,
+        });
+      } else {
+        toast({
+          title: 'Backfill Disabled',
+          description: `${rep?.name} is now included in assignments again. The backfill rep and migrated accounts remain unchanged.`,
+        });
+      }
+    },
+    onError: (error) => {
+      console.error('Backfill mutation error:', error);
+      toast({
+        title: 'Error',
+        description: `Failed to update backfill status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        variant: 'destructive',
+      });
+    },
+  });
 
   const filterConfigs: FilterConfig[] = [
     {
@@ -451,9 +712,18 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
         </DialogHeader>
 
         <Tabs defaultValue="overview" className="h-full">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="accounts">Account Portfolio</TabsTrigger>
+            <TabsTrigger value="changes" className="relative">
+              <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
+              Account Changes
+              {accountChanges && (accountChanges.gaining.length > 0 || accountChanges.losing.length > 0) && (
+                <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-pink-500/20 text-pink-700 dark:text-pink-300">
+                  {accountChanges.gaining.length + accountChanges.losing.length}
+                </span>
+              )}
+            </TabsTrigger>
           </TabsList>
 
           {isLoading ? (
@@ -606,6 +876,71 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                       <span className="text-muted-foreground">SLM:</span>
                       <span>{rep.slm || 'Not assigned'}</span>
                     </div>
+                  </div>
+                </div>
+
+                {/* Backfill Toggle Section */}
+                <div className="mt-6 pt-4 border-t">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <UserMinus className="h-4 w-4 text-orange-500" />
+                      <Label htmlFor="backfill-toggle" className="text-sm font-medium">
+                        Mark as Leaving (Backfill)
+                      </Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-[280px]">
+                          <p className="text-xs">
+                            <strong>When enabled:</strong> This rep will be excluded from all assignments. 
+                            A backfill rep (BF-{rep.name}) will be auto-created with the same region/team, 
+                            and all current accounts will be migrated to the backfill rep.
+                          </p>
+                          <p className="text-xs mt-2">
+                            <strong>When disabled:</strong> The rep will be included in assignments again. 
+                            The backfill rep and migrated accounts remain unchanged.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {backfillMutation.isPending && (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      )}
+                      <Switch
+                        id="backfill-toggle"
+                        checked={repInfo?.is_backfill_source || false}
+                        disabled={backfillMutation.isPending || repInfo?.is_backfill_target || repInfo?.is_placeholder}
+                        onCheckedChange={(checked) => backfillMutation.mutate({ enable: checked })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Status badges */}
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {repInfo?.is_backfill_source && (
+                      <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700">
+                        <UserMinus className="h-3 w-3 mr-1" />
+                        Leaving - Excluded from assignments
+                      </Badge>
+                    )}
+                    {repInfo?.is_backfill_target && (
+                      <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700">
+                        <UserPlus className="h-3 w-3 mr-1" />
+                        Backfill Rep
+                      </Badge>
+                    )}
+                    {repInfo?.is_placeholder && (
+                      <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600">
+                        Open Headcount
+                      </Badge>
+                    )}
+                    {repInfo?.backfill_target_rep_id && (
+                      <span className="text-xs text-muted-foreground">
+                        Backfill target: <code className="text-xs">{repInfo.backfill_target_rep_id}</code>
+                      </span>
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -907,6 +1242,208 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId }: Sales
                 </div>
               )}
             </div>
+          </TabsContent>
+
+          {/* Account Changes Tab - Gained/Lost Accounts */}
+          <TabsContent value="changes" className="space-y-4">
+            {changesLoading ? (
+              <div className="flex items-center justify-center h-48">
+                <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                <span className="text-muted-foreground">Loading account changes...</span>
+              </div>
+            ) : !accountChanges || (accountChanges.gaining.length === 0 && accountChanges.losing.length === 0) ? (
+              <div className="flex flex-col items-center justify-center h-48 text-center">
+                <ArrowRightLeft className="h-12 w-12 text-muted-foreground/30 mb-3" />
+                <p className="text-muted-foreground font-medium">No Account Changes</p>
+                <p className="text-sm text-muted-foreground/70 mt-1">
+                  This rep is keeping all their current accounts
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Accounts Gaining */}
+                <Card className="border-emerald-200 dark:border-emerald-800">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
+                      <ArrowUpRight className="h-5 w-5" />
+                      Accounts Gaining
+                      <Badge variant="outline" className="ml-auto bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700">
+                        {accountChanges?.gaining.length || 0}
+                      </Badge>
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      Accounts being transferred TO this rep
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    {accountChanges?.gaining.length === 0 ? (
+                      <p className="text-sm text-muted-foreground italic py-4 text-center">No accounts being gained</p>
+                    ) : (
+                      <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                        {accountChanges?.gaining.map((account: any) => (
+                          <div 
+                            key={account.sfdc_account_id}
+                            className="flex items-center justify-between p-3 rounded-lg bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-800/50 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-sm truncate">{account.account_name}</span>
+                                <Badge 
+                                  variant={account.isCustomer ? "default" : "outline"} 
+                                  className="text-[10px] px-1.5 py-0 h-4 flex-shrink-0"
+                                >
+                                  {account.isCustomer ? 'Customer' : 'Prospect'}
+                                </Badge>
+                              </div>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-xs text-muted-foreground">
+                                  From: <span className="font-medium text-foreground/80">{account.owner_name || 'Unknown'}</span>
+                                </span>
+                                {account.geo && (
+                                  <>
+                                    <span className="text-muted-foreground">•</span>
+                                    <span className="text-xs text-muted-foreground">{account.geo}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                            {account.arrValue > 0 && (
+                              <div className="text-right ml-3 flex-shrink-0">
+                                <span className="font-semibold text-emerald-600 dark:text-emerald-400 text-sm">
+                                  {formatCurrency(account.arrValue)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Summary */}
+                    {accountChanges && accountChanges.gaining.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-emerald-200 dark:border-emerald-800">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Total ARR Gaining:</span>
+                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                            {formatCurrency(accountChanges.gaining.reduce((sum: number, a: any) => sum + a.arrValue, 0))}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Accounts Losing */}
+                <Card className="border-red-200 dark:border-red-800">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2 text-red-700 dark:text-red-400">
+                      <ArrowDownRight className="h-5 w-5" />
+                      Accounts Losing
+                      <Badge variant="outline" className="ml-auto bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700">
+                        {accountChanges?.losing.length || 0}
+                      </Badge>
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      Accounts being transferred FROM this rep
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    {accountChanges?.losing.length === 0 ? (
+                      <p className="text-sm text-muted-foreground italic py-4 text-center">No accounts being lost</p>
+                    ) : (
+                      <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                        {accountChanges?.losing.map((account: any) => (
+                          <div 
+                            key={account.sfdc_account_id}
+                            className="flex items-center justify-between p-3 rounded-lg bg-red-50/50 dark:bg-red-900/10 border border-red-100 dark:border-red-800/50 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-sm truncate">{account.account_name}</span>
+                                <Badge 
+                                  variant={account.isCustomer ? "default" : "outline"} 
+                                  className="text-[10px] px-1.5 py-0 h-4 flex-shrink-0"
+                                >
+                                  {account.isCustomer ? 'Customer' : 'Prospect'}
+                                </Badge>
+                              </div>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-xs text-muted-foreground">
+                                  To: <span className="font-medium text-foreground/80">{account.new_owner_name || 'Unknown'}</span>
+                                </span>
+                                {account.geo && (
+                                  <>
+                                    <span className="text-muted-foreground">•</span>
+                                    <span className="text-xs text-muted-foreground">{account.geo}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                            {account.arrValue > 0 && (
+                              <div className="text-right ml-3 flex-shrink-0">
+                                <span className="font-semibold text-red-600 dark:text-red-400 text-sm">
+                                  {formatCurrency(account.arrValue)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Summary */}
+                    {accountChanges && accountChanges.losing.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-red-200 dark:border-red-800">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Total ARR Losing:</span>
+                          <span className="font-semibold text-red-600 dark:text-red-400">
+                            {formatCurrency(accountChanges.losing.reduce((sum: number, a: any) => sum + a.arrValue, 0))}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {/* Net Impact Summary */}
+            {accountChanges && (accountChanges.gaining.length > 0 || accountChanges.losing.length > 0) && (
+              <Card className="border-2 border-dashed">
+                <CardContent className="py-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-6">
+                      <div className="text-center">
+                        <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                          +{accountChanges.gaining.length}
+                        </span>
+                        <p className="text-xs text-muted-foreground">accounts gained</p>
+                      </div>
+                      <div className="text-center">
+                        <span className="text-2xl font-bold text-red-600 dark:text-red-400">
+                          -{accountChanges.losing.length}
+                        </span>
+                        <p className="text-xs text-muted-foreground">accounts lost</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      {(() => {
+                        const arrGained = accountChanges.gaining.reduce((sum: number, a: any) => sum + a.arrValue, 0);
+                        const arrLost = accountChanges.losing.reduce((sum: number, a: any) => sum + a.arrValue, 0);
+                        const netArr = arrGained - arrLost;
+                        const isPositive = netArr >= 0;
+                        return (
+                          <>
+                            <span className={`text-2xl font-bold ${isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                              {isPositive ? '+' : ''}{formatCurrency(netArr)}
+                            </span>
+                            <p className="text-xs text-muted-foreground">net ARR impact</p>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
             </>
           )}

@@ -119,7 +119,7 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
               <div>
                 <h3 className="text-xl font-semibold">No Build Selected</h3>
                 <p className="text-muted-foreground mt-2">
-                  Territory Balancing requires a build context. Please navigate here from a specific build.
+                  Book Balancing requires a build context. Please navigate here from a specific build.
                 </p>
               </div>
             </div>
@@ -260,8 +260,8 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Back to Assignment Engine
                 </Button>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
-                  Territory Balancing Dashboard
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-foreground to-muted-foreground bg-clip-text text-transparent">
+                  Book Balancing Dashboard
                 </h1>
               </div>
               <div className="flex items-center gap-4">

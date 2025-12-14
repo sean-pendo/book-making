@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { resolveParentChildConflicts, ParentalAlignmentWarning } from './parentalAlignmentService';
 
 // ============= TYPE DEFINITIONS =============
 
@@ -22,6 +23,7 @@ interface Account {
   cre_risk?: boolean;
   cre_count?: number;
   renewal_date?: string;
+  exclude_from_reassignment?: boolean;
 }
 
 interface SalesRep {
@@ -32,6 +34,7 @@ interface SalesRep {
   manager?: string;
   is_active: boolean;
   is_manager: boolean;
+  include_in_assignments?: boolean;
 }
 
 interface AssignmentRule {
@@ -64,6 +67,7 @@ export interface AssignmentResult {
   proposals: AssignmentProposal[];
   conflicts: AssignmentProposal[];
   statistics: any;
+  parentalAlignmentWarnings?: ParentalAlignmentWarning[];
 }
 
 export interface AssignmentProgress {
@@ -217,20 +221,130 @@ export class EnhancedAssignmentService {
         throw new Error('No sales representatives found for assignment generation');
       }
 
+      // ========================================================================
+      // P0 HOLDOVER: Accounts with exclude_from_reassignment stay with current owner
+      // These are manually locked accounts that should NEVER be reassigned
+      // ========================================================================
+      const holdoverAccounts = accounts.filter(a => a.exclude_from_reassignment === true);
+      const assignableAccounts = accounts.filter(a => a.exclude_from_reassignment !== true);
+      
+      console.log(`[ENHANCED_ASSIGNMENT] 🔒 P0 Holdover: ${holdoverAccounts.length} accounts locked (exclude_from_reassignment)`);
+      console.log(`[ENHANCED_ASSIGNMENT] 📋 Assignable accounts: ${assignableAccounts.length}`);
+
+      // Create holdover proposals - these stay with current owner
+      const holdoverProposals: AssignmentProposal[] = holdoverAccounts
+        .filter(a => a.owner_id) // Only if they have a current owner
+        .map(account => ({
+          accountId: account.sfdc_account_id,
+          accountName: account.account_name,
+          currentOwnerId: account.owner_id,
+          currentOwnerName: account.owner_name,
+          proposedOwnerId: account.owner_id!,
+          proposedOwnerName: account.owner_name || 'Unknown',
+          proposedOwnerRegion: undefined,
+          assignmentReason: 'P0: Excluded from reassignment (manually locked)',
+          ruleApplied: 'Manual Holdover',
+          conflictRisk: 'LOW' as const
+        }));
+
+      // Mark holdover accounts as processed so they don't get touched
+      for (const account of holdoverAccounts) {
+        this.processedAccountIds.add(account.sfdc_account_id);
+      }
+
+      // Use assignableAccounts for all subsequent processing
+      const accountsToProcess = assignableAccounts;
+
+      // ========================================================================
+      // PARENTAL ALIGNMENT: Resolve parent ownership when children have different owners
+      // This runs BEFORE any other rules to ensure parent-child alignment
+      // ========================================================================
+      this.reportProgress({
+        stage: 'parental_alignment',
+        progress: 15,
+        status: 'Resolving parent-child ownership conflicts...',
+        rulesCompleted: 0,
+        totalRules: applicableRules.length,
+        accountsProcessed: 0,
+        totalAccounts: accountsToProcess.length,
+        assignmentsMade: holdoverProposals.length,
+        conflicts: 0
+      });
+
+      // Convert SalesRep to the format expected by parentalAlignmentService
+      const repsForAlignment = salesReps.map(r => ({
+        ...r,
+        region: r.region || null,
+        is_strategic_rep: false, // EnhancedAssignmentService doesn't track strategic reps
+        include_in_assignments: r.include_in_assignments ?? true
+      }));
+
+      const { resolutions: parentalResolutions, warnings: parentalWarnings } = await resolveParentChildConflicts(
+        buildId,
+        accountsToProcess as any, // Type compatibility - only process non-holdover accounts
+        repsForAlignment as any
+      );
+
+      // Create proposals for resolved parents and remove them from further processing
+      const parentalProposals: AssignmentProposal[] = [];
+      const resolvedParentIds = new Set<string>();
+
+      for (const resolution of parentalResolutions) {
+        const account = accountsToProcess.find(a => a.sfdc_account_id === resolution.parentAccountId);
+        if (account) {
+          const rep = salesReps.find(r => r.rep_id === resolution.resolvedOwnerId);
+          
+          parentalProposals.push({
+            accountId: resolution.parentAccountId,
+            accountName: resolution.parentAccountName,
+            currentOwnerId: account.owner_id,
+            currentOwnerName: account.owner_name,
+            proposedOwnerId: resolution.resolvedOwnerId,
+            proposedOwnerName: resolution.resolvedOwnerName,
+            proposedOwnerRegion: rep?.region,
+            assignmentReason: `Parent-Child Alignment: ${resolution.reason}`,
+            ruleApplied: 'Parent-Child Alignment (implicit)',
+            conflictRisk: resolution.willCreateSplit ? 'HIGH' : 'MEDIUM'
+          });
+
+          resolvedParentIds.add(resolution.parentAccountId);
+          this.processedAccountIds.add(resolution.parentAccountId);
+        }
+      }
+
+      if (parentalResolutions.length > 0) {
+        console.log(`[ENHANCED_ASSIGNMENT] 👨‍👧‍👦 Parent-Child Alignment: ${parentalResolutions.length} parents resolved`);
+        if (parentalWarnings.length > 0) {
+          console.log(`[ENHANCED_ASSIGNMENT] ⚠️ Parental alignment warnings:`, parentalWarnings.map(w => w.message));
+        }
+      }
+
+      // Filter out resolved parents from accounts to process (already excludes holdovers)
+      const accountsForRules = accountsToProcess.filter(a => !resolvedParentIds.has(a.sfdc_account_id));
+
       this.reportProgress({
         stage: 'processing',
         progress: 20,
         status: `Processing ${applicableRules.length} Advanced Assignment Rules...`,
         rulesCompleted: 0,
         totalRules: applicableRules.length,
-        accountsProcessed: 0,
-        totalAccounts: accounts.length,
-        assignmentsMade: 0,
+        accountsProcessed: holdoverProposals.length + parentalProposals.length,
+        totalAccounts: accounts.length, // Total includes holdovers
+        assignmentsMade: holdoverProposals.length + parentalProposals.length,
         conflicts: 0
       });
 
-      // Process rules using existing implementation
-      return await this.processRulesInOrder(buildId, accounts, salesReps, applicableRules);
+      // Process rules using existing implementation (with remaining accounts)
+      const ruleResult = await this.processRulesInOrder(buildId, accountsForRules, salesReps, applicableRules);
+
+      // Combine ALL proposals: holdovers + parental alignment + rule-based
+      return {
+        ...ruleResult,
+        totalAccounts: accounts.length, // Include holdovers in total
+        proposals: [...holdoverProposals, ...parentalProposals, ...ruleResult.proposals],
+        assignedAccounts: holdoverProposals.length + parentalProposals.length + ruleResult.assignedAccounts,
+        parentalAlignmentWarnings: parentalWarnings.length > 0 ? parentalWarnings : undefined
+      };
 
     } catch (error) {
       console.error('[ENHANCED_ASSIGNMENT] ❌ Assignment generation failed:', error);
@@ -278,66 +392,8 @@ export class EnhancedAssignmentService {
     
     for (const rule of postProcessorRules) {
       if (rule.rule_type === 'AI_BALANCER') {
-        console.log(`[ENHANCED] 🧠 Executing AI Balancer: ${rule.name}`);
-        
-        try {
-          // Import AIBalancingOptimizer
-          const { AIBalancingOptimizer } = await import('@/services/aiBalancingOptimizer');
-          
-          // Get current assignments from accounts table
-          const { data: currentAssignments, error } = await supabase
-            .from('accounts')
-            .select('sfdc_account_id, new_owner_id, new_owner_name, account_name, calculated_arr, is_parent')
-            .eq('build_id', buildId)
-            .eq('is_parent', true)
-            .not('new_owner_id', 'is', null);
-          
-          if (error) {
-            console.error('[ENHANCED] ❌ Failed to fetch current assignments:', error);
-            continue;
-          }
-          
-          console.log(`[ENHANCED] 📊 Analyzing ${currentAssignments?.length || 0} current assignments`);
-          
-          // Check if optimization is needed
-          const healthCheck = await AIBalancingOptimizer.checkBalanceHealth(
-            buildId,
-            currentAssignments || [],
-            salesReps,
-            accounts
-          );
-          
-          if (healthCheck.needsOptimization) {
-            console.log(`[ENHANCED] ⚠️ Imbalance detected: ${healthCheck.problemReps.length} reps below threshold`);
-            
-            // Generate AI optimization suggestions
-            const optimizationResult = await AIBalancingOptimizer.generateOptimizations(
-              buildId,
-              healthCheck.problemReps
-            );
-            
-            console.log(`[ENHANCED] ✨ AI generated ${optimizationResult.suggestions.length} optimization suggestions`);
-            
-            // Convert AI suggestions to AssignmentProposal format
-            const aiProposals = optimizationResult.suggestions.map(suggestion => ({
-              accountId: suggestion.accountId,
-              accountName: suggestion.accountName,
-              currentOwnerId: suggestion.fromRepId,
-              currentOwnerName: suggestion.fromRepName,
-              proposedOwnerId: suggestion.toRepId,
-              proposedOwnerName: suggestion.toRepName,
-              assignmentReason: `AI OPTIMIZATION: ${suggestion.reasoning}`,
-              ruleApplied: `AI Balancer: ${rule.name}`,
-              conflictRisk: (suggestion.priority <= 2 ? 'LOW' : (suggestion.priority <= 4 ? 'MEDIUM' : 'HIGH')) as 'LOW' | 'MEDIUM' | 'HIGH'
-            }));
-            
-            optimizationProposals.push(...aiProposals);
-          } else {
-            console.log(`[ENHANCED] ✅ Territory balance healthy, no AI optimization needed`);
-          }
-        } catch (error) {
-          console.error('[ENHANCED] ❌ AI Balancer execution failed:', error);
-        }
+        // AI_BALANCER rule type deprecated - balancing now handled by HIGHS optimization in priorityExecutor
+        console.log(`[ENHANCED] ⚠️ AI_BALANCER rule type deprecated: ${rule.name}. Use HIGHS optimization instead.`);
       }
     }
     

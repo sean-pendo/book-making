@@ -145,11 +145,12 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
           if (tier === 'tier 1' || tier === 'tier1') totalTier1++;
           if (tier === 'tier 2' || tier === 'tier2') totalTier2++;
           
-          const quarter = account.renewal_quarter?.toUpperCase();
-          if (quarter === 'Q1') totalQ1++;
-          if (quarter === 'Q2') totalQ2++;
-          if (quarter === 'Q3') totalQ3++;
-          if (quarter === 'Q4') totalQ4++;
+          // Handle both "Q1" and "Q1-FY27" formats
+          const quarter = account.renewal_quarter?.toUpperCase() || '';
+          if (quarter.startsWith('Q1')) totalQ1++;
+          if (quarter.startsWith('Q2')) totalQ2++;
+          if (quarter.startsWith('Q3')) totalQ3++;
+          if (quarter.startsWith('Q4')) totalQ4++;
         });
 
         setTotals({

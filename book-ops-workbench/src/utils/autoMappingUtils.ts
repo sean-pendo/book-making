@@ -328,6 +328,15 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     required: false
   },
   {
+    schemaField: 'owner_change_date',
+    aliases: [
+      'owner_change_date', 'owner change date', 'last_owner_change', 'edit_date', 'edit date',
+      'Owner_Change_Date', 'Last_Owner_Change', 'Edit_Date'
+    ],
+    patterns: [/.*owner.*change.*date.*/i, /^edit.?date$/i],
+    required: false
+  },
+  {
     schemaField: 'cre_risk',
     aliases: [
       'CRE_Risk', 'CRE_Flag', 'CRE Risk', 'CRE Flag', 'Commercial Risk',
@@ -545,6 +554,15 @@ export const SALES_REP_FIELD_ALIASES: FieldAlias[] = [
       'slm', 'second_level_manager', 'senior_manager', 'regional_manager', 'area_manager'
     ],
     patterns: [/.*slm.*/i, /.*second.*level.*manager.*/i, /.*senior.*manager.*/i],
+    required: false
+  },
+  {
+    schemaField: 'team_tier',
+    aliases: [
+      'Team_Tier', 'TeamTier', 'Team Tier', 'Segment', 'Rep_Tier', 'Size_Tier', 'Tier',
+      'team_tier', 'segment', 'rep_tier', 'size_tier', 'tier'
+    ],
+    patterns: [/.*team.*tier.*/i, /.*size.*tier.*/i, /.*rep.*tier.*/i, /^segment$/i],
     required: false
   }
 ];

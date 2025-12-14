@@ -395,7 +395,7 @@ interface ExtendedAccountDetail extends AccountDetail {
           sfdc_account_id: accountId,
           proposed_owner_id: selectedNewOwner,
           proposed_owner_name: selectedNewOwnerData?.name || '',
-          assignment_type: account?.is_customer ? 'customer' : 'prospect',
+          assignment_type: 'MANUAL_REASSIGNMENT',
           rationale: `MANUAL_REASSIGNMENT: ${reassignRationale || 'Manual reassignment by RevOps manager'}`,
           created_by: userData.user?.id
         };

@@ -45,6 +45,7 @@ interface Account {
   risk_flag: boolean | null;
   renewal_date: string | null;
   exclude_from_reassignment: boolean | null;
+  is_strategic: boolean | null;
 }
 
 interface AccountsTableProps {
@@ -106,6 +107,51 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
       toast({
         title: "Error",
         description: "Failed to update account exclusion status",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const toggleStrategicMutation = useMutation({
+    mutationFn: async ({ accountId, currentValue }: { accountId: string; currentValue: boolean }) => {
+      const { error } = await supabase
+        .from('accounts')
+        .update({ is_strategic: !currentValue })
+        .eq('sfdc_account_id', accountId)
+        .eq('build_id', buildId);
+      
+      if (error) throw error;
+    },
+    onMutate: async ({ accountId, currentValue }) => {
+      await queryClient.cancelQueries({ queryKey: ['accounts-detail', buildId] });
+      const previousData = queryClient.getQueryData(['accounts-detail', buildId]);
+      
+      queryClient.setQueryData(['accounts-detail', buildId], (old: any) => {
+        if (!old) return old;
+        return old.map((acc: Account) => 
+          acc.sfdc_account_id === accountId 
+            ? { ...acc, is_strategic: !currentValue }
+            : acc
+        );
+      });
+      
+      return { previousData };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['accounts-detail', buildId] });
+      toast({
+        title: "Success",
+        description: "Account strategic status updated",
+      });
+    },
+    onError: (error, variables, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(['accounts-detail', buildId], context.previousData);
+      }
+      console.error('Error toggling strategic:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update account strategic status",
         variant: "destructive",
       });
     },
@@ -213,7 +259,8 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
           hierarchy_bookings_arr_converted, cre_count,
           is_customer, geo, enterprise_vs_commercial, hq_country, account_type,
           sales_territory, expansion_tier, initial_sale_tier, expansion_score,
-          initial_sale_score, cre_risk, cre_status, risk_flag, renewal_date, exclude_from_reassignment
+          initial_sale_score, cre_risk, cre_status, risk_flag, renewal_date, 
+          exclude_from_reassignment, is_strategic
         `)
         .eq('build_id', buildId);
 
@@ -455,6 +502,24 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                       </TooltipContent>
                     </Tooltip>
                   </TableHead>
+                  <TableHead>
+                    <Tooltip delayDuration={0}>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1 cursor-help">
+                          <Sparkles className="h-3 w-3" />
+                          Strategic
+                          <Info className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-[280px]" side="bottom">
+                        <p className="font-semibold mb-1">Strategic Account</p>
+                        <p className="text-xs text-muted-foreground">
+                          Strategic accounts are assigned exclusively to strategic reps in Priority 0 optimization.
+                          They are balanced separately from regular accounts.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TableHead>
                   <TableHead>Hierarchy</TableHead>
                   <TableHead 
                     className="cursor-pointer hover:bg-muted/50 select-none"
@@ -592,6 +657,38 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                               {account.exclude_from_reassignment
                                 ? 'Click to allow reassignment'
                                 : 'Click to lock and keep current owner'}
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleStrategicMutation.mutate({
+                                  accountId: account.sfdc_account_id,
+                                  currentValue: account.is_strategic || false
+                                });
+                              }}
+                              disabled={toggleStrategicMutation.isPending}
+                              className="h-8 w-8 p-0"
+                            >
+                              {account.is_strategic ? (
+                                <Sparkles className="h-4 w-4 text-purple-500" />
+                              ) : (
+                                <Sparkles className="h-4 w-4 text-muted-foreground opacity-30" />
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>
+                              {account.is_strategic
+                                ? 'Strategic account - assigned to strategic reps only'
+                                : 'Click to mark as strategic'}
                             </p>
                           </TooltipContent>
                         </Tooltip>

@@ -58,6 +58,8 @@ export default function SendToManagerDialog({
   const [copied, setCopied] = useState(false);
   const [managerSearchOpen, setManagerSearchOpen] = useState(false);
   const [userSearchOpen, setUserSearchOpen] = useState(false);
+  const [slackNotificationsSent, setSlackNotificationsSent] = useState(0);
+  const [slackNotificationsFailed, setSlackNotificationsFailed] = useState(0);
   const queryClient = useQueryClient();
 
   // Fetch build name for notifications
@@ -359,31 +361,50 @@ export default function SendToManagerDialog({
         link = `${baseUrl}/manager-dashboard?buildId=${buildId}`;
       }
       
-      // Send Slack notifications
+      // Send Slack notifications and track results
       const buildName = buildData?.name || 'Unknown Build';
       const assignedBy = effectiveProfile?.full_name || 'RevOps';
+      let sentCount = 0;
+      let failedCount = 0;
       
       if (sendToAllSLMs && availableUsers) {
         // Notify all non-RevOps users
         const nonRevOpsUsers = availableUsers.filter(u => u.role?.toUpperCase() !== 'REVOPS');
-        for (const userProfile of nonRevOpsUsers) {
-          if (userProfile.email) {
-            notifyReviewAssigned(userProfile.email, buildName, 'SLM', assignedBy).catch(console.error);
+        const notifications = await Promise.allSettled(
+          nonRevOpsUsers
+            .filter(u => u.email)
+            .map(userProfile => 
+              notifyReviewAssigned(userProfile.email!, buildName, 'SLM', assignedBy)
+            )
+        );
+        
+        notifications.forEach(result => {
+          if (result.status === 'fulfilled' && (result.value.sent || result.value.success)) {
+            sentCount++;
+          } else {
+            failedCount++;
           }
-        }
+        });
       } else if (selectedUserId) {
         // Notify the specific user
         const selectedUser = availableUsers?.find(u => u.id === selectedUserId);
         if (selectedUser?.email && targetManager) {
-          notifyReviewAssigned(
+          const result = await notifyReviewAssigned(
             selectedUser.email, 
             buildName, 
             targetManager.level, 
             assignedBy
-          ).catch(console.error);
+          );
+          if (result.sent || result.success) {
+            sentCount = 1;
+          } else {
+            failedCount = 1;
+          }
         }
       }
       
+      setSlackNotificationsSent(sentCount);
+      setSlackNotificationsFailed(failedCount);
       setShareableLink(link);
       setShowSuccessDialog(true);
       setSelectedUserId('');
@@ -420,6 +441,8 @@ export default function SendToManagerDialog({
     setShowSuccessDialog(false);
     setShareableLink('');
     setCopied(false);
+    setSlackNotificationsSent(0);
+    setSlackNotificationsFailed(0);
     onClose();
   };
 
@@ -456,6 +479,41 @@ export default function SendToManagerDialog({
           </DialogHeader>
           
           <div className="space-y-4 py-4">
+            {/* Slack notification confirmation */}
+            {(slackNotificationsSent > 0 || slackNotificationsFailed > 0) && (
+              <div className={`p-3 rounded-lg border ${
+                slackNotificationsFailed === 0 
+                  ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' 
+                  : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'
+              }`}>
+                <div className="flex items-center gap-2">
+                  {slackNotificationsFailed === 0 ? (
+                    <Check className="w-4 h-4 text-green-600" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-amber-600" />
+                  )}
+                  <span className={`text-sm font-medium ${
+                    slackNotificationsFailed === 0 
+                      ? 'text-green-700 dark:text-green-300' 
+                      : 'text-amber-700 dark:text-amber-300'
+                  }`}>
+                    {slackNotificationsSent > 0 && (
+                      <>Slack notification{slackNotificationsSent > 1 ? 's' : ''} sent ({slackNotificationsSent})</>
+                    )}
+                    {slackNotificationsFailed > 0 && slackNotificationsSent > 0 && ', '}
+                    {slackNotificationsFailed > 0 && (
+                      <>{slackNotificationsFailed} failed</>
+                    )}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {slackNotificationsSent > 0 
+                    ? 'The recipient(s) have been notified via Slack.'
+                    : 'Slack notifications could not be delivered.'}
+                </p>
+              </div>
+            )}
+
             <div className="space-y-2">
               <Label>Shareable Link</Label>
               <div className="flex gap-2">

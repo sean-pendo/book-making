@@ -113,11 +113,20 @@ export function FeedbackWidget() {
         throw new Error("Failed to submit feedback");
       }
 
-      if (!data?.sent && !data?.success) {
+      // Check if notification was actually sent
+      const wasSent = data?.sent || data?.success;
+      
+      if (wasSent) {
+        toast.success(
+          feedbackType === 'bug' 
+            ? "Bug report sent! Sean has been notified via Slack and will look into it."
+            : "Thank you! Your feedback has been sent to Sean via Slack."
+        );
+      } else {
+        // Submission worked but Slack notification might have failed
         console.warn("Notification may not have been delivered:", data);
+        toast.success("Feedback submitted! (Slack notification pending)");
       }
-
-      toast.success("Thank you! Your feedback has been submitted.");
       
       // Reset form
       setTitle("");
