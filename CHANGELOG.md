@@ -2,6 +2,28 @@
 
 ---
 
+## Release v1.3.4 (2025-12-14)
+
+### Unified Scoring & Complete Documentation
+
+#### Analytics Scoring Unified
+- `types/analytics.ts` now imports GEO_MATCH_SCORES from `@/_domain/constants`
+- Geo scores unified: exact=1.0, sibling=0.85, parent=0.65, global=0.40
+- Team alignment scores unified with optimization model formula
+
+#### MASTER_LOGIC.mdc Additions
+- Added Section 11: Analytics & Success Metrics
+- Documented LP Success Metrics (Balance, Continuity, Geography, Team Alignment)
+- Added ARR Distribution Buckets for chart visualization
+- Updated section numbering for Part 3
+
+#### CURSOR.mdc Updates
+- Updated QA Status from "v1.0 unstable" to "v1.3+ stabilized"
+- Fixed docs structure references (removed stale qa_log.md reference)
+- Updated assignment engine list to reflect current active services
+
+---
+
 ## Release v1.3.3 (2025-12-14)
 
 ### Documentation Cleanup & MASTER_LOGIC Audit

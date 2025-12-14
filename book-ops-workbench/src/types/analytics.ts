@@ -28,29 +28,33 @@ export type ArrBucketLabel = typeof ARR_BUCKETS[number]['label'];
 /**
  * Geography scoring weights for ANALYTICS VISUALIZATION.
  * 
- * NOTE: These are DIFFERENT from @/_domain/constants.ts GEO_MATCH_SCORES
- * which are used by the assignment engine. These simplified weights
- * are used for calculating LP success metrics in dashboards.
+ * UNIFIED with @/_domain/constants.ts GEO_MATCH_SCORES
+ * to ensure consistent scoring across engine and dashboards.
  * 
- * @see @/_domain/constants.ts for assignment engine geo scoring
+ * @see @/_domain/constants.ts for authoritative values
+ * @see @/_domain/MASTER_LOGIC.mdc Section 4.3 for documentation
  */
+export { GEO_MATCH_SCORES } from '@/_domain/constants';
+
+// Alias for backwards compatibility
 export const GEO_SCORE_WEIGHTS = {
-  exact: 1.0,      // Account geo matches rep region exactly
-  sibling: 0.6,    // Adjacent/sibling region
-  parent: 0.4,     // Parent region match
-  global: 0.25,    // Fallback global assignment
+  exact: 1.0,           // Exact match (same as GEO_MATCH_SCORES.EXACT_MATCH)
+  sibling: 0.85,        // Same sub-region (SAME_SUB_REGION)
+  parent: 0.65,         // Same parent region (SAME_PARENT)
+  global: 0.40,         // Global fallback (GLOBAL_FALLBACK)
 } as const;
 
 /**
  * Team alignment scoring weights for ANALYTICS VISUALIZATION.
  * 
- * NOTE: These are used for calculating LP success metrics.
- * The actual assignment engine may use different weights.
+ * Unified with optimization model scoring.
+ * 
+ * @see @/_domain/MASTER_LOGIC.mdc Section 9.3 for Team Alignment Score
  */
 export const TEAM_ALIGNMENT_WEIGHTS = {
   exact: 1.0,      // Account tier matches rep tier exactly
-  oneOff: 0.6,     // One tier level difference
-  twoOff: 0.2,     // Two or more tier levels difference
+  oneOff: 0.8,     // One tier level difference (1 - 0.20)
+  twoOff: 0.6,     // Two tier levels difference (1 - 0.40)
 } as const;
 
 // ============================================

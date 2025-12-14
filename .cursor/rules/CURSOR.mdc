@@ -106,30 +106,36 @@ When working on ANY file in the codebase:
 2.  **Storage**: Core tables are `accounts`, `sales_reps`, `assignments`, `assignment_rules`.
 
 ### Assignment Engine
-Multiple services exist (fragmentation risk). Always verify which is active:
-1.  **`RebalancingAssignmentService.ts`**: The main/modern engine ("Complete Overhaul").
-2.  **`CollaborativeAssignmentService.ts`**: Rule-based legacy engine.
-3.  **`SophisticatedAssignmentService.ts`**: Multi-pass legacy engine.
+Multiple services exist for different use cases:
+1.  **`simplifiedAssignmentEngine.ts`**: Primary engine with priority waterfall
+2.  **`rebalancingAssignmentService.ts`**: Multi-pass rebalancing
+3.  **`enhancedAssignmentService.ts`**: Enhanced balancing features
+4.  **`optimization/`**: HiGHS LP solver for optimal assignments
 
-## 5. QA Status & Known Issues (v1.0)
-We are currently in **QA Mode**. The codebase is unstable.
+All engines import business logic from `@/_domain`.
 
-### Critical Blockers
-*   **Generation Flow**: Assignments fail to generate or return blank results.
-*   **Data Import**: Users see "0 Accounts" after import until hard refresh. State sync issue between React <-> Supabase.
+## 5. QA Status (v1.3+)
+Codebase has been stabilized and consolidated. Business logic is centralized in `_domain/`.
+
+### Recent Improvements (v1.3.x)
+*   **Domain Consolidation**: All business logic in `src/_domain/`
+*   **Dead Code Removal**: ~4,000 lines of dead code removed
+*   **Unified Scoring**: Analytics and engine use same scoring weights
+*   **Documentation**: MASTER_LOGIC.mdc is comprehensive and audited
 
 ### Debugging Strategy
-1.  **Trust Nothing**: Verify data in Supabase first. If it's not in the DB, the UI is lying.
-2.  **Isolate Flow**: When fixing Generation, check `RebalancingAssignmentService` logs first.
-3.  **Local Dev**: Debug locally with a connected Supabase instance to reproduce "0 Accounts" bug.
+1.  **Check `_domain/`**: All business logic should come from here
+2.  **Verify Supabase**: If data looks wrong, check the DB first
+3.  **Console Logs**: Assignment engine logs to console with `[AssignmentEngine]` prefix
 
 ## 6. Rules & Guidelines
 
 ### 📜 Documentation Rules
 *   **Structure**:
     *   `docs/core/`: Strategy & Architecture (e.g., `architecture.md`).
-    *   `docs/ops/`: QA & Operations (e.g., `qa_log.md`).
-*   **Docs First**: Update `docs/ops/qa_log.md` or `docs/core/architecture.md` before complex changes.
+    *   `docs/archive/`: Historical plans and resolved issues.
+    *   `src/_domain/MASTER_LOGIC.mdc`: Business logic documentation (primary reference).
+*   **Docs First**: Update `MASTER_LOGIC.mdc` or `docs/core/architecture.md` before complex changes.
 *   **Changelog Maintenance**: **MANDATORY**. You must maintain a `CHANGELOG.md` file in the root.
     *   Every time you make a code change (fix, feature, refactor), you must append an entry to `CHANGELOG.md`.
     *   Format: `[YYYY-MM-DD] - {Type}: {Description}`.

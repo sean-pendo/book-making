@@ -1,6 +1,6 @@
 # Book Builder - Business Logic & System Reference
 
-> **Version**: 1.3.3  
+> **Version**: 1.3.4  
 > **Last Updated**: 2025-12-14  
 > **Status**: ACTIVE - Audited and consolidated  
 > **Purpose**: Single source of truth for all business rules, paired with `src/domain/` code implementation
@@ -22,10 +22,11 @@
 8. [Assignment Engine](#8-assignment-engine)
 9. [Optimization Model](#9-optimization-model)
 10. [Balancing & Thresholds](#10-balancing--thresholds)
+11. [Analytics & Success Metrics](#11-analytics--success-metrics)
 
-### Part 3: Audit & Conflicts
-11. [Current Conflicts (v1.3)](#11-current-conflicts-v13)
-12. [Refactoring Plan](#12-refactoring-plan)
+### Part 3: Consolidation Status
+12. [Resolved Conflicts](#12-resolved-conflicts)
+13. [Maintenance Rules](#13-maintenance-rules)
 
 ---
 
@@ -515,24 +516,81 @@ Users can override calculated thresholds in `assignment_configuration`:
 
 ---
 
+## 11. Analytics & Success Metrics
+
+The app calculates success metrics to measure assignment quality. These are displayed in dashboards.
+
+### 11.1 LP Success Metrics
+
+| Metric | Range | Description |
+|--------|-------|-------------|
+| **Balance Score** | 0-1 | How evenly ARR/ATR is distributed (MSE-based) |
+| **Continuity Score** | 0-1 | % of accounts staying with current owner |
+| **Geography Score** | 0-1 | Weighted geo alignment (uses GEO_MATCH_SCORES) |
+| **Team Alignment Score** | 0-1 | Account tier matching rep tier |
+| **Capacity Utilization** | 0-1+ | Average % of target load per rep |
+
+### 11.2 Balance Score Calculation
+
+```
+BalanceScore = 1 - (MSE / MaxMSE)
+
+Where:
+- MSE = Mean Squared Error from target load
+- MaxMSE = Theoretical maximum error
+- Higher = more balanced
+```
+
+Components:
+- Mean ARR per rep
+- Standard deviation
+- Coefficient of variation
+- Outlier counts (overloaded/underloaded)
+
+### 11.3 ARR Distribution Buckets
+
+For histogram visualizations:
+
+| Bucket | Range |
+|--------|-------|
+| $0-50K | 0 - 50,000 |
+| $50K-100K | 50,000 - 100,000 |
+| $100K-500K | 100,000 - 500,000 |
+| $500K-1M | 500,000 - 1,000,000 |
+| $1M+ | 1,000,000+ |
+
+### 11.4 Scoring Consistency
+
+**All scoring weights are unified across engine and dashboards:**
+
+| Score Type | Source | Used In |
+|------------|--------|---------|
+| Geo Match | `_domain/constants.ts` | Engine + Analytics |
+| Team Alignment | Section 9.3 formula | Engine + Analytics |
+| Continuity | Section 9.3 formula | Engine + Analytics |
+
+The `types/analytics.ts` file imports from `@/_domain` to ensure consistency.
+
+---
+
 # Part 3: Consolidation Status
 
-## 11. Resolved Conflicts (v1.3.2+)
+## 12. Resolved Conflicts (v1.3.2+)
 
 All conflicts from v1.3 have been resolved. See `_domain/CLEANUP_PLAN.md` for full history.
 
-### 11.1 ARR Calculation - RESOLVED ✓
+### 12.1 ARR Calculation - RESOLVED ✓
 
 **All files now use** `getAccountARR()` from `@/_domain`:
 ```typescript
 hierarchy_bookings_arr_converted || calculated_arr || arr || 0
 ```
 
-### 11.2 Region Hierarchy - RESOLVED ✓
+### 12.2 Region Hierarchy - RESOLVED ✓
 
 Full EMEA and APAC regions now documented in `_domain/geography.ts`.
 
-### 11.3 Duplicate Files - RESOLVED ✓
+### 12.3 Duplicate Files - RESOLVED ✓
 
 | Deleted File | Replaced By |
 |--------------|-------------|
@@ -541,9 +599,13 @@ Full EMEA and APAC regions now documented in `_domain/geography.ts`.
 | `utils/dynamicScoringEngine.ts` | Dead code - removed |
 | `utils/parentChildValidation.ts` | Dead code - removed |
 
+### 12.4 Analytics Scoring - RESOLVED ✓
+
+`types/analytics.ts` now imports from `@/_domain/constants` for consistent scoring weights.
+
 ---
 
-## 12. Maintenance Rules
+## 13. Maintenance Rules
 
 ### When Adding New Business Logic
 
