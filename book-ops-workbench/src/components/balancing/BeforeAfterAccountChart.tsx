@@ -224,7 +224,7 @@ export const BeforeAfterAccountChart: React.FC<BeforeAfterAccountChartProps> = (
                       </div>
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="right" className="max-w-xs z-50">
+                  <TooltipContent side="right" className="max-w-xs z-[9999]">
                     <div className="text-sm">
                       <div className="font-medium">{rep.repName}</div>
                       <div className="text-muted-foreground text-xs mb-2">{rep.region}</div>

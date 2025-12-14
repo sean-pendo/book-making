@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * DOMAIN MODULE - Single Source of Truth for Business Logic
+ * CORE MODULE - Single Source of Truth for Business Logic
  * ============================================================================
  * 
  * This is the central hub for all business rules in Book Builder.
@@ -14,7 +14,7 @@
  *     normalizeRegion,      // from normalization.ts
  *     TIER_THRESHOLDS,      // from constants.ts
  *     GEO_MATCH_SCORES,     // from constants.ts
- *   } from '@/domain';
+ *   } from '@/_domain';
  * 
  * MODULE OVERVIEW:
  * ----------------
@@ -26,14 +26,14 @@
  * 
  * DOCUMENTATION:
  * --------------
- * Full documentation with examples: docs/core/business_logic.md
+ * Full documentation: src/core/MASTER_LOGIC.md
  * 
  * CONTRIBUTING:
  * -------------
  * When adding new business logic:
  * 1. Add to appropriate module (or create new one)
  * 2. Export from this index.ts
- * 3. Update docs/core/business_logic.md
+ * 3. Update MASTER_LOGIC.md
  * 4. Add JSDoc with @see link to the doc
  * 
  * ============================================================================

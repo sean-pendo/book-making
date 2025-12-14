@@ -49,7 +49,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ChangeChildOwnerDialog } from '@/components/ChangeChildOwnerDialog';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
-import { getAccountARR } from '@/utils/accountCalculations';
+import { getAccountARR } from '@/_domain';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -160,7 +160,7 @@ interface ExtendedAccountDetail extends AccountDetail {
       const mappedAccounts: ExtendedAccountDetail[] = (ownedAccounts || []).map((account: any) => ({
         sfdc_account_id: account.sfdc_account_id,
         account_name: account.account_name,
-        arr: account.calculated_arr || account.arr || 0,
+        arr: getAccountARR(account),
         atr: account.calculated_atr || account.atr || 0,
         employees: account.employees,
         industry: account.industry,
@@ -202,16 +202,7 @@ interface ExtendedAccountDetail extends AccountDetail {
         const beforeCustomerAccounts = beforeAccounts.filter(acc => acc.is_customer);
         const beforeProspectAccounts = beforeAccounts.filter(acc => !acc.is_customer);
         const beforeCustomerARR = beforeCustomerAccounts.reduce((sum, acc) => {
-          const arrValue = typeof acc.hierarchy_bookings_arr_converted === 'string' 
-            ? parseFloat(acc.hierarchy_bookings_arr_converted) 
-            : (acc.hierarchy_bookings_arr_converted || 0);
-          const calculatedArr = typeof acc.calculated_arr === 'string'
-            ? parseFloat(acc.calculated_arr)
-            : (acc.calculated_arr || 0);
-          const arr = typeof acc.arr === 'string'
-            ? parseFloat(acc.arr)
-            : (acc.arr || 0);
-          return sum + (arrValue || calculatedArr || arr);
+          return sum + getAccountARR(acc);
         }, 0);
 
         setBeforeMetrics({

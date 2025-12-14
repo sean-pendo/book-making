@@ -28,7 +28,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { AccountDetail } from '@/hooks/useEnhancedBalancing';
 import { useProspectOpportunities, formatNetARR } from '@/hooks/useProspectOpportunities';
-import { formatCurrency } from '@/utils/accountCalculations';
+import { formatCurrency } from '@/_domain';
 
 interface ParentChildRelationshipDialogProps {
   open: boolean;

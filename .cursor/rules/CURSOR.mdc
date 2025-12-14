@@ -15,52 +15,89 @@ globs: **/*
 
 ## 3. Business Logic Documentation
 
-### 📚 IMPORTANT: Single Source of Truth
+### 📚 SINGLE SOURCE OF TRUTH: `src/_domain/`
 
-**Before modifying ANY calculation logic, consult these docs first:**
+**The `_domain/` folder is the authoritative source for ALL business logic.**
 
-| Resource | Purpose |
-|----------|---------|
-| **[`docs/core/business_logic.md`](../../docs/core/business_logic.md)** | Glossary, calculation rules, tier definitions, geo mapping |
-| **[`src/domain/`](../../book-ops-workbench/src/domain/)** | Code implementation of business rules |
+| File | Purpose |
+|------|---------|
+| **`MASTER_LOGIC.mdc`** | Human-readable documentation of all business rules |
+| **`calculations.ts`** | ARR, ATR, Pipeline calculations |
+| **`tiers.ts`** | Team tier (SMB/Growth/MM/ENT) classification |
+| **`geography.ts`** | Region hierarchy, territory mapping, geo scoring |
+| **`constants.ts`** | Thresholds, defaults, configuration values |
+| **`normalization.ts`** | Typo handling and data normalization |
 
-**The `src/domain/` module contains:**
-- `calculations.ts` - ARR, ATR, Pipeline calculations
-- `tiers.ts` - Team tier (SMB/Growth/MM/ENT) and expansion tier logic
-- `geography.ts` - Region hierarchy and territory mapping
-- `constants.ts` - Thresholds, defaults, configuration values
+### ✅ What BELONGS in `_domain/` (Business Logic)
+- **Calculations**: How ARR, ATR, Pipeline values are computed
+- **Classification rules**: Tier thresholds, account categorization
+- **Geography rules**: Region hierarchy, territory mapping logic
+- **Constants**: Threshold values, scoring weights, defaults
+- **Normalization**: Data cleanup (region aliases, typos)
 
-**Rule**: When changing business logic:
-1. Update `docs/core/business_logic.md` first
-2. Update the corresponding file in `src/domain/`
-3. Update any consuming code that uses the old logic
+### ❌ What does NOT belong in `_domain/`
+- React components (`*.tsx` with JSX)
+- Hooks (`useXxx`)
+- Services (API calls, Supabase queries)
+- UI state management
+- Contexts (`AuthContext`, etc.)
+- Formatting helpers (currency display, date formatting)
+
+**Rule**: `_domain/` answers "HOW should the app calculate/classify things?"
+It does NOT answer "HOW should the app render/fetch/store things?"
+
+### 🔒 MANDATORY RULES
+
+1. **Always import from `@/_domain`** - Never hardcode business logic elsewhere
+   ```typescript
+   // ✅ CORRECT
+   import { getAccountARR, classifyTeamTier, REGION_HIERARCHY } from '@/_domain';
+   
+   // ❌ WRONG - inline logic
+   const arr = account.calculated_arr || account.arr || 0;
+   ```
+
+2. **Paired updates required** - When changing business logic:
+   - Update `MASTER_LOGIC.mdc` (documentation)
+   - Update the corresponding `.ts` file (implementation)
+   - Both must stay in sync
+
+3. **Never create duplicate logic** - If you find business logic outside `_domain/`:
+   - Flag it to the user
+   - Refactor to import from `@/_domain`
+
+4. **Standardized Consolidation Technique** - When consolidating code:
+   - `_domain/` = **DEFINITIONS** (source of truth)
+   - `utils/`, `components/`, `services/`, `hooks/` = **CONSUMERS**
+   - **Don't MOVE files** between folders. Refactor them to IMPORT from `@/_domain`
+   - Keep utils in utils, components in components, etc.
 
 ### 🔍 Gradual Refactoring Rule
 
 When working on ANY file in the codebase:
 
-1. **Detect Hardcoded Logic**: Look for inline calculations that should use `@/domain`:
+1. **Detect Hardcoded Logic**: Look for inline calculations that should use `@/_domain`:
    - ARR calculations (priority chains like `calculated_arr || arr || 0`)
    - ATR calculations (filtering by `opportunity_type = 'Renewals'`)
    - Tier thresholds (magic numbers like `100`, `500`, `1500`)
    - Region/territory mappings
    - PE firm name handling
 
-2. **Flag Discrepancies**: If you find hardcoded logic that **differs** from `src/domain/`:
+2. **Flag Discrepancies**: If you find hardcoded logic that **differs** from `src/_domain/`:
    - **STOP and ASK the user** before changing anything
    - Example: "I found `employees < 150` for SMB in this file, but `TIER_THRESHOLDS.SMB_MAX` is 99. Which is correct?"
 
-3. **Propose Refactor**: If the hardcoded logic **matches** `src/domain/`:
+3. **Propose Refactor**: If the hardcoded logic **matches** `src/_domain/`:
    - Suggest replacing with the import
-   - Example: "This file has inline ARR calculation. Want me to refactor to use `getAccountARR()` from `@/domain`?"
+   - Example: "This file has inline ARR calculation. Want me to refactor to use `getAccountARR()` from `@/_domain`?"
 
 4. **Never Silently Change**: Business logic discrepancies may be intentional edge cases. Always confirm with user.
 
 **Questions to Ask When Discrepancy Found:**
 - "Is this intentional or a bug?"
-- "Should we update `src/domain/` to match this, or vice versa?"
+- "Should we update `MASTER_LOGIC.mdc` and `src/_domain/` to match this, or vice versa?"
 - "Is this an exception for this specific use case?"
-- "Should we add this as a new constant/function in the domain module?"
+- "Should we add this as a new constant/function in the _domain module?"
 
 ## 4. Architecture & System Map
 ### Data Pipeline
@@ -198,7 +235,7 @@ All errors include: stack trace, URL, user agent, app version, timestamp.
 
 ## 10. Terminology & Glossary
 
-> **Full Reference**: See [`docs/core/business_logic.md`](../../docs/core/business_logic.md) for complete glossary with calculation formulas.
+> **Full Reference**: See [`src/_domain/MASTER_LOGIC.mdc`](../../book-ops-workbench/src/_domain/MASTER_LOGIC.mdc) for complete glossary with calculation formulas.
 
 ### Quick Reference
 
@@ -213,9 +250,10 @@ All errors include: stack trace, URL, user agent, app version, timestamp.
 ### Key Calculation Rules
 
 ```
-ARR Priority:  calculated_arr → hierarchy_bookings_arr_converted → arr → 0
+ARR Priority:  hierarchy_bookings_arr_converted → calculated_arr → arr → 0
+               (hierarchy_bookings first to prevent double-counting from children)
 ATR Source:    SUM(available_to_renew) WHERE opportunity_type = 'Renewals'
-Team Tier:     SMB (<100 emp) | Growth (100-499) | MM (500-1499) | ENT (1500+)
+Team Tier:     SMB (<100 emp) | Growth (100-499) | MM (500-1499) | ENT (1500+) | null (unknown)
 ```
 
 ## 11. Learning Log

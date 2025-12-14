@@ -8,6 +8,7 @@
  */
 
 import { Account, SalesRep } from './priorityExecutor';
+import { getAccountARR } from '@/_domain';
 
 /**
  * Calculate the ARR threshold for Top 10% accounts
@@ -17,7 +18,7 @@ import { Account, SalesRep } from './priorityExecutor';
 export function calculateTop10PercentThreshold(accounts: Account[]): number {
   // Filter to accounts with valid ARR values
   const accountsWithARR = accounts
-    .map(a => a.hierarchy_bookings_arr_converted || a.calculated_arr || 0)
+    .map(a => getAccountARR(a))
     .filter(arr => arr > 0)
     .sort((a, b) => b - a); // Sort descending
   
@@ -42,7 +43,7 @@ export function shouldRouteToRenewalSpecialist(
   rsThreshold: number,
   top10Threshold: number
 ): { shouldRoute: boolean; reason: string } {
-  const accountARR = account.hierarchy_bookings_arr_converted || account.calculated_arr || 0;
+  const accountARR = getAccountARR(account);
   
   // PE Firms never go to RS
   if (account.pe_firm) {
@@ -138,7 +139,7 @@ export function calculateRSWorkloadMetrics(
     const assignedRepId = assignments.get(account.sfdc_account_id);
     if (!assignedRepId || !rsRepIds.has(assignedRepId)) continue;
     
-    const accountARR = account.hierarchy_bookings_arr_converted || account.calculated_arr || 0;
+    const accountARR = getAccountARR(account);
     
     totalRSAccounts++;
     totalRSARR += accountARR;

@@ -36,6 +36,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { AssignmentSuccessDialog } from '@/components/AssignmentSuccessDialog';
 import { fixOwnerAssignments } from '@/utils/fixOwnerAssignments';
 import { QuickResetButton } from '@/components/QuickResetButton';
+import { getAccountARR } from '@/_domain';
 import { FullAssignmentConfig } from '@/components/FullAssignmentConfig';
 import { PriorityConfig, getDefaultPriorityConfig } from '@/config/priorityRegistry';
 import { useMappedFields } from '@/hooks/useMappedFields';
@@ -1596,7 +1597,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   };
 
   const getDisplayARR = (account: Account) => {
-    const arr = account.calculated_arr || account.hierarchy_bookings_arr_converted || account.arr || 0;
+    const arr = getAccountARR(account);
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',

@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { getAccountARR, classifyTeamTier } from '@/_domain';
 import { getFiscalQuarter, isCurrentFiscalYear } from '@/utils/fiscalYearCalculations';
 import { calculateEnhancedRepMetrics, type EnhancedRepMetrics } from '@/utils/enhancedRepMetrics';
 import type { 
@@ -395,8 +396,8 @@ class BuildDataService {
           total: opportunities.length,
           withOwners: opportunities.filter(o => o.owner_id).length,
           totalAmount: accounts.reduce((sum, a) => sum + (a.calculated_atr || a.atr || 0), 0),
-          // Total ARR: Only sum parent customer accounts' hierarchy ARR (includes children rolled up)
-          totalARR: customerAccounts.reduce((sum, a) => sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || 0), 0),
+          // Total ARR: Only sum parent customer accounts using single source of truth
+          totalARR: customerAccounts.reduce((sum, a) => sum + getAccountARR(a), 0),
           withCRE: opportunitiesWithCRE,
           renewals
         },
@@ -580,8 +581,8 @@ class BuildDataService {
           }
         });
 
-        // Use hierarchy_bookings_arr_converted for ARR and calculated_atr from opportunities for ATR
-        const totalARR = repAccounts.reduce((sum, acc) => sum + (acc.hierarchy_bookings_arr_converted || acc.calculated_arr || 0), 0);
+        // Use single source of truth for ARR calculation
+        const totalARR = repAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
         const totalATR = repOpportunities.reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0);
         
         // Separate parent and child accounts for accurate workload calculation
@@ -678,9 +679,7 @@ class BuildDataService {
         return false;
       });
       
-      const arrLoad = repAccounts.reduce((sum, a) => 
-        sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || 0), 0
-      );
+      const arrLoad = repAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
       
       return { rep, arrLoad };
     });
@@ -866,8 +865,8 @@ class BuildDataService {
       const rep = repsByRepId.get(ownerId);
       if (!rep) return;
       
-      // Classify account tier from employee count (official definition)
-      const accountTier = this.classifyAccountTierByEmployees(account.employees);
+      // Classify account tier from employee count (from @/_domain)
+      const accountTier = classifyTeamTier(account.employees) || 'Standard';
       const repTier = rep.team_tier || 'Standard';
       
       // Normalize tier names
@@ -1010,14 +1009,14 @@ class BuildDataService {
     
     return ARR_BUCKETS.map(bucket => {
       const inBucket = parentAccounts.filter(a => {
-        const arr = a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr || 0;
+        const arr = getAccountARR(a);
         return arr >= bucket.min && arr < bucket.max;
       });
       
       return {
         bucket: bucket.label,
         count: inBucket.length,
-        totalARR: inBucket.reduce((sum, a) => sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr || 0), 0)
+        totalARR: inBucket.reduce((sum, a) => sum + getAccountARR(a), 0)
       };
     });
   }
@@ -1044,20 +1043,7 @@ class BuildDataService {
     };
   }
 
-  /**
-   * Classify account tier based on employee count (official definition)
-   * SMB: < 100 employees
-   * Growth: 100-499 employees
-   * MM: 500-1499 employees
-   * ENT: 1500+ employees
-   */
-  private classifyAccountTierByEmployees(employees: number | null | undefined): string {
-    if (employees === null || employees === undefined) return 'Standard';
-    if (employees < 100) return 'SMB';
-    if (employees < 500) return 'Growth';
-    if (employees < 1500) return 'MM';
-    return 'ENT';
-  }
+  // Tier classification: uses classifyTeamTier from @/_domain (single source of truth)
 
   /**
    * Calculate Tier Alignment Breakdown - shows exact matches vs mismatches
@@ -1086,8 +1072,8 @@ class BuildDataService {
         return;
       }
       
-      // Classify account tier from employee count (official definition)
-      const accountTier = this.classifyAccountTierByEmployees(account.employees);
+      // Classify account tier from employee count (from @/_domain)
+      const accountTier = classifyTeamTier(account.employees) || 'Standard';
       const repTier = rep.team_tier || 'Standard';
       
       // Normalize tier names
@@ -1157,7 +1143,7 @@ class BuildDataService {
       const customers = regionAccounts.filter(a => (a.hierarchy_bookings_arr_converted || 0) > 0);
       const prospects = regionAccounts.filter(a => (a.hierarchy_bookings_arr_converted || 0) === 0);
       
-      const arr = customers.reduce((sum, a) => sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || 0), 0);
+      const arr = customers.reduce((sum, a) => sum + getAccountARR(a), 0);
       
       // ATR and Pipeline from opportunities linked to accounts in this region
       const regionAccountIds = new Set(regionAccounts.map(a => a.sfdc_account_id));
@@ -1274,9 +1260,7 @@ class BuildDataService {
         );
         
         // Calculate ARR from parent customer accounts
-        const arr = parentCustomerAccounts.reduce((sum, a) => 
-          sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || 0), 0
-        );
+        const arr = parentCustomerAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
         
         // Calculate ATR: use account fields first, fall back to opportunities if empty/0
         const atr = repParentAccounts.reduce((sum, a) => {
@@ -1417,7 +1401,7 @@ class BuildDataService {
         accounts: parentAccounts.length,
         customers: customers.length,
         prospects: prospects.length,
-        arr: customers.reduce((sum, a) => sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || 0), 0),
+        arr: customers.reduce((sum, a) => sum + getAccountARR(a), 0),
         // ATR: use account fields first, fall back to opportunities if empty/0
         atr: (() => {
           const accountATR = parentAccounts.reduce((sum, a) => sum + (a.calculated_atr || a.atr || 0), 0);

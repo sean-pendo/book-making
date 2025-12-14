@@ -15,3 +15,7 @@ COMMENT ON COLUMN sales_reps.is_backfill_target IS 'True if this rep was auto-cr
 COMMENT ON COLUMN sales_reps.backfill_target_rep_id IS 'The rep_id (SFDC ID) of the backfill rep that will receive this leaving reps accounts';
 COMMENT ON COLUMN sales_reps.is_placeholder IS 'True if this rep has an auto-generated ID (open headcount without SFDC ID)';
 
+
+
+
+

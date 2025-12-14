@@ -1,0 +1,533 @@
+# Book Builder - Business Logic & System Reference
+
+> **Version**: 1.3.1  
+> **Last Updated**: 2025-12-14  
+> **Status**: DRAFT - Pending User Confirmation  
+> **Purpose**: Single source of truth for all business rules, paired with `src/domain/` code implementation
+
+---
+
+## Table of Contents
+
+### Part 1: Core Business Definitions
+1. [Glossary & Terminology](#1-glossary--terminology)
+2. [Revenue Metrics](#2-revenue-metrics)
+3. [Account Classification](#3-account-classification)
+4. [Geography & Territories](#4-geography--territories)
+5. [Team Tiers](#5-team-tiers)
+6. [Data Normalization](#6-data-normalization)
+
+### Part 2: App-Specific Logic
+7. [Data Import Flow](#7-data-import-flow)
+8. [Assignment Engine](#8-assignment-engine)
+9. [Optimization Model](#9-optimization-model)
+10. [Balancing & Thresholds](#10-balancing--thresholds)
+
+### Part 3: Audit & Conflicts
+11. [Current Conflicts (v1.3)](#11-current-conflicts-v13)
+12. [Refactoring Plan](#12-refactoring-plan)
+
+---
+
+# Part 1: Core Business Definitions
+
+These are the raw business rules that define terminology and calculations. They exist independently of the app implementation.
+
+---
+
+## 1. Glossary & Terminology
+
+| Term | Full Name | Definition |
+|------|-----------|------------|
+| **ARR** | Annual Recurring Revenue | Actual contracted revenue from existing customers |
+| **ATR** | Available To Renew | Revenue coming up for renewal (timing, NOT risk) |
+| **CRE** | Customer Renewal at Risk | Accounts flagged as churn risk (separate from ATR) |
+| **Pipeline** | Prospect Pipeline | Potential revenue from open opportunities (not yet closed) |
+| **Parent Account** | Ultimate Parent | Top-level account in a corporate hierarchy |
+| **Child Account** | Subsidiary | Account that belongs to a parent hierarchy |
+| **Split Ownership** | | When a child account has a different owner than its parent |
+| **Strategic Account** | | High-value accounts assigned to dedicated Strategic reps. Always stays with strategic reps, no capacity limits apply. |
+| **PE Firm** | Private Equity | Accounts owned by specific PE firms may have special handling rules |
+
+### Important Distinctions
+
+- **ARR vs Pipeline**: ARR is real revenue (customers). Pipeline is potential (prospects). Never mix.
+- **ATR vs CRE**: ATR = timing (when does revenue renew). CRE = risk (might churn). Independent metrics.
+- **Parent vs Child**: Business relationship, not data hierarchy. A parent can be a customer while child is prospect.
+
+---
+
+## 2. Revenue Metrics
+
+### 2.1 ARR Calculation
+
+**Rule**: Same priority chain for ALL accounts to prevent double-counting.
+
+**Priority Order**:
+1. `hierarchy_bookings_arr_converted` - FIRST (prevents double-counting from children)
+2. `calculated_arr` - Fallback with adjustments
+3. `arr` - Raw import value, last resort
+4. `0` - Default if no data
+
+```typescript
+// Same logic for ALL accounts
+function getAccountARR(account) {
+  return account.hierarchy_bookings_arr_converted || account.calculated_arr || account.arr || 0;
+}
+```
+
+**Why hierarchy_bookings first?**
+- Children share the parent's `hierarchy_bookings_arr_converted` value
+- Using `calculated_arr` first could cause double-counting when summing across a hierarchy
+- This ensures consistent totals regardless of how accounts are grouped
+
+### 2.2 ATR Calculation
+
+**Rule**: ATR = SUM of `available_to_renew` from **Renewal opportunities only**
+
+```typescript
+ATR = SUM(opportunities.available_to_renew) 
+      WHERE opportunity_type = 'Renewals'
+```
+
+**Critical**: 
+- Only include opportunities where `opportunity_type` (case-insensitive) equals "Renewals"
+- Other opportunity types (New Business, Expansion, etc.) do NOT count toward ATR
+- ATR is about timing, not risk
+
+### 2.3 Pipeline Calculation
+
+**Rule**: Pipeline = SUM of `net_arr` from prospect account opportunities
+
+```typescript
+Pipeline = SUM(opportunities.net_arr)
+           WHERE account.is_customer = false
+```
+
+**Fallback**: If `net_arr` is null, use `amount` field.
+
+---
+
+## 3. Account Classification
+
+### 3.1 Customer vs Prospect
+
+| Type | Definition | Identifying Logic |
+|------|------------|-------------------|
+| **Customer** | Account with existing revenue | Any ARR > 0 |
+| **Prospect** | Account without existing revenue | No positive ARR |
+
+```typescript
+function isCustomer(account) {
+  if (account.is_parent) {
+    return (account.hierarchy_bookings_arr_converted || 0) > 0;
+  }
+  return (account.calculated_arr || account.arr || 0) > 0;
+}
+```
+
+### 3.2 Parent vs Child
+
+| Type | Definition | Identifying Logic |
+|------|------------|-------------------|
+| **Parent** | Top of hierarchy | `ultimate_parent_id` is null/empty |
+| **Child** | Belongs to parent | `ultimate_parent_id` has a value |
+
+```typescript
+function isParentAccount(account) {
+  return !account.ultimate_parent_id || account.ultimate_parent_id.trim() === '';
+}
+```
+
+### 3.3 Split Ownership
+
+When a child account has a **different owner** than its parent:
+- The child's ARR is counted separately for the child's owner
+- The parent's `hierarchy_bookings_arr_converted` does NOT include this child's ARR
+- Both owners have the account in their book for different metrics
+
+---
+
+## 4. Geography & Territories
+
+### 4.1 Region Hierarchy
+
+**AMER** (Americas - includes Canada)
+```
+AMER
+├── North East (NY, MA, PA, NJ, CT, etc. + Quebec, Ontario)
+├── South East (TX, FL, GA, NC, VA, DC, etc.)
+├── Central (IL, OH, CO, MN, MI, etc. + Alberta)
+└── West (CA, WA, OR, AZ, etc. + British Columbia)
+
+EMEA (Europe, Middle East, Africa)
+├── UK (United Kingdom, Ireland)
+├── DACH (Germany, Austria, Switzerland)
+├── France
+├── Nordics (Sweden, Norway, Denmark, Finland)
+├── Southern Europe (Spain, Italy, Portugal)
+├── Benelux (Netherlands, Belgium, Luxembourg)
+├── Middle East
+└── Africa
+
+APAC (Asia Pacific)
+├── ANZ (Australia, New Zealand)
+├── Japan
+├── Southeast Asia (Singapore, Malaysia, Thailand, Vietnam, Philippines, Indonesia)
+├── India
+├── Greater China (China, Hong Kong, Taiwan)
+└── Korea
+```
+
+### 4.2 Territory-to-Region Mapping
+
+Accounts have a `sales_territory` field with free-text values. We map these to regions:
+
+| Territory Value | Maps To | Rule |
+|-----------------|---------|------|
+| "California", "CA", "San Francisco" | West | State/city name |
+| "NYC", "New York", "Boston" | North East | City name |
+| "Texas", "Dallas", "Houston" | South East | State/city name |
+| "Chicago", "IL", "Midwest" | Central | State/city/keyword |
+| "UK", "London", "Britain" | UK | Country/city name |
+| "Global", "Worldwide" | UNMAPPED | Requires manual mapping |
+
+**Priority Order for Matching**:
+1. Keywords (most specific) - e.g., "PAC NW" → West
+2. Cities - e.g., "San Francisco" → West
+3. State codes - e.g., "CA" → West
+
+### 4.3 Geo Match Scoring (Hierarchy-Based)
+
+Geography matching rewards **specificity**. More specific matches score higher:
+
+```
+HIERARCHY (most specific at bottom):
+─────────────────────────────────────
+Global (can take anything)
+├── AMER / EMEA / APAC (Parent Region)
+│   ├── North East / UK / ANZ (Sub-Region)
+│   │   └── NYC / Boston / etc. (Territory - most specific)
+```
+
+| Match Type | Score | Example |
+|------------|-------|---------|
+| **Exact Match** | 1.00 | Account "North East" → Rep "North East" |
+| **Same Sub-Region** | 0.85 | Account "NYC" → Rep "North East" (NYC maps to NE) |
+| **Same Parent** | 0.65 | Account "North East" → Rep "AMER" |
+| **Global Fallback** | 0.40 | Account "NYC" → Rep "Global" |
+| **Cross-Region** | 0.20 | Account "West" → Rep "EMEA" (avoid!) |
+| **Unknown** | 0.50 | Can't determine territory |
+
+**Key Principle**: The optimization model should reward specificity. 
+- NYC account → NYC rep is ideal (1.0)
+- NYC account → North East rep is good (0.85) 
+- NYC account → AMER rep is acceptable (0.65)
+- NYC account → Global rep is last resort (0.40)
+- France account → France rep (exact) → EMEA rep (parent fallback)
+
+---
+
+## 5. Team Tiers
+
+### 5.1 Team Tier (Employee-Based)
+
+| Tier | Employee Count | Rep Specialization |
+|------|----------------|-------------------|
+| **SMB** | < 100 employees | Small Business |
+| **Growth** | 100-499 employees | Scaling companies |
+| **MM** | 500-1,499 employees | Mid-Market |
+| **ENT** | 1,500+ employees | Enterprise |
+| **(null)** | Unknown/unmapped | No tier assigned |
+
+```typescript
+const TIER_THRESHOLDS = {
+  SMB_MAX: 99,
+  GROWTH_MAX: 499,
+  MM_MAX: 1499
+};
+
+function classifyTeamTier(employees) {
+  // Unknown employees → null (don't force a tier on unmapped fields)
+  if (employees == null) return null;
+  if (employees <= 99) return 'SMB';
+  if (employees <= 499) return 'Growth';
+  if (employees <= 1499) return 'MM';
+  return 'ENT';
+}
+```
+
+**Null Handling**: If employee count is unknown, return `null` rather than forcing a tier. Let the consumer decide how to handle unmapped fields.
+
+### 5.2 Expansion Tier (Scoring-Based)
+
+| Tier | Meaning | Used For |
+|------|---------|----------|
+| **Tier 1** | Highest priority | High expansion potential |
+| **Tier 2** | Medium priority | Standard accounts |
+| **Tier 3** | Lower priority | Smaller opportunity |
+| **Tier 4** | Lowest priority | Minimal potential |
+
+Source fields: `expansion_tier` (customers) or `initial_sale_tier` (prospects)
+
+---
+
+## 6. Data Normalization
+
+Imported data contains typos and variations. These are normalized on import.
+
+### 6.1 Region Aliases
+
+| Raw Import | Normalized To |
+|------------|---------------|
+| "NYC", "New York", "NY" | North East |
+| "California", "CA", "SF" | West |
+| "Texas", "TX", "Dallas" | South East |
+| "Chicago", "IL", "Midwest" | Central |
+| "Global", "Worldwide" | UNMAPPED |
+
+### 6.2 PE Firm Aliases
+
+| Raw Import | Normalized To |
+|------------|---------------|
+| "JMI", "JMI Equity" | JMI Private Equity |
+| "Vista", "Vista Equity" | Vista Equity Partners |
+| "TPG", "TPG Capital" | TPG Capital |
+
+### 6.3 Team Tier Aliases
+
+| Raw Import | Normalized To |
+|------------|---------------|
+| "small", "small business" | SMB |
+| "grwth" (typo) | Growth |
+| "mid market", "mid-market" | MM |
+| "enterprise", "large" | ENT |
+
+---
+
+# Part 2: App-Specific Logic
+
+These rules are specific to how the Book Builder application works.
+
+---
+
+## 7. Data Import Flow
+
+### 7.1 Import Pipeline
+
+```
+CSV File → Parse → Validate → Normalize → Insert to Supabase
+```
+
+### 7.2 Import Tables
+
+| Data Type | Table | Key Fields |
+|-----------|-------|------------|
+| Accounts | `accounts` | `sfdc_account_id`, `build_id` |
+| Sales Reps | `sales_reps` | `rep_id`, `build_id` |
+| Opportunities | `opportunities` | `sfdc_opportunity_id`, `build_id` |
+
+### 7.3 Post-Import Calculations
+
+After import, database functions compute:
+- `calculated_arr`: ARR with opportunity adjustments
+- `calculated_atr`: ATR rolled up from opportunities
+- `is_parent`: Based on `ultimate_parent_id`
+- `child_count`: Number of child accounts
+
+---
+
+## 8. Assignment Engine
+
+### 8.1 Priority Waterfall
+
+Assignments are processed in priority order. Each level runs before the next:
+
+| Priority | Name | Type | Description |
+|----------|------|------|-------------|
+| **P0** | Manual Holdover | Holdover | Locked accounts stay put, strategic → strategic reps |
+| **P1** | Sales Tools Bucket | Holdover | Low-ARR customers (<$25K) → Sales Tools |
+| **P2** | Stability Accounts | Holdover | CRE risk, renewal soon, PE firm, recent change |
+| **P3** | Team Alignment | Optimization | Match account tier to rep tier |
+| **P4** | Geo + Continuity | Optimization | Current owner if geography matches |
+| **P5** | Continuity | Optimization | Prefer current owner |
+| **P6** | Geography | Optimization | Match territory to region |
+| **P7** | Residual | Optimization | Balance remaining accounts |
+
+### 8.2 Holdover vs Optimization
+
+- **Holdover**: Account is LOCKED to current owner. Runs before optimization.
+- **Optimization**: Account is available for reassignment. LP solver decides.
+
+### 8.3 Stability Lock Conditions
+
+Accounts are locked (stay with current owner) if:
+- `exclude_from_reassignment = true` (manual lock)
+- `is_strategic = true` (strategic accounts)
+- `cre_risk = true` (at-risk for churn)
+- `renewal_date` within 90 days
+- `pe_firm` is set (PE-owned accounts)
+- `owner_change_date` within 90 days (recent change)
+
+---
+
+## 9. Optimization Model
+
+### 9.1 Solver
+
+The app uses **HiGHS** (open-source LP solver) for account assignment.
+
+### 9.2 Objective Function
+
+Maximize total assignment quality:
+```
+Maximize: Σ (account_weight × rep_score × assignment_variable)
+```
+
+Where `rep_score` combines:
+- Continuity score (tenure with current owner)
+- Geography score (territory match)
+- Team alignment score (tier match)
+
+### 9.3 Scoring Functions
+
+#### Continuity Score
+```
+Score = base + tenure_weight×T + stability_weight×B + value_weight×V
+
+Where:
+- T = min(days_owned / 730, 1.0)  // 2 year cap
+- B = 1 - (owner_count / 5)       // Fewer owners = more stable
+- V = min(ARR / 2000000, 1.0)     // $2M cap
+```
+
+#### Geography Score
+See [Section 4.3](#43-geo-match-scoring)
+
+#### Team Alignment Score
+```
+Score = 1.0 - (tier_distance × 0.20)
+
+Where tier_distance = |account_tier_index - rep_tier_index|
+```
+
+### 9.4 Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| **One Rep Per Account** | Each account assigned to exactly one rep |
+| **Capacity Limits** | Rep can't exceed ARR/ATR max |
+| **Strategic Pool** | Strategic accounts → strategic reps only |
+| **Parent-Child Linking** | (Optional) Parent and children same owner |
+
+### 9.5 Balance Penalties
+
+The solver penalizes imbalance:
+```
+Penalty = deviation_from_target × penalty_weight
+```
+
+| Metric | Default Penalty | Default Variance |
+|--------|-----------------|------------------|
+| ARR | 1.0 | ±25% |
+| ATR | 1.0 | ±25% |
+| Pipeline | 1.0 | ±25% |
+| Account Count | 0.5 | ±15% |
+
+---
+
+## 10. Balancing & Thresholds
+
+### 10.1 Balance Targets
+
+```
+Target per Rep = Total Value / Number of Active Reps
+```
+
+### 10.2 Variance Bands
+
+| Metric | Min | Max |
+|--------|-----|-----|
+| ARR | Target × 0.75 | Target × 1.25 |
+| ATR | Target × 0.75 | Target × 1.25 |
+| Pipeline | Target × 0.75 | Target × 1.25 |
+| Accounts | Target × 0.85 | Target × 1.15 |
+
+### 10.3 Threshold Overrides
+
+Users can override calculated thresholds in `assignment_configuration`:
+- `arr_min_override`, `arr_max_override`
+- `atr_min_override`, `atr_max_override`
+- `pipeline_min_override`, `pipeline_max_override`
+
+---
+
+# Part 3: Audit & Conflicts
+
+## 11. Current Conflicts (v1.3)
+
+### 11.1 ARR Calculation Conflicts
+
+| File | Logic |
+|------|-------|
+| `domain/calculations.ts` | Parent: `calculated_arr → hierarchy → arr` |
+| `buildDataService.ts` | `hierarchy → calculated_arr` (different order) |
+| `rebalancingAssignmentService.ts` | `calculated_arr → arr` (missing hierarchy) |
+
+**Resolution**: Update all to use user's confirmed rule (Parent = hierarchy, Child = calculated_arr)
+
+### 11.2 Region Hierarchy Conflicts
+
+| File | APAC Regions |
+|------|--------------|
+| `domain/geography.ts` | ANZ, Japan, Southeast Asia, India |
+| `optimization/types.ts` | ANZ, Japan, Singapore (missing India) |
+
+**Resolution**: Use full list (ANZ, Japan, Southeast Asia, India)
+
+### 11.3 Duplicate Files
+
+| Duplicate | Source of Truth |
+|-----------|-----------------|
+| `utils/accountCalculations.ts` | `domain/calculations.ts` |
+| `utils/territoryAutoMapping.ts` | `domain/geography.ts` |
+
+**Resolution**: Delete duplicates, update imports
+
+---
+
+## 12. Refactoring Plan
+
+### Phase 1: Confirm This Document
+- [ ] User reviews and confirms all business rules
+- [ ] Resolve any remaining questions
+
+### Phase 2: Update Domain Module
+- [ ] Update `src/domain/calculations.ts` with confirmed ARR logic
+- [ ] Update `src/domain/geography.ts` with confirmed regions
+- [ ] Ensure `src/domain/` matches this document exactly
+
+### Phase 3: Delete Duplicates
+- [ ] Delete `src/utils/accountCalculations.ts`
+- [ ] Delete `src/utils/territoryAutoMapping.ts`
+- [ ] Remove duplicate constants from `optimization/types.ts`
+
+### Phase 4: Update Imports
+- [ ] Change 12 files from `@/utils/accountCalculations` → `@/domain`
+- [ ] Update inline logic in services to use domain functions
+
+### Phase 5: Enforce Going Forward
+- [ ] Update `CURSOR.mdc` with mandatory reading rule
+- [ ] Add quick reference glossary to rules
+
+---
+
+## Appendix: Code Locations
+
+| Concept | Source of Truth | Paired Doc Section |
+|---------|-----------------|-------------------|
+| ARR/ATR Calculation | `src/domain/calculations.ts` | Section 2 |
+| Team Tiers | `src/domain/tiers.ts` | Section 5 |
+| Geography | `src/domain/geography.ts` | Section 4 |
+| Constants | `src/domain/constants.ts` | Sections 5, 10 |
+| Normalization | `src/domain/normalization.ts` | Section 6 |

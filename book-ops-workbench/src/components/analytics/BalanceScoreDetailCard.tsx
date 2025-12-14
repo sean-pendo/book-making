@@ -301,3 +301,10 @@ export const BalanceScoreDetailCard: React.FC<BalanceScoreDetailCardProps> = ({
 
 export default BalanceScoreDetailCard;
 
+
+
+
+
+
+
+

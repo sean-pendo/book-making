@@ -1,4 +1,10 @@
-import { autoMapTerritoryToRegion } from '@/utils/territoryAutoMapping';
+import { 
+  autoMapTerritoryToRegion, 
+  REGION_ANCESTRY, 
+  REGION_SIBLINGS,
+  classifyTeamTier,
+  getAccountARR
+} from '@/_domain';
 import { getDefaultPriorityConfig, PriorityConfig, SubConditionConfig } from '@/config/priorityRegistry';
 
 /**
@@ -113,49 +119,7 @@ const PRIORITY_NAMES: Record<string, string> = {
  * Score decreases by 25 points per level of hierarchy.
  * Example: Central account -> West rep = 50 points (sibling under AMER)
  */
-const REGION_HIERARCHY: Record<string, string[]> = {
-  // AMER Sub-regions (actual data from territoryAutoMapping.ts)
-  'North East': ['AMER', 'Global'],
-  'South East': ['AMER', 'Global'],
-  'Central': ['AMER', 'Global'],
-  'West': ['AMER', 'Global'],
-  'Other': ['Global'],  // International/Other territories
-  'AMER': ['Global'],
-  // EMEA Sub-regions
-  'UK': ['EMEA', 'Global'],
-  'UKI': ['EMEA', 'Global'],
-  'DACH': ['EMEA', 'Global'],
-  'France': ['EMEA', 'Global'],
-  'Nordics': ['EMEA', 'Global'],
-  'Benelux': ['EMEA', 'Global'],
-  'RO-EMEA': ['EMEA', 'Global'],
-  'EMEA': ['Global'],
-  // APAC Sub-regions
-  'ANZ': ['APAC', 'Global'],
-  'Japan': ['APAC', 'Global'],
-  'Singapore': ['APAC', 'Global'],
-  'RO-APAC': ['APAC', 'Global'],
-  'APAC': ['Global'],
-  // Global (no fallback - accepts everything)
-  'Global': []
-};
-
-/**
- * Sibling regions - regions at the same level that share a parent.
- * Used by getGeographyScore() to give partial credit when
- * an account goes to a neighboring region (e.g., Central -> West).
- */
-const REGION_SIBLINGS: Record<string, string[]> = {
-  'North East': ['South East', 'Central', 'West'],
-  'South East': ['North East', 'Central', 'West'],
-  'Central': ['North East', 'South East', 'West'],
-  'West': ['North East', 'South East', 'Central'],
-  'UK': ['DACH', 'France', 'Nordics', 'Benelux'],
-  'DACH': ['UK', 'France', 'Nordics', 'Benelux'],
-  'France': ['UK', 'DACH', 'Nordics', 'Benelux'],
-  'Nordics': ['UK', 'DACH', 'France', 'Benelux'],
-  'Benelux': ['UK', 'DACH', 'France', 'Nordics'],
-};
+// REGION_ANCESTRY and REGION_SIBLINGS imported from @/_domain
 
 /**
  * Format priority label for display
@@ -167,19 +131,7 @@ function formatPriorityLabel(priorityId: string, priorityLevel: number): string 
   return `P${priorityLevel}: ${friendlyName}`;
 }
 
-/**
- * Classify account into team tier based on employee count
- * SMB: < 100 employees
- * Growth: 100-499 employees
- * MM: 500-1499 employees
- * ENT: 1500+ employees
- */
-function classifyAccountTeamTier(employees: number | null | undefined): TeamTier {
-  if (!employees || employees < 100) return 'SMB';
-  if (employees < 500) return 'Growth';
-  if (employees < 1500) return 'MM';
-  return 'ENT';
-}
+// classifyTeamTier imported from @/_domain
 
 /**
  * Calculate team alignment penalty based on tier distance
@@ -462,8 +414,8 @@ export class WaterfallAssignmentEngine {
         const bNetARR = this.opportunitiesMap.get(b.sfdc_account_id) || 0;
         return bNetARR - aNetARR; // Higher Net ARR first
       } else {
-        const aARR = this.getEffectiveARR(a);
-        const bARR = this.getEffectiveARR(b);
+        const aARR = getAccountARR(a);
+        const bARR = getAccountARR(b);
         return bARR - aARR;
       }
     });
@@ -525,7 +477,7 @@ export class WaterfallAssignmentEngine {
       } else {
         // Force assign each remaining account to least loaded rep
         for (const account of remainingAccounts) {
-          const accountARR = this.getEffectiveARR(account);
+          const accountARR = getAccountARR(account);
           const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
           
           // Find least loaded rep based on assignment type
@@ -710,7 +662,7 @@ export class WaterfallAssignmentEngine {
     };
     
     for (const account of accounts) {
-      const accountARR = account.hierarchy_bookings_arr_converted || account.calculated_arr || account.arr || 0;
+      const accountARR = getAccountARR(account);
       
       if (accountARR < salesToolsThreshold) {
         assigned.push({
@@ -781,10 +733,10 @@ export class WaterfallAssignmentEngine {
       
       for (const account of accounts) {
         const eligibleReps = eligibleRepsPerAccount.get(account.sfdc_account_id) || [];
-        const accountARR = this.getEffectiveARR(account);
+        const accountARR = getAccountARR(account);
         
         // Classify account for team alignment
-        const accountTier = classifyAccountTeamTier(account.employees);
+        const accountTier = classifyTeamTier(account.employees);
         
         for (const rep of eligibleReps) {
           const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(rep.rep_id)}`;
@@ -849,7 +801,7 @@ export class WaterfallAssignmentEngine {
           const eligibleReps = eligibleRepsPerAccount.get(account.sfdc_account_id) || [];
           if (eligibleReps.some(r => r.rep_id === repId)) {
             const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(repId)}`;
-            const arr = this.getEffectiveARR(account);
+            const arr = getAccountARR(account);
             if (arr > 0) {
               arrTerms.push(`${arr} ${varName}`);
             }
@@ -884,7 +836,7 @@ export class WaterfallAssignmentEngine {
             if (!eligibleReps.some(r => r.rep_id === repId)) continue;
             
             const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(repId)}`;
-            const accountTier = classifyAccountTeamTier(account.employees);
+            const accountTier = classifyTeamTier(account.employees);
             
             if (accountTier === repTier) {
               // Matching tier: coefficient = (1 - minPct)
@@ -950,7 +902,7 @@ export class WaterfallAssignmentEngine {
           for (const rep of eligibleReps) {
             const expectedVar = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(rep.rep_id)}`;
             if (varName === expectedVar) {
-              const accountARR = this.getEffectiveARR(account);
+              const accountARR = getAccountARR(account);
               const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
               
               const accountWarnings: AssignmentWarning[] = [];
@@ -1015,7 +967,7 @@ export class WaterfallAssignmentEngine {
           return currentLoad < bestLoad ? current : best;
         });
         
-        const accountARR = this.getEffectiveARR(account);
+        const accountARR = getAccountARR(account);
         const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
         
         const accountWarnings: AssignmentWarning[] = [];
@@ -1079,7 +1031,7 @@ export class WaterfallAssignmentEngine {
         continue;
       }
       
-      const accountARR = this.getEffectiveARR(account);
+      const accountARR = getAccountARR(account);
       
       // Check if current owner has capacity
       if (this.hasCapacity(currentOwner.rep_id, accountARR, account.cre_count, account, currentOwner)) {
@@ -1133,7 +1085,7 @@ export class WaterfallAssignmentEngine {
     const accountsWithoutOptions: Account[] = [];
     
     for (const account of accounts) {
-      const accountARR = this.getEffectiveARR(account);
+      const accountARR = getAccountARR(account);
       
       // Find eligible reps in SAME GEOGRAPHY with capacity
       const eligibleReps = allReps.filter(rep =>
@@ -1195,7 +1147,7 @@ export class WaterfallAssignmentEngine {
         continue;
       }
       
-      const accountARR = this.getEffectiveARR(account);
+      const accountARR = getAccountARR(account);
       
       // Check if current owner has capacity
       if (this.hasCapacity(currentOwner.rep_id, accountARR, account.cre_count, account, currentOwner)) {
@@ -1253,7 +1205,7 @@ export class WaterfallAssignmentEngine {
     const accountsWithoutOptions: Account[] = [];
     
     for (const account of accounts) {
-      const accountARR = this.getEffectiveARR(account);
+      const accountARR = getAccountARR(account);
       
       // Find all eligible reps with capacity (any geography)
       const eligibleReps = allReps.filter(rep =>
@@ -1309,7 +1261,7 @@ export class WaterfallAssignmentEngine {
    * Used by handleManualHoldover()
    */
   private assignStrategicAccount(account: Account, allReps: SalesRep[]): AssignmentProposal | null {
-    const accountARR = this.getEffectiveARR(account);
+    const accountARR = getAccountARR(account);
     const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
     
     const strategicReps = allReps.filter(rep => 
@@ -1366,7 +1318,7 @@ export class WaterfallAssignmentEngine {
   // ========== LEGACY SINGLE ACCOUNT METHOD (kept for reference) ==========
 
   private assignSingleAccount(account: Account, allReps: SalesRep[]): AssignmentProposal {
-    const accountARR = this.getEffectiveARR(account);
+    const accountARR = getAccountARR(account);
     const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
     const accountIsStrategic = this.isStrategicAccount(account);
 
@@ -1694,25 +1646,7 @@ export class WaterfallAssignmentEngine {
     };
   }
 
-  /**
-   * Get effective ARR for an account - uses hierarchy_bookings_arr_converted as primary source
-   * Falls back through: hierarchy_bookings_arr_converted → calculated_arr (if > 0) → arr → 0
-   */
-  private getEffectiveARR(account: Account): number {
-    // Priority 1: hierarchy_bookings_arr_converted (aggregated from hierarchy)
-    if (account.hierarchy_bookings_arr_converted && account.hierarchy_bookings_arr_converted > 0) {
-      return account.hierarchy_bookings_arr_converted;
-    }
-    // Priority 2: calculated_arr (if actually populated with a real value)
-    if (account.calculated_arr && account.calculated_arr > 0) {
-      return account.calculated_arr;
-    }
-    // Priority 3: arr (direct field)
-    if (account.arr && account.arr > 0) {
-      return account.arr;
-    }
-    return 0;
-  }
+  // ARR calculation: uses getAccountARR from @/_domain (single source of truth)
 
   private isStrategicAccount(account: Account): boolean {
     // Strategic accounts are those currently owned by strategic reps
@@ -1818,7 +1752,7 @@ export class WaterfallAssignmentEngine {
     }
     
     // Check hierarchy for parent matches
-    const hierarchy = REGION_HIERARCHY[targetRegion] || [];
+    const hierarchy = REGION_ANCESTRY[targetRegion] || [];
     const repRegionLower = repRegion.toLowerCase();
     
     for (let level = 0; level < hierarchy.length; level++) {
@@ -1829,7 +1763,7 @@ export class WaterfallAssignmentEngine {
     }
     
     // Check if they share a common parent (different branches)
-    const repHierarchy = REGION_HIERARCHY[repRegion] || [];
+    const repHierarchy = REGION_ANCESTRY[repRegion] || [];
     for (const parent of hierarchy) {
       if (repHierarchy.includes(parent)) {
         return 35; // Different branches but same macro-region
@@ -2051,7 +1985,7 @@ export class WaterfallAssignmentEngine {
 
   private updateWorkload(repId: string, account: Account) {
     const workload = this.workloadMap.get(repId)!;
-    const accountARR = this.getEffectiveARR(account);
+    const accountARR = getAccountARR(account);
     
     // For prospects, track Net ARR separately from account ARR
     if (this.assignmentType === 'prospect') {

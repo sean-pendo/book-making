@@ -28,13 +28,15 @@ export { PureOptimizationEngine, runPureOptimization } from './pureOptimizationE
 // Scoring functions
 export { continuityScore, explainContinuityScore } from './scoring/continuityScore';
 export { geographyScore, getParentRegion, getMappedRegion, areSiblingRegions, explainGeographyScore } from './scoring/geographyScore';
-export { teamAlignmentScore, classifyAccountTier, getTierIndex, explainTeamAlignmentScore } from './scoring/teamAlignmentScore';
+export { teamAlignmentScore, getTierIndex, explainTeamAlignmentScore } from './scoring/teamAlignmentScore';
+// Note: classifyTeamTier should be imported from @/_domain instead
 
 // Utilities
 export { normalizeWeights, adjustLinkedWeights, areWeightsNormalized, formatWeights } from './utils/weightNormalizer';
 
 // Preprocessing
-export { loadBuildData, getAccountARR } from './preprocessing/dataLoader';
+export { loadBuildData } from './preprocessing/dataLoader';
+// Note: getAccountARR should be imported from @/_domain instead
 export { cascadeToChildren } from './preprocessing/parentChildAggregator';
 export { assignStrategicPool } from './preprocessing/strategicPoolHandler';
 

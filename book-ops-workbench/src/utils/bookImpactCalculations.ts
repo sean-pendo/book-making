@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { getAccountARR } from '@/_domain';
 
 export interface BookImpact {
   // Accounts (parent accounts only)
@@ -134,24 +135,18 @@ export async function calculateBookImpact(
   });
   const accounts = Array.from(accountsMap.values());
 
-  // 3. Calculate before/after
-  const getARR = (acc: any): number => {
-    return parseFloat(acc.hierarchy_bookings_arr_converted) ||
-           parseFloat(acc.calculated_arr) ||
-           parseFloat(acc.arr) ||
-           0;
-  };
+  // 3. Calculate before/after using centralized ARR logic from @/_domain
 
   // Before: accounts where owner_id is one of our reps
   const beforeAccounts = accounts.filter(acc => repIds.has(acc.owner_id));
-  const arrBefore = beforeAccounts.reduce((sum, acc) => sum + getARR(acc), 0);
+  const arrBefore = beforeAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
 
   // After: accounts where new_owner_id is one of our reps (or owner_id if no new_owner)
   const afterAccounts = accounts.filter(acc => {
     const effectiveOwner = acc.new_owner_id || acc.owner_id;
     return repIds.has(effectiveOwner);
   });
-  const arrAfter = afterAccounts.reduce((sum, acc) => sum + getARR(acc), 0);
+  const arrAfter = afterAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
 
   // 4. Calculate gained and lost
   const beforeIds = new Set(beforeAccounts.map(a => a.sfdc_account_id));
@@ -163,7 +158,7 @@ export async function calculateBookImpact(
     .map(acc => ({
       sfdc_account_id: acc.sfdc_account_id,
       account_name: acc.account_name,
-      arr: getARR(acc),
+      arr: getAccountARR(acc),
       from_owner_name: acc.owner_name,
       is_customer: acc.is_customer || false,
     }));
@@ -174,7 +169,7 @@ export async function calculateBookImpact(
     .map(acc => ({
       sfdc_account_id: acc.sfdc_account_id,
       account_name: acc.account_name,
-      arr: getARR(acc),
+      arr: getAccountARR(acc),
       to_owner_name: acc.new_owner_name,
       is_customer: acc.is_customer || false,
     }));
@@ -187,15 +182,15 @@ export async function calculateBookImpact(
   const customersAfter = afterAccounts.filter(a => a.is_customer).length;
   const customersGained = gainedAccounts.filter(a => a.is_customer).length;
   const customersLost = lostAccounts.filter(a => a.is_customer).length;
-  const customerArrBefore = beforeAccounts.filter(a => a.is_customer).reduce((sum, acc) => sum + getARR(acc), 0);
-  const customerArrAfter = afterAccounts.filter(a => a.is_customer).reduce((sum, acc) => sum + getARR(acc), 0);
+  const customerArrBefore = beforeAccounts.filter(a => a.is_customer).reduce((sum, acc) => sum + getAccountARR(acc), 0);
+  const customerArrAfter = afterAccounts.filter(a => a.is_customer).reduce((sum, acc) => sum + getAccountARR(acc), 0);
   
   const prospectsBefore = beforeAccounts.filter(a => !a.is_customer).length;
   const prospectsAfter = afterAccounts.filter(a => !a.is_customer).length;
   const prospectsGained = gainedAccounts.filter(a => !a.is_customer).length;
   const prospectsLost = lostAccounts.filter(a => !a.is_customer).length;
-  const prospectArrBefore = beforeAccounts.filter(a => !a.is_customer).reduce((sum, acc) => sum + getARR(acc), 0);
-  const prospectArrAfter = afterAccounts.filter(a => !a.is_customer).reduce((sum, acc) => sum + getARR(acc), 0);
+  const prospectArrBefore = beforeAccounts.filter(a => !a.is_customer).reduce((sum, acc) => sum + getAccountARR(acc), 0);
+  const prospectArrAfter = afterAccounts.filter(a => !a.is_customer).reduce((sum, acc) => sum + getAccountARR(acc), 0);
 
   return {
     accountsBefore: beforeAccounts.length,

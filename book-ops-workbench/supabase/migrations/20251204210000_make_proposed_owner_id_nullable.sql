@@ -4,3 +4,7 @@
 ALTER TABLE manager_reassignments 
 ALTER COLUMN proposed_owner_id DROP NOT NULL;
 
+
+
+
+

@@ -1,5 +1,6 @@
 // Enhanced Sales Rep metrics calculations for Territory Balancing
 import { getFiscalQuarter, isCurrentFiscalYear, getFiscalYear, getCurrentFiscalYear } from './fiscalYearCalculations';
+import { getAccountARR } from '@/_domain';
 
 interface Account {
   sfdc_account_id: string;
@@ -110,12 +111,9 @@ export function calculateEnhancedRepMetrics(
       }
     });
 
-    // Step 2: Calculate total ARR from parent accounts
-    // Prioritize hierarchy_bookings_arr_converted as primary ARR source
-    // Convert strings to numbers since PostgreSQL NUMERIC comes as string
+    // Step 2: Calculate total ARR from parent accounts using centralized logic
     const totalARR = parentAccounts.reduce((sum, acc) => {
-      const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
-      return sum + arrValue;
+      return sum + getAccountARR(acc);
     }, 0);
 
     // Step 3: Add ARR from child accounts with split ownership
@@ -130,10 +128,7 @@ export function calculateEnhancedRepMetrics(
         // Only count if child has different owner than parent (split ownership)
         return childOwnerId !== parentOwnerId;
       })
-      .reduce((sum, acc) => {
-        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
-        return sum + arrValue;
-      }, 0);
+      .reduce((sum, acc) => sum + getAccountARR(acc), 0);
 
     // Step 4: Combine parent ARR + split ownership children ARR
     const finalTotalARR = totalARR + splitOwnershipChildrenARR;

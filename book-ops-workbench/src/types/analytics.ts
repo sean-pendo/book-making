@@ -11,6 +11,10 @@
 // CONSTANTS
 // ============================================
 
+/**
+ * ARR bucket definitions for analytics charts.
+ * Used for histogram/distribution visualizations.
+ */
 export const ARR_BUCKETS = [
   { label: '$0-50K', min: 0, max: 50000 },
   { label: '$50K-100K', min: 50000, max: 100000 },
@@ -21,7 +25,15 @@ export const ARR_BUCKETS = [
 
 export type ArrBucketLabel = typeof ARR_BUCKETS[number]['label'];
 
-// Geography scoring weights (from LP engine)
+/**
+ * Geography scoring weights for ANALYTICS VISUALIZATION.
+ * 
+ * NOTE: These are DIFFERENT from @/_domain/constants.ts GEO_MATCH_SCORES
+ * which are used by the assignment engine. These simplified weights
+ * are used for calculating LP success metrics in dashboards.
+ * 
+ * @see @/_domain/constants.ts for assignment engine geo scoring
+ */
 export const GEO_SCORE_WEIGHTS = {
   exact: 1.0,      // Account geo matches rep region exactly
   sibling: 0.6,    // Adjacent/sibling region
@@ -29,7 +41,12 @@ export const GEO_SCORE_WEIGHTS = {
   global: 0.25,    // Fallback global assignment
 } as const;
 
-// Team alignment scoring weights
+/**
+ * Team alignment scoring weights for ANALYTICS VISUALIZATION.
+ * 
+ * NOTE: These are used for calculating LP success metrics.
+ * The actual assignment engine may use different weights.
+ */
 export const TEAM_ALIGNMENT_WEIGHTS = {
   exact: 1.0,      // Account tier matches rep tier exactly
   oneOff: 0.6,     // One tier level difference

@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Search, Download, ChevronUp, ChevronDown, Sparkles, Lock, Unlock, Info, Building2, GitBranch } from 'lucide-react';
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
 import { useToast } from '@/hooks/use-toast';
+import { getAccountARR } from '@/_domain';
 
 interface Account {
   sfdc_account_id: string;
@@ -782,7 +783,7 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                       </TableCell>
                         <TableCell>
                           <div className="font-medium">
-                            {formatCurrency(account.hierarchy_bookings_arr_converted || 0)}
+                            {formatCurrency(getAccountARR(account))}
                           </div>
                         </TableCell>
                       <TableCell>

@@ -118,3 +118,10 @@ export const BeforeAfterBar: React.FC<BeforeAfterBarProps> = ({
 
 export default BeforeAfterBar;
 
+
+
+
+
+
+
+

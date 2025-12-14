@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { calculateSalesRepMetrics, getAccountCustomerStatus } from '@/utils/salesRepCalculations';
-import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
+import { getAccountARR, getAccountATR } from '@/_domain';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -140,13 +140,8 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
 
       if (losingError) throw losingError;
 
-      // Calculate ARR for each account
-      const getARR = (acc: any): number => {
-        return parseFloat(acc.hierarchy_bookings_arr_converted) ||
-               parseFloat(acc.calculated_arr) ||
-               parseFloat(acc.arr) ||
-               0;
-      };
+      // Calculate ARR for each account using @/_domain (single source of truth)
+      const getARR = (acc: any): number => getAccountARR(acc);
 
       // Filter to parent accounts only for cleaner view
       const gainingParents = (gainingAccounts || []).filter(a => 

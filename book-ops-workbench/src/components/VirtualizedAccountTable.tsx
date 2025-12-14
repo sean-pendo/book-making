@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Edit, CheckCircle, UserX, Lock, Unlock, Info, Building2, GitBranch, ChevronUp, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
-import { getAccountARR, getAccountATR, formatCurrency } from '@/utils/accountCalculations';
+import { getAccountARR, getAccountATR, formatCurrency } from '@/_domain';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
@@ -959,7 +959,7 @@ export const VirtualizedAccountTable = ({
                     <TableCell className="text-sm">{formatCurrency(child.arr || 0)}</TableCell>
                   ) : (
                     <>
-                      <TableCell className="text-sm">{formatCurrency(child.hierarchy_bookings_arr_converted || child.arr || 0)}</TableCell>
+                      <TableCell className="text-sm">{formatCurrency(getAccountARR(child))}</TableCell>
                       <TableCell className="text-sm">{formatCurrency(child.calculated_atr || 0)}</TableCell>
                       <TableCell className="text-center text-muted-foreground">-</TableCell>
                     </>

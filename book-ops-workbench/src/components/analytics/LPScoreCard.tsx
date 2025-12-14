@@ -133,3 +133,10 @@ export const LPScoreCard: React.FC<LPScoreCardProps> = ({
 
 export default LPScoreCard;
 
+
+
+
+
+
+
+

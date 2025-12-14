@@ -15,7 +15,7 @@
  * - Group related constants in objects
  * - Add comments explaining the "why" not just the "what"
  * 
- * DOCUMENTATION: docs/core/business_logic.md
+ * DOCUMENTATION: src/core/MASTER_LOGIC.md
  * 
  * ============================================================================
  */
@@ -39,7 +39,7 @@
  * These align with common B2B SaaS market segmentation.
  * Adjust if your company uses different thresholds.
  * 
- * @see docs/core/business_logic.md#team-tiers-employee-based
+ * @see src/core/MASTER_LOGIC.md#team-tiers-employee-based
  */
 export const TIER_THRESHOLDS = {
   /** SMB = employees less than 100 (so max is 99) */
@@ -92,7 +92,7 @@ export const HIGH_VALUE_ARR_THRESHOLD = 100_000;
  * - Account Count: 15% is tighter because count is easier to balance
  * - Tier: 20% allows some flexibility in tier distribution
  * 
- * @see docs/core/business_logic.md#balance-constraints
+ * @see src/core/MASTER_LOGIC.md#balance-constraints
  */
 export const DEFAULT_VARIANCE = {
   /** ARR variance: ±25% */
@@ -122,30 +122,43 @@ export const DEFAULT_VARIANCE = {
  * 
  * Higher score = better match = preferred assignment.
  * 
- * SCORE MEANINGS:
- * - 1.0: Perfect! Account territory matches rep region exactly
- * - 0.65: Good. Sibling regions (e.g., North East + South East)
- * - 0.40: Okay. Same parent region (both in AMER)
- * - 0.20: Poor. Cross-region (AMER account to EMEA rep)
- * - 0.50: Unknown. Can't determine, use neutral score
+ * HIERARCHY OF SPECIFICITY (more specific = higher score):
  * 
- * @see docs/core/business_logic.md#geo-match-score-for-optimization
+ *   Global
+ *   └── AMER / EMEA / APAC  (Parent Region)
+ *       └── North East / UK / ANZ  (Sub-Region)
+ *           └── NYC / Boston / etc.  (Territory - most specific)
+ * 
+ * SCORING:
+ * - 1.00: Exact match (NYC account → NYC rep)
+ * - 0.85: Same sub-region (NYC account → North East rep)
+ * - 0.65: Same parent (NYC account → AMER rep)
+ * - 0.40: Global fallback (NYC account → Global rep)
+ * - 0.20: Cross-region (NYC account → EMEA rep) - avoid!
+ * 
+ * @see src/_domain/MASTER_LOGIC.mdc#geo-match-scoring
  */
 export const GEO_MATCH_SCORES = {
-  /** Account territory matches rep region exactly */
+  /** Account territory matches rep region exactly (NYC → NYC) */
   EXACT_MATCH: 1.0,
   
-  /** Same parent region, different sub-region (e.g., North East ↔ South East) */
-  SIBLING_REGION: 0.65,
+  /** Same sub-region (NYC → North East) */
+  SAME_SUB_REGION: 0.85,
   
-  /** Same parent region (e.g., both in AMER) */
-  SAME_PARENT: 0.40,
+  /** Same parent region (NYC → AMER) */
+  SAME_PARENT: 0.65,
   
-  /** Different parent regions (e.g., AMER ↔ EMEA) - avoid this! */
+  /** Global rep can take anything, but least preferred */
+  GLOBAL_FALLBACK: 0.40,
+  
+  /** Different parent regions (AMER ↔ EMEA) - avoid this! */
   CROSS_REGION: 0.20,
   
   /** Can't determine - use neutral score */
   UNKNOWN: 0.50,
+  
+  /** @deprecated Use SAME_SUB_REGION instead */
+  SIBLING_REGION: 0.85,
 } as const;
 
 // =============================================================================

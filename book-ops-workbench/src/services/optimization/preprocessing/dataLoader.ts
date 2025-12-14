@@ -10,6 +10,7 @@
  */
 
 import { supabase } from '@/integrations/supabase/client';
+import { getAccountARR } from '@/_domain';
 import type { 
   AggregatedAccount, 
   EligibleRep, 
@@ -32,19 +33,7 @@ export interface LoadedBuildData {
   hardCapArr: number;
 }
 
-/**
- * Get ARR with source priority:
- * 1. hierarchy_bookings_arr_converted (includes children)
- * 2. calculated_arr
- * 3. arr
- * 4. 0
- */
-export function getAccountARR(account: any): number {
-  return account.hierarchy_bookings_arr_converted ?? 
-         account.calculated_arr ?? 
-         account.arr ?? 
-         0;
-}
+// ARR calculation: imported from @/_domain (single source of truth)
 
 /**
  * Fetch all accounts with pagination (Supabase default limit is 1000)

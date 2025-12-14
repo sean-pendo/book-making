@@ -20,7 +20,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
+import { getAccountARR, getAccountATR } from '@/_domain';
 import { downloadFile } from '@/utils/exportUtils';
 import { notifyProposalRejected } from '@/services/slackNotificationService';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';

@@ -130,3 +130,10 @@ export const RegionPieChart: React.FC<RegionPieChartProps> = ({
 
 export default RegionPieChart;
 
+
+
+
+
+
+
+

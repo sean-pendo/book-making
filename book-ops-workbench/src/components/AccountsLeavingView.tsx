@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Loader2, Search, Download, LogOut, TrendingDown, Users, Building2 } from 'lucide-react';
-import { getAccountARR } from '@/utils/accountCalculations';
+import { getAccountARR } from '@/_domain';
 import { downloadFile } from '@/utils/exportUtils';
 import { toast } from '@/hooks/use-toast';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';

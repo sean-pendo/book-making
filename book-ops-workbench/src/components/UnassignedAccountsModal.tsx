@@ -23,7 +23,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { generateSimplifiedAssignments } from '@/services/simplifiedAssignmentEngine';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
-import { formatCurrency } from '@/utils/accountCalculations';
+import { formatCurrency } from '@/_domain';
 import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
 
 interface UnassignedAccount {

@@ -15,7 +15,7 @@
  * - runStrategicOptimization()
  * - buildCustomerLPProblem()
  * - buildProspectLPProblem()
- * - Team alignment functions (classifyAccountTeamTier, calculateTeamAlignmentPenalty)
+ * - Team alignment functions (classifyTeamTier, calculateTeamAlignmentPenalty)
  * 
  * NOTE: Team alignment was implemented HERE but should have been in simplifiedAssignmentEngine.
  * It has since been added to simplifiedAssignmentEngine.ts where it actually runs.
@@ -23,6 +23,8 @@
  * Original description:
  * Formulates account-to-rep assignment as a Mixed Integer Linear Program (MILP).
  */
+
+import { classifyTeamTier } from '@/_domain';
 
 // Type definitions for the highs package
 interface HighsSolution {
@@ -165,12 +167,7 @@ const TEAM_TIER_ORDER: TeamTier[] = ['SMB', 'Growth', 'MM', 'ENT'];
  * MM: 500-1499 employees
  * ENT: 1500+ employees
  */
-export function classifyAccountTeamTier(employees: number | null): TeamTier {
-  if (employees === null || employees < 100) return 'SMB';
-  if (employees < 500) return 'Growth';
-  if (employees < 1500) return 'MM';
-  return 'ENT';
-}
+// classifyTeamTier imported from @/_domain
 
 /**
  * Calculate team alignment penalty for assigning an account to a rep
@@ -574,7 +571,7 @@ function buildCustomerLPProblem(
     // Only applies when rep has team_tier set
     if (rep.team_tier) {
       for (const account of accounts) {
-        const accountTier = classifyAccountTeamTier(account.employees);
+        const accountTier = classifyTeamTier(account.employees);
         const penalty = calculateTeamAlignmentPenalty(accountTier, rep.team_tier);
         if (penalty > 0) {
           const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${repVar}`;
@@ -727,7 +724,7 @@ function buildProspectLPProblem(
     // Only applies when rep has team_tier set
     if (rep.team_tier) {
       for (const account of accounts) {
-        const accountTier = classifyAccountTeamTier(account.employees);
+        const accountTier = classifyTeamTier(account.employees);
         const penalty = calculateTeamAlignmentPenalty(accountTier, rep.team_tier);
         if (penalty > 0) {
           const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${repVar}`;

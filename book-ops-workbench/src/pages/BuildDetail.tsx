@@ -15,7 +15,7 @@ import { AccountsTable } from '@/components/data-tables/AccountsTable';
 import { OpportunitiesTable } from '@/components/data-tables/OpportunitiesTable';
 import { SalesRepsTable } from '@/components/data-tables/SalesRepsTable';
 import { useBuildDataSummary, useInvalidateBuildData, useAnalyticsMetrics } from '@/hooks/useBuildData';
-import { formatCurrency } from '@/utils/accountCalculations';
+import { formatCurrency } from '@/_domain';
 import { InteractiveKPICard } from '@/components/InteractiveKPICard';
 import { DataVisualizationCard } from '@/components/DataVisualizationCard';
 import { SkeletonLoader } from '@/components/SkeletonLoader';

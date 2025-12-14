@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { getAccountARR } from '@/_domain';
 
 export interface AssignmentExportData {
   account_id: string;
@@ -143,7 +144,7 @@ export const fetchAssignmentExportData = async (
         ? `Initial ${account.initial_sale_tier}`
         : account.enterprise_vs_commercial || 'N/A';
 
-      const arr = account.hierarchy_bookings_arr_converted || account.calculated_arr || account.arr || 0;
+      const arr = getAccountARR(account);
 
       // Handle Sales Tools labeling - show "Sales Tools" instead of empty/unassigned
       const isSalesTools = isSalesToolsAccount(assignmentData?.rationale);

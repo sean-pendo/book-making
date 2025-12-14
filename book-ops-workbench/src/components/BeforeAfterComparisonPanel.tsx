@@ -297,3 +297,10 @@ export const BeforeAfterComparisonPanel: React.FC<BeforeAfterComparisonPanelProp
 
 export default BeforeAfterComparisonPanel;
 
+
+
+
+
+
+
+

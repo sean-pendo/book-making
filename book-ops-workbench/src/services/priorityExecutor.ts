@@ -47,6 +47,7 @@ import {
   resolveParentChildConflicts, 
   ParentalAlignmentWarning 
 } from './parentalAlignmentService';
+import { getAccountARR } from '@/_domain';
 
 // ============================================================================
 // Input Types
@@ -591,7 +592,7 @@ async function applyHoldovers(
     } else {
       current.prospectCount++;
     }
-    current.totalARR += account.calculated_arr || account.hierarchy_bookings_arr_converted || 0;
+    current.totalARR += getAccountARR(account);
     workloadMap.set(account.owner_id, current);
   }
 
@@ -680,7 +681,7 @@ async function applyHoldovers(
           // Route customer accounts under $25K ARR to Sales Tools (no owner assignment)
           // Only applies to customers, not prospects
           if (account.is_customer) {
-            const accountARR = account.hierarchy_bookings_arr_converted || account.calculated_arr || 0;
+            const accountARR = getAccountARR(account);
             if (accountARR < config.rs_arr_threshold) {
               isProtected = true;
               reason = `P1: Routed to Sales Tools (ARR $${accountARR.toLocaleString()} < $${config.rs_arr_threshold.toLocaleString()})`;
@@ -777,7 +778,7 @@ function convertToOptimizationAccounts(accounts: Account[]): OptimizationAccount
     account_name: a.account_name,
     is_customer: a.is_customer ?? false,
     is_strategic: a.is_strategic ?? false,
-    calculated_arr: a.calculated_arr || a.hierarchy_bookings_arr_converted || 0,
+    calculated_arr: getAccountARR(a),
     calculated_atr: a.calculated_atr || 0,
     pipeline_value: a.pipeline_value || 0,
     tier: getTier(a),

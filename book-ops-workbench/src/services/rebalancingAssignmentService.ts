@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { getAccountARR } from '@/_domain';
 
 // ============= TYPE DEFINITIONS =============
 
@@ -434,10 +435,10 @@ export class RebalancingAssignmentService {
     
     if (selectedType === 'customers') {
       // For customers with ARR - USE USER CONFIGURATION
-      const stratAccounts = accounts.filter(a => a.is_strategic || ((a.hierarchy_bookings_arr_converted as number) || 0) > 0);
-      const normalAccounts = accounts.filter(a => !a.is_strategic && !((a.hierarchy_bookings_arr_converted as number) || 0));
+      const stratAccounts = accounts.filter(a => a.is_strategic || getAccountARR(a) > 0);
+      const normalAccounts = accounts.filter(a => !a.is_strategic && getAccountARR(a) <= 0);
       
-      const stratTotalARR = stratAccounts.reduce((sum, a) => sum + (a.calculated_arr || a.arr || 0), 0);
+      const stratTotalARR = stratAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
       const normalTotalARR = normalAccounts.reduce((sum, a) => sum + (a.calculated_arr || a.arr || 0), 0);
       
       // Load values from user configuration or use sensible defaults
@@ -525,8 +526,8 @@ export class RebalancingAssignmentService {
     
     for (const account of accounts) {
       const currentOwner = salesReps.find(r => r.rep_id === account.owner_id);
-      const accountARR = account.calculated_arr || account.arr || 0;
-      const isStrategic = account.is_strategic || ((account.hierarchy_bookings_arr_converted as number) || 0) > 0;
+      const accountARR = getAccountARR(account);
+      const isStrategic = account.is_strategic || accountARR > 0;
       
       if (currentOwner) {
         const ownerIsStrategic = currentOwner.is_strategic_rep;
@@ -706,8 +707,8 @@ export class RebalancingAssignmentService {
 
     // SMART DISTRIBUTION WITH HARD LIMITS
     for (const account of sortedAccounts) {
-      const accountARR = account.calculated_arr || account.arr || 0;
-      const isStrategic = account.is_strategic || ((account.hierarchy_bookings_arr_converted as number) || 0) > 0;
+      const accountARR = getAccountARR(account);
+      const isStrategic = account.is_strategic || accountARR > 0;
       const poolTargets = isStrategic && targets.strategic ? targets.strategic : targets.normal;
       
       // Get account characteristics for balance limit checks
@@ -1137,8 +1138,7 @@ export class RebalancingAssignmentService {
         accounts.find(acc => acc.sfdc_account_id === p.accountId)
       ).filter(Boolean) as Account[];
 
-      const totalARR = repAccounts.reduce((sum, acc) => 
-        sum + Number(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0), 0);
+      const totalARR = repAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
       const totalATR = repAccounts.reduce((sum, acc) => 
         sum + Number(acc.calculated_atr || acc.atr || 0), 0);
       const tier1Count = repAccounts.filter(acc => 
@@ -1171,7 +1171,7 @@ export class RebalancingAssignmentService {
           } else {
             stats.byGeo[repRegion].prospectAccounts++;
           }
-          stats.byGeo[repRegion].totalARR += Number(acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0);
+          stats.byGeo[repRegion].totalARR += getAccountARR(acc);
           stats.byGeo[repRegion].totalATR += Number(acc.calculated_atr || acc.atr || 0);
         });
       }

@@ -4,7 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { EnhancedAssignmentService } from '@/services/enhancedAssignmentService';
 import { toast } from '@/hooks/use-toast';
 import { calculateEnhancedRepMetrics } from '@/utils/enhancedRepMetrics';
-import { autoMapTerritoryToRegion } from '@/utils/territoryAutoMapping';
+import { autoMapTerritoryToRegion, getAccountARR } from '@/_domain';
 
 export interface AccountDetail {
   sfdc_account_id: string;
@@ -208,10 +208,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
       console.log('[useEnhancedBalancing] Split:', customers.length, 'customers,', prospects.length, 'prospects');
 
       // Calculate customer metrics
-      const totalCustomerARR = customers.reduce((sum, acc) => {
-        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
-        return sum + arrValue;
-      }, 0);
+      const totalCustomerARR = customers.reduce((sum, acc) => sum + getAccountARR(acc), 0);
       console.log(`[useEnhancedBalancing] ✅ v1.0.5-FIXED Total Customer ARR: $${(totalCustomerARR / 1000000).toFixed(2)}M from ${customers.length} customers`);
       const avgCustomerARRPerRep = totalCustomerARR / reps.length;
 
@@ -350,7 +347,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
           return {
             sfdc_account_id: acc.sfdc_account_id,
             account_name: acc.account_name,
-            arr: parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0,
+            arr: getAccountARR(acc),
             atr: atrAmount,
             renewals: renewalCount,
             renewal_date: acc.renewal_date,
@@ -453,10 +450,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
       // Calculate before metrics (based on owner_id)
       const beforeCustomerAccounts = accounts.filter(acc => acc.is_customer && acc.owner_id);
       const beforeProspectAccounts = accounts.filter(acc => !acc.is_customer && acc.owner_id);
-      const beforeCustomerARR = beforeCustomerAccounts.reduce((sum, acc) => {
-        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
-        return sum + arrValue;
-      }, 0);
+      const beforeCustomerARR = beforeCustomerAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
       const beforeAvgCustomerARRPerRep = reps.length > 0 ? beforeCustomerARR / reps.length : 0;
       const beforeAvgCustomerAccountsPerRep = reps.length > 0 ? beforeCustomerAccounts.length / reps.length : 0;
       const beforeAvgProspectAccountsPerRep = reps.length > 0 ? beforeProspectAccounts.length / reps.length : 0;

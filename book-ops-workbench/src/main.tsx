@@ -2,7 +2,7 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
-import { testAssignmentRegeneration } from './utils/testAccountCalculations'
+import { testAssignmentRegeneration } from './utils/debugRecalculation'
 import { initializeErrorReporting } from './services/errorReportingService'
 import { ErrorBoundary } from './components/ErrorBoundary'
 

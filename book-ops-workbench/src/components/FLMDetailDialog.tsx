@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Building2, TrendingUp, AlertTriangle, Users, Eye, Send, ChevronDown, ChevronRight, Search, UserCheck, UserX, LogOut } from 'lucide-react';
 import { SalesRepDetailDialog } from '@/components/data-tables/SalesRepDetailDialog';
-import { formatCurrency } from '@/utils/accountCalculations';
+import { formatCurrency, getAccountARR } from '@/_domain';
 import { AccountDetailDialog } from '@/components/AccountDetailDialog';
 import SendToManagerDialog from './SendToManagerDialog';
 import AccountsLeavingView from './AccountsLeavingView';
@@ -155,7 +155,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
           const prospectAccounts = parentAccounts.filter(acc => !acc.is_customer);
           
           const totalARR = parentAccounts.reduce((sum, acc) => {
-            const arr = acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0;
+            const arr = getAccountARR(acc);
             return sum + arr;
           }, 0);
           // Calculate ATR from opportunities (more accurate than calculated_atr field)
@@ -350,8 +350,8 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
 
     // Sort by ARR descending
     return accounts.sort((a, b) => {
-      const aArr = a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr || 0;
-      const bArr = b.hierarchy_bookings_arr_converted || b.calculated_arr || b.arr || 0;
+      const aArr = getAccountARR(a);
+      const bArr = getAccountARR(b);
       return bArr - aArr;
     });
   }, [flmAccountsData?.accounts, accountTypeFilter, searchTerm]);
@@ -365,7 +365,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
     
     let totalARR = 0;
     flmAccountsData.accounts.forEach(a => {
-      totalARR += a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr || 0;
+      totalARR += getAccountARR(a);
     });
     
     // Calculate ATR from opportunities (more accurate)
@@ -381,7 +381,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
       prospects: prospects.length, 
       totalARR, 
       totalATR,
-      customerARR: customers.reduce((sum, a) => sum + (a.hierarchy_bookings_arr_converted || a.calculated_arr || a.arr || 0), 0),
+      customerARR: customers.reduce((sum, a) => sum + getAccountARR(a), 0),
       prospectCount: prospects.length
     };
   }, [flmAccountsData?.accounts, atrByAccount]);
@@ -397,7 +397,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
   };
 
   const getARR = (account: any) => {
-    return parseFloat(account.hierarchy_bookings_arr_converted) || parseFloat(account.calculated_arr) || parseFloat(account.arr) || 0;
+    return getAccountARR(account);
   };
 
   const getATR = (account: any) => {

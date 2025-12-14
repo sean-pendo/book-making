@@ -2,6 +2,7 @@ import React from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Info, CheckCircle, XCircle } from 'lucide-react';
+import { getAccountARR } from '@/_domain';
 
 interface Account {
   sfdc_account_id: string;
@@ -22,8 +23,8 @@ export const DebugAccountInfo = ({ accounts, customerAccounts, prospectAccounts 
   // Validation checks
   const totalClassified = customerAccounts.length + prospectAccounts.length;
   const classificationAccurate = totalClassified === accounts.length;
-  const customerLogicCorrect = customerAccounts.every(acc => (acc.hierarchy_bookings_arr_converted || 0) > 0);
-  const prospectLogicCorrect = prospectAccounts.every(acc => (acc.hierarchy_bookings_arr_converted || 0) === 0);
+  const customerLogicCorrect = customerAccounts.every(acc => getAccountARR(acc) > 0);
+  const prospectLogicCorrect = prospectAccounts.every(acc => getAccountARR(acc) === 0);
 
   return (
     <Card className="mb-4">

@@ -36,9 +36,9 @@
  *     autoMapTerritoryToUSRegion,
  *     calculateGeoMatchScore,
  *     REGION_HIERARCHY
- *   } from '@/domain';
+ *   } from '@/_domain';
  * 
- * DOCUMENTATION: docs/core/business_logic.md#3-geography--territory-mapping
+ * DOCUMENTATION: src/core/MASTER_LOGIC.md#4-geography--territories
  * 
  * ============================================================================
  */
@@ -73,44 +73,99 @@ export type Region = ParentRegion | AMERSubRegion | EMEASubRegion | APACSubRegio
  * ----------------
  * Maps parent regions to their sub-regions.
  * 
- * Used for:
- * - Determining if two regions are siblings
- * - Calculating geo match scores
- * - Validating region assignments
+ * HIERARCHY (most specific wins):
+ *   Global
+ *   └── AMER / EMEA / APAC  (Parent)
+ *       └── North East / UK / ANZ  (Sub-Region)
+ *           └── NYC / Boston / etc. (Territory - mapped dynamically)
  * 
- * @see docs/core/business_logic.md#region-hierarchy
+ * SCORING BASED ON HIERARCHY:
+ * - Exact match: 1.00 (NYC → NYC)
+ * - Same sub-region: 0.85 (NYC → North East)
+ * - Same parent: 0.65 (NYC → AMER)
+ * - Global fallback: 0.40 (NYC → Global)
+ * - Cross-region: 0.20 (NYC → EMEA)
+ * 
+ * @see src/_domain/MASTER_LOGIC.mdc#region-hierarchy
  */
 export const REGION_HIERARCHY: Record<ParentRegion, string[]> = {
   AMER: ['North East', 'South East', 'Central', 'West'],
-  EMEA: ['UK', 'DACH', 'France', 'Nordics', 'Southern Europe'],
-  APAC: ['ANZ', 'Japan', 'Southeast Asia', 'India'],
+  EMEA: ['UK', 'DACH', 'France', 'Nordics', 'Southern Europe', 'Benelux', 'Middle East', 'Africa'],
+  APAC: ['ANZ', 'Japan', 'Southeast Asia', 'India', 'Greater China', 'Korea'],
+};
+
+/**
+ * REGION ANCESTRY (Upward Traversal)
+ * -----------------------------------
+ * Maps each region to its parent chain up to Global.
+ * Used by the assignment engine to find fallback reps.
+ * 
+ * Example: 'North East' → ['AMER', 'Global']
+ * Meaning: A North East account can fallback to AMER rep, then Global rep.
+ */
+export const REGION_ANCESTRY: Record<string, string[]> = {
+  // AMER sub-regions
+  'North East': ['AMER', 'Global'],
+  'South East': ['AMER', 'Global'],
+  'Central': ['AMER', 'Global'],
+  'West': ['AMER', 'Global'],
+  'AMER': ['Global'],
+  // EMEA sub-regions
+  'UK': ['EMEA', 'Global'],
+  'UKI': ['EMEA', 'Global'],
+  'DACH': ['EMEA', 'Global'],
+  'France': ['EMEA', 'Global'],
+  'Nordics': ['EMEA', 'Global'],
+  'Southern Europe': ['EMEA', 'Global'],
+  'Benelux': ['EMEA', 'Global'],
+  'Middle East': ['EMEA', 'Global'],
+  'Africa': ['EMEA', 'Global'],
+  'RO-EMEA': ['EMEA', 'Global'],
+  'EMEA': ['Global'],
+  // APAC sub-regions
+  'ANZ': ['APAC', 'Global'],
+  'Japan': ['APAC', 'Global'],
+  'Southeast Asia': ['APAC', 'Global'],
+  'Singapore': ['APAC', 'Global'],
+  'India': ['APAC', 'Global'],
+  'Greater China': ['APAC', 'Global'],
+  'Korea': ['APAC', 'Global'],
+  'RO-APAC': ['APAC', 'Global'],
+  'APAC': ['Global'],
+  // Global and Other
+  'Global': [],
+  'Other': ['Global'],
 };
 
 /**
  * REGION SIBLINGS
  * ---------------
- * Maps each sub-region to its sibling regions (same parent).
- * 
- * Used for geo scoring:
- * - Exact match = 1.0
- * - Sibling match = 0.65 (this map)
- * - Same parent = 0.40
- * - Cross-region = 0.20
+ * @deprecated The sibling concept is replaced by hierarchy scoring.
+ * Kept for backwards compatibility - all sub-regions of same parent are "siblings".
+ * Use getParentRegion() and SAME_SUB_REGION score instead.
  */
 export const REGION_SIBLINGS: Record<string, string[]> = {
+  // AMER
   'North East': ['South East', 'Central', 'West'],
   'South East': ['North East', 'Central', 'West'],
   'Central': ['North East', 'South East', 'West'],
   'West': ['North East', 'South East', 'Central'],
-  'UK': ['DACH', 'France', 'Nordics', 'Southern Europe'],
-  'DACH': ['UK', 'France', 'Nordics', 'Southern Europe'],
-  'France': ['UK', 'DACH', 'Nordics', 'Southern Europe'],
-  'Nordics': ['UK', 'DACH', 'France', 'Southern Europe'],
-  'Southern Europe': ['UK', 'DACH', 'France', 'Nordics'],
-  'ANZ': ['Japan', 'Southeast Asia', 'India'],
-  'Japan': ['ANZ', 'Southeast Asia', 'India'],
-  'Southeast Asia': ['ANZ', 'Japan', 'India'],
-  'India': ['ANZ', 'Japan', 'Southeast Asia'],
+  // EMEA
+  'UK': ['DACH', 'France', 'Nordics', 'Southern Europe', 'Benelux', 'Middle East', 'Africa'],
+  'DACH': ['UK', 'France', 'Nordics', 'Southern Europe', 'Benelux', 'Middle East', 'Africa'],
+  'France': ['UK', 'DACH', 'Nordics', 'Southern Europe', 'Benelux', 'Middle East', 'Africa'],
+  'Nordics': ['UK', 'DACH', 'France', 'Southern Europe', 'Benelux', 'Middle East', 'Africa'],
+  'Southern Europe': ['UK', 'DACH', 'France', 'Nordics', 'Benelux', 'Middle East', 'Africa'],
+  'Benelux': ['UK', 'DACH', 'France', 'Nordics', 'Southern Europe', 'Middle East', 'Africa'],
+  'Middle East': ['UK', 'DACH', 'France', 'Nordics', 'Southern Europe', 'Benelux', 'Africa'],
+  'Africa': ['UK', 'DACH', 'France', 'Nordics', 'Southern Europe', 'Benelux', 'Middle East'],
+  // APAC
+  'ANZ': ['Japan', 'Southeast Asia', 'India', 'Greater China', 'Korea'],
+  'Japan': ['ANZ', 'Southeast Asia', 'India', 'Greater China', 'Korea'],
+  'Southeast Asia': ['ANZ', 'Japan', 'India', 'Greater China', 'Korea'],
+  'India': ['ANZ', 'Japan', 'Southeast Asia', 'Greater China', 'Korea'],
+  'Greater China': ['ANZ', 'Japan', 'Southeast Asia', 'India', 'Korea'],
+  'Korea': ['ANZ', 'Japan', 'Southeast Asia', 'India', 'Greater China'],
 };
 
 // =============================================================================
@@ -125,7 +180,7 @@ interface RegionConfig {
 
 /**
  * US region configuration for auto-mapping territories
- * @see docs/core/business_logic.md#auto-mapping-patterns
+ * @see src/core/MASTER_LOGIC.md#auto-mapping-patterns
  */
 export const US_REGION_CONFIG: Record<AMERSubRegion, RegionConfig> = {
   'North East': {
@@ -162,7 +217,7 @@ export const US_REGION_CONFIG: Record<AMERSubRegion, RegionConfig> = {
  * 2. Cities
  * 3. State codes
  * 
- * @see docs/core/business_logic.md#territory-mapping-logic
+ * @see src/core/MASTER_LOGIC.md#territory-mapping-logic
  */
 export function autoMapTerritoryToUSRegion(territory: string): AMERSubRegion | null {
   if (!territory) return null;
@@ -237,7 +292,15 @@ export function getParentRegion(region: string): ParentRegion | null {
 /**
  * Calculate geo match score between account territory and rep region
  * 
- * @see docs/core/business_logic.md#geo-match-score-for-optimization
+ * HIERARCHY-BASED SCORING (more specific = higher score):
+ * 
+ * 1. Exact match (NYC → NYC): 1.00
+ * 2. Account in rep's sub-region (NYC → North East): 0.85
+ * 3. Both in same parent (NYC → AMER): 0.65
+ * 4. Rep is Global (NYC → Global): 0.40
+ * 5. Cross-region (NYC → EMEA): 0.20
+ * 
+ * @see src/_domain/MASTER_LOGIC.mdc#geo-match-scoring
  */
 export function calculateGeoMatchScore(
   accountRegion: string | null,
@@ -245,32 +308,51 @@ export function calculateGeoMatchScore(
 ): number {
   if (!accountRegion || !repRegion) return GEO_MATCH_SCORES.UNKNOWN;
   
-  const normAccount = accountRegion.trim();
-  const normRep = repRegion.trim();
+  const normAccount = accountRegion.trim().toLowerCase();
+  const normRep = repRegion.trim().toLowerCase();
   
-  // Exact match
-  if (normAccount.toLowerCase() === normRep.toLowerCase()) {
+  // Check if rep is "Global" - can take anything but lowest priority
+  if (normRep === 'global' || normRep === 'worldwide') {
+    return GEO_MATCH_SCORES.GLOBAL_FALLBACK;
+  }
+  
+  // 1. Exact match (most specific)
+  if (normAccount === normRep) {
     return GEO_MATCH_SCORES.EXACT_MATCH;
   }
   
-  // Sibling region (same parent)
-  const siblings = REGION_SIBLINGS[normRep];
-  if (siblings?.some(s => s.toLowerCase() === normAccount.toLowerCase())) {
-    return GEO_MATCH_SCORES.SIBLING_REGION;
-  }
+  // Get parent regions for both
+  const accountParent = getParentRegion(accountRegion);
+  const repParent = getParentRegion(repRegion);
   
-  // Same parent region
-  const accountParent = getParentRegion(normAccount);
-  const repParent = getParentRegion(normRep);
-  if (accountParent && repParent && accountParent === repParent) {
+  // Check if rep's region is a parent and account is within that parent
+  // e.g., Rep is "AMER", Account is "North East" → SAME_PARENT (0.65)
+  if (repRegion.toUpperCase() === accountParent) {
     return GEO_MATCH_SCORES.SAME_PARENT;
   }
   
-  // Cross-region
-  if (accountParent && repParent) {
+  // 2. Account is in same sub-region as rep
+  // e.g., Rep is "North East", Account territory maps to "North East"
+  const accountSubRegion = autoMapTerritoryToUSRegion(accountRegion);
+  if (accountSubRegion && accountSubRegion.toLowerCase() === normRep) {
+    return GEO_MATCH_SCORES.SAME_SUB_REGION;
+  }
+  
+  // 3. Both in same parent region (siblings)
+  if (accountParent && repParent && accountParent === repParent) {
+    return GEO_MATCH_SCORES.SAME_SUB_REGION;
+  }
+  
+  // 4. Cross-region (different parents)
+  if (accountParent && repParent && accountParent !== repParent) {
     return GEO_MATCH_SCORES.CROSS_REGION;
   }
   
   return GEO_MATCH_SCORES.UNKNOWN;
 }
+
+/**
+ * Alias for autoMapTerritoryToUSRegion for backwards compatibility
+ */
+export const autoMapTerritoryToRegion = autoMapTerritoryToUSRegion;
 

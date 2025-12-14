@@ -6,11 +6,11 @@
  * This is the SINGLE SOURCE OF TRUTH for all revenue calculations.
  * 
  * DO NOT duplicate this logic elsewhere in the codebase.
- * Instead, import from '@/domain':
+ * Instead, import from '@/_domain':
  * 
- *   import { getAccountARR, getAccountATR } from '@/domain';
+ *   import { getAccountARR, getAccountATR } from '@/_domain';
  * 
- * DOCUMENTATION: docs/core/business_logic.md#2-calculation-rules
+ * DOCUMENTATION: src/core/MASTER_LOGIC.md#2-calculation-rules
  * 
  * ============================================================================
  */
@@ -92,32 +92,27 @@ export interface OpportunityData {
 /**
  * GET ACCOUNT ARR
  * ---------------
- * Returns the correct ARR value for an account based on its type.
+ * Returns the correct ARR value for an account.
  * 
  * WHY THE PRIORITY CHAIN EXISTS:
- * - calculated_arr: Best value, includes all adjustments
- * - hierarchy_bookings_arr_converted: Good for parents, comes from Salesforce
- * - arr: Raw import value, fallback only
+ * - hierarchy_bookings_arr_converted: FIRST - prevents double-counting from children
+ *   (children share parent's hierarchy_bookings value, so this is the aggregated source)
+ * - calculated_arr: Fallback with adjustments
+ * - arr: Raw import value, last resort
  * 
- * PARENT vs CHILD ACCOUNTS:
- * - Parent accounts may have rolled-up ARR from children
- * - Child accounts use their own ARR directly
+ * IMPORTANT: Same priority for ALL accounts (parent and child) to prevent
+ * double-counting when summing across a hierarchy.
  * 
  * @example
  * const arr = getAccountARR(account);
  * console.log(`Account ARR: $${arr}`);
  * 
- * @see docs/core/business_logic.md#arr-calculation
+ * @see src/_domain/MASTER_LOGIC.mdc#arr-calculation
  */
 export function getAccountARR(account: AccountData): number {
-  // Parent accounts have special handling for hierarchy roll-ups
-  if (account.is_parent) {
-    // Priority: calculated (best) → hierarchy bookings → raw arr → 0
-    return account.calculated_arr || account.hierarchy_bookings_arr_converted || account.arr || 0;
-  }
-  
-  // Child/standalone accounts: simpler priority chain
-  return account.calculated_arr || account.arr || 0;
+  // Priority: hierarchy_bookings (aggregated) → calculated → raw arr → 0
+  // Same for all accounts to prevent double-counting
+  return account.hierarchy_bookings_arr_converted || account.calculated_arr || account.arr || 0;
 }
 
 /**
@@ -137,13 +132,11 @@ export function hasARR(account: AccountData): boolean {
  * -----------
  * Determines if an account is a customer (has revenue) vs prospect (no revenue).
  * 
- * RULE: Customer = any positive ARR value exists
+ * RULE: Customer = getAccountARR() > 0
  * 
- * WHY CHECK MULTIPLE FIELDS:
- * - Different imports populate different fields
- * - We want to catch customers no matter which field has the value
+ * Uses the same priority chain as getAccountARR() for consistency.
  * 
- * @see docs/core/business_logic.md#account-types
+ * @see src/_domain/MASTER_LOGIC.mdc#account-types
  */
 export function isCustomer(account: AccountData): boolean {
   // If explicitly set, trust it
@@ -151,13 +144,8 @@ export function isCustomer(account: AccountData): boolean {
     return account.is_customer;
   }
   
-  // Otherwise, check for any positive ARR
-  return (
-    (account.hierarchy_bookings_arr_converted && account.hierarchy_bookings_arr_converted > 0) ||
-    (account.arr && account.arr > 0) ||
-    (account.calculated_arr && account.calculated_arr > 0) ||
-    false
-  );
+  // Otherwise, check if account has any positive ARR
+  return getAccountARR(account) > 0;
 }
 
 // =============================================================================
@@ -178,7 +166,7 @@ export function isCustomer(account: AccountData): boolean {
  * ATR is calculated from opportunities where opportunity_type = 'Renewals'
  * The calculated_atr field is pre-computed by a database function.
  * 
- * @see docs/core/business_logic.md#atr-calculation
+ * @see src/core/MASTER_LOGIC.md#atr-calculation
  */
 export function getAccountATR(account: AccountData): number {
   // Priority: calculated (from DB function) → raw atr → 0
@@ -201,7 +189,7 @@ export function hasATR(account: AccountData): boolean {
  * 
  * This is case-insensitive and trims whitespace for data quality.
  * 
- * @see docs/core/business_logic.md#atr-calculation
+ * @see src/core/MASTER_LOGIC.md#atr-calculation
  */
 export function isRenewalOpportunity(opportunity: OpportunityData): boolean {
   // Normalize and compare - handles case and whitespace variations

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
-import { formatCurrency } from "@/utils/accountCalculations";
+import { formatCurrency, getAccountARR, getAccountATR } from "@/_domain";
 import { toast } from "sonner";
 import { Loader2, AlertTriangle, Shield, Users } from "lucide-react";
 
@@ -117,8 +117,8 @@ export function AccountDetailDialog({
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div><span className="font-medium">Account ID:</span> {account.sfdc_account_id}</div>
                 <div><span className="font-medium">Tier:</span> {account.expansion_tier || 'Unassigned'}</div>
-                <div><span className="font-medium">ARR:</span> {formatCurrency(account.calculated_arr || account.arr)}</div>
-                <div><span className="font-medium">ATR:</span> {formatCurrency(account.calculated_atr || account.atr)}</div>
+                <div><span className="font-medium">ARR:</span> {formatCurrency(getAccountARR(account))}</div>
+                <div><span className="font-medium">ATR:</span> {formatCurrency(getAccountATR(account))}</div>
                 <div><span className="font-medium">Territory:</span> {account.sales_territory || 'N/A'}</div>
                 <div><span className="font-medium">Region:</span> {account.geo || 'N/A'}</div>
               </div>

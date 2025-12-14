@@ -2,6 +2,36 @@
 
 ---
 
+## Release v1.3.2 (2025-12-14)
+
+### Dead Code Cleanup & Domain Consolidation
+
+Major codebase cleanup removing ~4,000 lines of dead code and consolidating business logic.
+
+#### Files Deleted (15 total)
+- **Components** (12 files, ~3,500 lines):
+  - `SophisticatedAssignmentControls.tsx`, `SophisticatedAssignmentRulesBuilder.tsx`
+  - `AssignmentConfigurationUI.tsx`, `SimpleAssignmentConfiguration.tsx`
+  - `AdvancedRuleBuilder.tsx`, `ConditionalModifierBuilder.tsx`
+  - `RuleFieldMapper.tsx`, `AIRuleGenerator.tsx`, `AIBatchProgress.tsx`
+  - `DataRecovery.tsx`, `DataRecoveryFix.tsx`
+- **Utils** (2 files, ~400 lines):
+  - `ruleValidator.ts` (circular dead code with AdvancedRuleBuilder)
+- **Config files**:
+  - `firebase.json`, `netlify.toml`, `bun.lockb`
+  - `FIREBASE_QUICKSTART.md`, `HOSTING_COMPARISON.md`
+
+#### Domain Consolidation
+- Verified all suspected dead services are actually live
+- Updated `CLEANUP_PLAN.md` with verified status
+- Documented customer classification design decision (hierarchy_bookings only)
+
+#### Build
+- Confirmed build passes with all deletions
+- Removed bun lockfile (using npm)
+
+---
+
 ## Release v1.3.1 (2025-12-14)
 
 ### Major Accomplishments

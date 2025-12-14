@@ -2,7 +2,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { BatchImportService } from '@/services/batchImportService';
 import { StreamingCsvParser } from '@/services/streamingCsvParser';
-import { autoMapTerritoryToRegion } from './territoryAutoMapping';
+import { autoMapTerritoryToRegion } from '@/_domain';
 
 export interface CSVParseResult<T> {
   data: T[];

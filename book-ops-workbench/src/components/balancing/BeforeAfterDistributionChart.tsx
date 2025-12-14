@@ -367,21 +367,42 @@ export const BeforeAfterDistributionChart: React.FC<BeforeAfterDistributionChart
                           />
                         )}
                         
-                        {/* Ghost bar (before) */}
-                        <div
-                          className="absolute top-0.5 h-4 rounded-full bg-gray-400/40 border border-gray-400/60 transition-all"
-                          style={{ width: `${beforeWidth}%`, left: 0 }}
-                        />
-                        
-                        {/* Actual bar (after) */}
-                        <div
-                          className="absolute top-0.5 h-4 rounded-full transition-all group-hover:opacity-80"
-                          style={{ 
-                            width: `${afterWidth}%`, 
-                            left: 0,
-                            backgroundColor: barColor,
-                          }}
-                        />
+                        {/* Render bars in order: longer bar first (behind), shorter bar on top */}
+                        {beforeVal >= afterVal ? (
+                          <>
+                            {/* Ghost bar (before) - LONGER, render first (behind) */}
+                            <div
+                              className="absolute top-0.5 h-4 rounded-full bg-gray-400/50 border border-gray-500/60 transition-all"
+                              style={{ width: `${beforeWidth}%`, left: 0 }}
+                            />
+                            {/* Actual bar (after) - SHORTER, render second (on top) */}
+                            <div
+                              className="absolute top-0.5 h-4 rounded-full transition-all group-hover:opacity-80"
+                              style={{ 
+                                width: `${afterWidth}%`, 
+                                left: 0,
+                                backgroundColor: barColor,
+                              }}
+                            />
+                          </>
+                        ) : (
+                          <>
+                            {/* Actual bar (after) - LONGER, render first (behind) */}
+                            <div
+                              className="absolute top-0.5 h-4 rounded-full transition-all group-hover:opacity-80"
+                              style={{ 
+                                width: `${afterWidth}%`, 
+                                left: 0,
+                                backgroundColor: barColor,
+                              }}
+                            />
+                            {/* Ghost bar (before) - SHORTER, render second (on top) */}
+                            <div
+                              className="absolute top-0.5 h-4 rounded-full bg-gray-400/50 border border-gray-500/60 transition-all"
+                              style={{ width: `${beforeWidth}%`, left: 0 }}
+                            />
+                          </>
+                        )}
                       </div>
                       
                       {/* Value */}
@@ -390,7 +411,7 @@ export const BeforeAfterDistributionChart: React.FC<BeforeAfterDistributionChart
                       </div>
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="right" className="max-w-xs z-50">
+                  <TooltipContent side="right" className="max-w-xs z-[9999]">
                     <div className="text-sm">
                       <div className="font-medium">{rep.repName}</div>
                       <div className="text-muted-foreground text-xs">{rep.region}</div>

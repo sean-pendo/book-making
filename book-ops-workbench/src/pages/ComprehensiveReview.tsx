@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useBuildDataRelationships } from '@/hooks/useBuildData';
 import { FLMDetailDialog } from '@/components/FLMDetailDialog';
 import SendToManagerDialog from '@/components/SendToManagerDialog';
+import { getAccountARR } from '@/_domain';
 
 interface ComprehensiveReviewProps {
   buildId?: string;
@@ -212,10 +213,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
 
     // Calculate total metrics with split ownership
     const totalAccounts = parentAccounts.length;
-    const totalParentARR = parentAccounts.reduce((sum, acc) => {
-      const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
-      return sum + arrValue;
-    }, 0);
+    const totalParentARR = parentAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
     const splitOwnershipChildrenARR = childAccounts
       .filter(acc => {
         const parentId = acc.ultimate_parent_id;
@@ -224,10 +222,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         const parentOwnerId = parentOwnerMap.get(parentId);
         return childOwnerId !== parentOwnerId;
       })
-      .reduce((sum, acc) => {
-        const arrValue = parseFloat(acc.hierarchy_bookings_arr_converted) || parseFloat(acc.calculated_arr) || parseFloat(acc.arr) || 0;
-        return sum + arrValue;
-      }, 0);
+      .reduce((sum, acc) => sum + getAccountARR(acc), 0);
     const totalARR = totalParentARR + splitOwnershipChildrenARR;
     // Calculate ATR from opportunities data (more reliable than calculated_atr field)
     const totalATR = parentAccounts.reduce((sum, acc) => {
@@ -300,7 +295,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         };
       }
       
-      const arr = parseFloat(account.hierarchy_bookings_arr_converted) || parseFloat(account.calculated_arr) || parseFloat(account.arr) || 0;
+      const arr = getAccountARR(account);
       // Get ATR from opportunities (preferred) or fall back to account field
       const atrFromOpps = getAccountATR(account.sfdc_account_id);
       const atr = atrFromOpps || parseFloat(account.calculated_atr) || parseFloat(account.atr) || 0;
@@ -384,7 +379,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         const flm = childOwnerRep?.flm || childOwnerRep?.manager || 'Unassigned FLM';
         
         if (portfoliosBySLM[slm]?.[flm]) {
-          const childARR = parseFloat(childAccount.hierarchy_bookings_arr_converted) || parseFloat(childAccount.calculated_arr) || parseFloat(childAccount.arr) || 0;
+          const childARR = getAccountARR(childAccount);
           portfoliosBySLM[slm][flm].totalARR += childARR;
           
           // Update rep ARR map
@@ -608,7 +603,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
     csvRows.push('Account Name,Account ID,ARR ($M),ATR ($M),Tier,Territory,Current Owner,New Owner,Changed,CRE Status,CRE Count');
     
     allAccounts?.forEach((account: any) => {
-      const arr = (parseFloat(account.hierarchy_bookings_arr_converted) || parseFloat(account.calculated_arr) || parseFloat(account.arr) || 0) / 1000000;
+      const arr = getAccountARR(account) / 1000000;
       const atr = (parseFloat(account.calculated_atr) || parseFloat(account.atr) || 0) / 1000000;
       const wasReassigned = account.new_owner_id && account.owner_id !== account.new_owner_id;
       

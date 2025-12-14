@@ -13,9 +13,9 @@
  * 
  * DO NOT hardcode tier thresholds elsewhere! Import from here:
  * 
- *   import { classifyTeamTier, TIER_THRESHOLDS } from '@/domain';
+ *   import { classifyTeamTier, TIER_THRESHOLDS } from '@/_domain';
  * 
- * DOCUMENTATION: docs/core/business_logic.md#team-tiers-employee-based
+ * DOCUMENTATION: src/core/MASTER_LOGIC.md#5-team-tiers
  * 
  * ============================================================================
  */
@@ -72,21 +72,26 @@ export const TEAM_TIER_ORDER: TeamTier[] = ['SMB', 'Growth', 'MM', 'ENT'];
  * - ENT:    1500+ employees
  * 
  * NULL/UNDEFINED HANDLING:
- * If employee count is unknown, defaults to SMB (smallest tier).
- * This is a conservative approach - better to underestimate than overestimate.
+ * If employee count is unknown, returns null.
+ * Unmapped fields shouldn't force a tier - let the consumer decide how to handle.
  * 
  * @example
  * classifyTeamTier(50)    // → 'SMB'
  * classifyTeamTier(250)   // → 'Growth'
  * classifyTeamTier(800)   // → 'MM'
  * classifyTeamTier(5000)  // → 'ENT'
- * classifyTeamTier(null)  // → 'SMB' (default)
+ * classifyTeamTier(null)  // → null (unknown)
  * 
- * @see docs/core/business_logic.md#team-tiers-employee-based
+ * @see src/_domain/MASTER_LOGIC.mdc#team-tiers-employee-based
  */
-export function classifyTeamTier(employees: number | null | undefined): TeamTier {
-  // No data? Default to SMB (conservative estimate)
-  if (employees === null || employees === undefined || employees <= TIER_THRESHOLDS.SMB_MAX) {
+export function classifyTeamTier(employees: number | null | undefined): TeamTier | null {
+  // No data? Return null - don't force a tier on unmapped fields
+  if (employees === null || employees === undefined) {
+    return null;
+  }
+  
+  // SMB tier: < 100 employees
+  if (employees <= TIER_THRESHOLDS.SMB_MAX) {
     return 'SMB';
   }
   
@@ -136,7 +141,7 @@ export function getTierIndex(tier: TeamTier | string | null | undefined): number
  * getTierDistance('SMB', 'Growth')  // → 1 (one level)
  * getTierDistance('SMB', 'ENT')     // → 3 (three levels!)
  * 
- * @see docs/core/business_logic.md#team-tiers-employee-based
+ * @see src/core/MASTER_LOGIC.md#team-tiers-employee-based
  */
 export function getTierDistance(tier1: TeamTier, tier2: TeamTier): number {
   const idx1 = getTierIndex(tier1);
@@ -190,7 +195,7 @@ export interface EnterpriseCheckParams {
  * isEnterprise({ arr: 150000 })                            // → true
  * isEnterprise({ employees: 50, arr: 5000 })               // → false
  * 
- * @see docs/core/business_logic.md#enterprise-classification-legacy
+ * @see src/core/MASTER_LOGIC.md#enterprise-classification-legacy
  */
 export function isEnterprise(account: EnterpriseCheckParams): boolean {
   const threshold = account.enterpriseThreshold ?? 1500;

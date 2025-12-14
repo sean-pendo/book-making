@@ -5,3 +5,7 @@ FOR DELETE
 TO public
 USING (manager_user_id = auth.uid());
 
+
+
+
+

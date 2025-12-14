@@ -588,29 +588,10 @@ export function getDefaultLPConfiguration(): LPConfiguration {
 }
 
 // =============================================================================
-// Region Hierarchy (for geography scoring)
+// Region Hierarchy - Re-exported from @/_domain for backwards compatibility
 // =============================================================================
 
-export const REGION_HIERARCHY: Record<string, string[]> = {
-  AMER: ['North East', 'South East', 'Central', 'West'],
-  EMEA: ['UK', 'DACH', 'France', 'Nordics', 'Benelux'],
-  APAC: ['ANZ', 'Japan', 'Singapore']
-};
-
-export const REGION_SIBLINGS: Record<string, string[]> = {
-  'North East': ['South East', 'Central'],
-  'South East': ['North East', 'Central'],
-  'Central': ['West', 'North East', 'South East'],
-  'West': ['Central'],
-  'UK': ['DACH', 'France'],
-  'DACH': ['UK', 'France', 'Nordics'],
-  'France': ['UK', 'DACH', 'Benelux'],
-  'Nordics': ['DACH', 'Benelux'],
-  'Benelux': ['France', 'Nordics'],
-  'ANZ': ['Singapore'],
-  'Japan': ['Singapore'],
-  'Singapore': ['ANZ', 'Japan']
-};
+export { REGION_HIERARCHY, REGION_SIBLINGS } from '@/_domain';
 
 export const TIER_ORDER = ['SMB', 'Growth', 'MM', 'ENT'] as const;
 export type TeamTier = typeof TIER_ORDER[number];

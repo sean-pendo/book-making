@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Loader2, TrendingUp, TrendingDown, Download } from 'lucide-react';
-import { getAccountARR, getAccountATR } from '@/utils/accountCalculations';
+import { getAccountARR, getAccountATR } from '@/_domain';
 import { downloadFile } from '@/utils/exportUtils';
 import { toast } from '@/hooks/use-toast';
 

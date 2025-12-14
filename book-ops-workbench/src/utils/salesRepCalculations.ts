@@ -1,7 +1,7 @@
 // Shared calculation logic for Sales Rep metrics
 // Used by both SalesRepsTable and SalesRepDetailDialog to ensure consistency
 
-import { getAccountARR } from '@/utils/accountCalculations';
+import { getAccountARR } from '@/_domain';
 
 interface Account {
   sfdc_account_id: string;
@@ -152,9 +152,9 @@ export function calculateSalesRepMetrics(
       }
     });
 
-    // Calculate total ARR from parent accounts
+    // Calculate total ARR from parent accounts using centralized logic
     const totalARR = parentAccounts.reduce((sum, acc) => {
-      const arrValue = acc.calculated_arr || acc.arr || 0;
+      const arrValue = getAccountARR(acc);
       console.log(`[DEBUG] Adding ARR for parent ${acc.account_name}: ${arrValue}`);
       return sum + arrValue;
     }, 0);
@@ -174,7 +174,7 @@ export function calculateSalesRepMetrics(
         return childOwnerId !== parentOwnerId;
       })
       .reduce((sum, acc) => {
-        const arrValue = acc.calculated_arr || acc.arr || 0;
+        const arrValue = getAccountARR(acc);
         console.log(`[DEBUG] Adding ARR for split ownership child ${acc.account_name}: ${arrValue}`);
         return sum + arrValue;
       }, 0);

@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { AssignmentServiceHelpers } from './assignmentServiceHelpers';
+import { getAccountARR } from '@/_domain';
 
 export interface Account {
   sfdc_account_id: string;
@@ -988,7 +989,7 @@ class AssignmentService {
       if (account.owner_id && currentDistribution.has(account.owner_id)) {
         const dist = currentDistribution.get(account.owner_id)!;
         dist.accounts.push(account);
-        dist.customerARR += account.hierarchy_bookings_arr_converted || 0;
+        dist.customerARR += getAccountARR(account);
       }
     });
 
@@ -1007,8 +1008,8 @@ class AssignmentService {
         const excessAccounts = dist.accounts
           .sort((a, b) => {
             // Move lower-value accounts first to preserve high-value relationships
-            const aValue = a.hierarchy_bookings_arr_converted || a.arr || a.calculated_arr || 0;
-            const bValue = b.hierarchy_bookings_arr_converted || b.arr || b.calculated_arr || 0;
+            const aValue = getAccountARR(a);
+            const bValue = getAccountARR(b);
             return aValue - bValue;
           })
           .slice(maxAccountsPerRep); // Everything above max cap
@@ -1447,7 +1448,7 @@ class AssignmentService {
       if (account.owner_id && currentDistribution.has(account.owner_id)) {
         const dist = currentDistribution.get(account.owner_id)!;
         dist.accountCount += 1;
-        dist.customerARR += account.hierarchy_bookings_arr_converted || 0;
+        dist.customerARR += getAccountARR(account);
         dist.accounts.push(account);
       }
     });
@@ -1498,14 +1499,14 @@ class AssignmentService {
         // Find suitable accounts to move
         const candidateAccounts = overDist.accounts
           .filter(account => {
-            // Prefer accounts with good hierarchy ARR for ARR-based moves
-            const accountARR = account.hierarchy_bookings_arr_converted || 0;
+            // Prefer accounts with good ARR for ARR-based moves
+            const accountARR = getAccountARR(account);
             return arrNeeded > 0 ? accountARR > 0 : true;
           })
           .sort((a, b) => {
-            // Sort by hierarchy ARR descending for efficient moves
-            const aARR = a.hierarchy_bookings_arr_converted || 0;
-            const bARR = b.hierarchy_bookings_arr_converted || 0;
+            // Sort by ARR descending for efficient moves
+            const aARR = getAccountARR(a);
+            const bARR = getAccountARR(b);
             return bARR - aARR;
           })
           .slice(0, Math.min(accountsNeeded, 3)); // Limit moves per iteration
@@ -1525,9 +1526,9 @@ class AssignmentService {
           
           // Update tracking
           underDist.accountCount += 1;
-          underDist.customerARR += account.hierarchy_bookings_arr_converted || 0;
+          underDist.customerARR += getAccountARR(account);
           overDist.accountCount -= 1;
-          overDist.customerARR -= account.hierarchy_bookings_arr_converted || 0;
+          overDist.customerARR -= getAccountARR(account);
           
           console.log(`[ThresholdEnforcement] Moving ${account.account_name} from ${overAllocatedRepId} to ${underAllocatedRepId} for threshold compliance`);
         }
@@ -1636,8 +1637,8 @@ class AssignmentService {
         prospects.push(account);
       }
 
-      // Classify as tier 1 based on hierarchy ARR threshold
-      const primaryARR = account.hierarchy_bookings_arr_converted || account.arr || account.calculated_arr || 0;
+      // Classify as tier 1 based on ARR threshold
+      const primaryARR = getAccountARR(account);
       const isEnterprise = account.enterprise_vs_commercial === 'Enterprise';
       const hasLargeEmployeeCount = account.employees && account.employees > config.enterprise_threshold;
       const isHighValue = primaryARR > 100000; // Use hierarchy ARR for tier 1 classification
@@ -2201,13 +2202,11 @@ class AssignmentService {
         allHierarchyAccounts.push(...hierarchyAccounts);
         
         // Sum up ARR for the entire hierarchy
-        const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => 
-          sum + (acc.hierarchy_bookings_arr_converted || acc.arr || 0), 0
-        );
+        const hierarchyARR = hierarchyAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
         totalHierarchyARR += hierarchyARR;
         
         // Classify as customer if ANY account in hierarchy has ARR > 0
-        const hasCustomerARR = hierarchyAccounts.some(acc => (acc.hierarchy_bookings_arr_converted || 0) > 0);
+        const hasCustomerARR = hierarchyAccounts.some(acc => getAccountARR(acc) > 0);
         if (hasCustomerARR) {
           customerAccountCount++;
         } else {
@@ -2254,7 +2253,7 @@ class AssignmentService {
     
     // Process ALL accounts for tier distribution (not just proposals)
     accounts.forEach(account => {
-      const hierarchyARR = account.hierarchy_bookings_arr_converted || 0;
+      const hierarchyARR = getAccountARR(account);
       const isCustomer = hierarchyARR > 0;
       
       // Use database tier fields instead of ARR calculation
@@ -2277,7 +2276,7 @@ class AssignmentService {
       const oldRep = salesReps.find(rep => rep.rep_id === account?.owner_id);
       
       if (account && newRep) {
-        const hierarchyARR = account.hierarchy_bookings_arr_converted || 0;
+        const hierarchyARR = getAccountARR(account);
         const regularARR = account.arr || 0;
         const totalAccountARR = Math.max(hierarchyARR, regularARR);
         const isCustomer = hierarchyARR > 0;

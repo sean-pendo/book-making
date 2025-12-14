@@ -12,6 +12,7 @@ import { useInvalidateBuildData } from '@/hooks/useBuildData';
 import type { AssignmentResult, AssignmentProgress } from '@/services/rebalancingAssignmentService';
 import { createAssignmentStages } from '@/components/AssignmentProgressDialog';
 import { runPureOptimization, type LPSolveResult, type LPProgress } from '@/services/optimization';
+import { getAccountARR } from '@/_domain';
 
 interface Account {
   sfdc_account_id: string;
@@ -515,10 +516,8 @@ export const useAssignmentEngine = (buildId?: string) => {
           acc => acc.owner_id === owner.rep_id || acc.new_owner_id === owner.rep_id
         );
         
-        // Use hierarchy_bookings_arr_converted as primary ARR source (matches simplifiedAssignmentEngine)
-        const currentARR = repAccounts.reduce((sum, acc) => 
-          sum + (acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0), 0
-        );
+        // Use getAccountARR from @/_domain (single source of truth)
+        const currentARR = repAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
         const currentAccountCount = repAccounts.length;
         const currentCRECount = repAccounts.reduce((sum, acc) => sum + (acc.cre_count || 0), 0);
         
@@ -707,7 +706,7 @@ export const useAssignmentEngine = (buildId?: string) => {
           totalAccounts: filteredAccounts.length,
           assignedAccounts: proposals.length,
           balanceScore: 0.85,
-          avgARRPerRep: proposals.reduce((sum, p) => sum + (p.account.hierarchy_bookings_arr_converted || p.account.calculated_arr || p.account.arr || 0), 0) / repsForEngine.length
+          avgARRPerRep: proposals.reduce((sum, p) => sum + getAccountARR(p.account), 0) / repsForEngine.length
         }
       } as AssignmentResult;
       
@@ -795,9 +794,9 @@ export const useAssignmentEngine = (buildId?: string) => {
         if (!validRepIds.has(p.proposedOwnerId)) return;
         
         const current = repARRMap.get(p.proposedOwnerId) || 0;
-        const accountARR = accounts.find(a => a.sfdc_account_id === p.accountId);
-        // Use hierarchy_bookings_arr_converted as primary ARR source (matches simplifiedAssignmentEngine)
-        const arr = accountARR?.hierarchy_bookings_arr_converted || accountARR?.calculated_arr || accountARR?.arr || 0;
+        const account = accounts.find(a => a.sfdc_account_id === p.accountId);
+        // Use getAccountARR from @/_domain (single source of truth)
+        const arr = account ? getAccountARR(account) : 0;
         repARRMap.set(p.proposedOwnerId, current + arr);
       });
       
@@ -1117,7 +1116,7 @@ export const useAssignmentEngine = (buildId?: string) => {
         avgARRPerRep: combinedMetrics ? 
           allProposals.reduce((sum, p) => {
             const account = filteredAccounts.find(a => a.sfdc_account_id === p.accountId);
-            return sum + (account?.hierarchy_bookings_arr_converted || account?.arr || 0);
+            return sum + (account ? getAccountARR(account) : 0);
           }, 0) / (combinedMetrics.total_reps || 1) : 0
       }
     };

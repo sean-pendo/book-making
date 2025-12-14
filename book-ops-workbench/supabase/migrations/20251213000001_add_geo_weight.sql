@@ -11,3 +11,7 @@ ADD COLUMN IF NOT EXISTS geo_weight NUMERIC DEFAULT 0.3;
 COMMENT ON COLUMN assignment_configuration.geo_weight IS 
   'Weight for geographic scoring in assignment optimization (0.0-1.0). Higher values prefer exact geo matches.';
 
+
+
+
+

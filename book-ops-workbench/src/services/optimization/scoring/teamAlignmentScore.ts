@@ -23,6 +23,7 @@ import type {
   LPTeamParams 
 } from '../types';
 import { TIER_ORDER } from '../types';
+import { classifyTeamTier } from '@/_domain';
 
 /**
  * Get tier index from tier name
@@ -34,16 +35,7 @@ export function getTierIndex(tier: string | null | undefined): number {
   return idx >= 0 ? idx : -1;
 }
 
-/**
- * Classify account tier based on employee count
- */
-export function classifyAccountTier(employees: number | null | undefined): string | null {
-  if (employees === null || employees === undefined) return null;
-  if (employees < 100) return 'SMB';
-  if (employees < 500) return 'Growth';
-  if (employees < 1500) return 'MM';
-  return 'ENT';
-}
+// Tier classification: uses classifyTeamTier from @/_domain (single source of truth)
 
 /**
  * Calculate team alignment score for an account-rep pair
@@ -59,7 +51,7 @@ export function teamAlignmentScore(
   params: LPTeamParams
 ): number {
   // Determine account tier from employee count
-  const accountTier = classifyAccountTier(account.employees);
+  const accountTier = classifyTeamTier(account.employees);
   
   // Determine rep tier (prefer team_tier, fallback to team)
   const repTier = rep.team_tier || rep.team;
@@ -110,7 +102,7 @@ export function explainTeamAlignmentScore(
   rep: EligibleRep,
   params: LPTeamParams
 ): string {
-  const accountTier = classifyAccountTier(account.employees);
+  const accountTier = classifyTeamTier(account.employees);
   const repTier = rep.team_tier || rep.team;
   
   const accountIdx = getTierIndex(accountTier);
