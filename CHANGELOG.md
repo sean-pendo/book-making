@@ -2,6 +2,32 @@
 
 ---
 
+## Release v1.3.3 (2025-12-14)
+
+### Documentation Cleanup & MASTER_LOGIC Audit
+
+#### Archived (moved to `docs/archive/`)
+- `stability.plan.md` - Stability priority implementation plan
+- `pure_optimization_plan.md` - LP engine implementation plan
+- `model_analysis.md` - Assignment engine theory doc
+- `qa_log.md` - Historical QA notes from v1.0
+
+#### Deleted (obsolete)
+- `docs/core/ideas.md` - Generic brainstorming
+- `docs/ops/prospect_accounts_data_issue.md` - Old bug doc
+- `docs/README.md` - Redundant ToC
+- `bun.lockb` - Regenerated lockfile (using npm)
+
+#### MASTER_LOGIC.mdc Enhancements
+- Added optimization weights section (customer vs prospect)
+- Added batch sizes and Supabase limits
+- Added key constants (continuity days, Sales Tools threshold, high-value ARR)
+- Fixed `isCustomer()` to reflect current implementation
+- Updated conflicts section to show all resolved
+- Fixed path references to `_domain/` folder
+
+---
+
 ## Release v1.3.2 (2025-12-14)
 
 ### Dead Code Cleanup & Domain Consolidation

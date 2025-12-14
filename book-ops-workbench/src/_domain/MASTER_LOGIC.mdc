@@ -1,8 +1,8 @@
 # Book Builder - Business Logic & System Reference
 
-> **Version**: 1.3.1  
+> **Version**: 1.3.3  
 > **Last Updated**: 2025-12-14  
-> **Status**: DRAFT - Pending User Confirmation  
+> **Status**: ACTIVE - Audited and consolidated  
 > **Purpose**: Single source of truth for all business rules, paired with `src/domain/` code implementation
 
 ---
@@ -114,17 +114,24 @@ Pipeline = SUM(opportunities.net_arr)
 
 | Type | Definition | Identifying Logic |
 |------|------------|-------------------|
-| **Customer** | Account with existing revenue | Any ARR > 0 |
-| **Prospect** | Account without existing revenue | No positive ARR |
+| **Customer** | Account with existing revenue | `getAccountARR(account) > 0` |
+| **Prospect** | Account without existing revenue | `getAccountARR(account) === 0` |
 
 ```typescript
+// From _domain/calculations.ts
 function isCustomer(account) {
-  if (account.is_parent) {
-    return (account.hierarchy_bookings_arr_converted || 0) > 0;
+  // First check explicit is_customer field if set
+  if (account.is_customer !== undefined) {
+    return account.is_customer;
   }
-  return (account.calculated_arr || account.arr || 0) > 0;
+  // Otherwise derive from ARR
+  return getAccountARR(account) > 0;
 }
 ```
+
+**Note**: The `isCustomer()` function uses the same ARR priority chain as `getAccountARR()`. This ensures consistent classification.
+
+**Exception**: Some filtering code (e.g., in `buildDataService.ts`) intentionally checks ONLY `hierarchy_bookings_arr_converted > 0` for customer classification. This is safer and prevents false positives from `calculated_arr` on child accounts. See `_domain/CLEANUP_PLAN.md` for details.
 
 ### 3.2 Parent vs Child
 
@@ -327,7 +334,21 @@ CSV File → Parse → Validate → Normalize → Insert to Supabase
 | Sales Reps | `sales_reps` | `rep_id`, `build_id` |
 | Opportunities | `opportunities` | `sfdc_opportunity_id`, `build_id` |
 
-### 7.3 Post-Import Calculations
+### 7.3 Batch Sizes
+
+Database operations use batching to avoid timeouts:
+
+| Operation | Batch Size | Reason |
+|-----------|------------|--------|
+| Import | 500 | Supabase request size limits |
+| Update | 100 | Smaller batches for safety |
+| Delete | 1000 | Faster cleanup |
+
+**Supabase Limits**:
+- Default page size: 1000 rows (use `.range()` for more)
+- Max rows per insert: 500
+
+### 7.4 Post-Import Calculations
 
 After import, database functions compute:
 - `calculated_arr`: ARR with opportunity adjustments
@@ -368,6 +389,13 @@ Accounts are locked (stay with current owner) if:
 - `renewal_date` within 90 days
 - `pe_firm` is set (PE-owned accounts)
 - `owner_change_date` within 90 days (recent change)
+
+**Key Constants**:
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `DEFAULT_CONTINUITY_DAYS` | 90 | Days for stability protection |
+| Sales Tools ARR Threshold | $25,000 | Customer accounts under this → Sales Tools bucket |
+| `HIGH_VALUE_ARR_THRESHOLD` | $100,000 | Small company with large contract → treat as Enterprise |
 
 ---
 
@@ -420,7 +448,32 @@ Where tier_distance = |account_tier_index - rep_tier_index|
 | **Strategic Pool** | Strategic accounts → strategic reps only |
 | **Parent-Child Linking** | (Optional) Parent and children same owner |
 
-### 9.5 Balance Penalties
+### 9.5 Optimization Weights
+
+How much each factor matters in the LP optimization. Weights sum to 1.0 per category.
+
+**Customer Weights** (revenue-focused):
+| Factor | Weight | Rationale |
+|--------|--------|-----------|
+| ARR | 0.50 | Revenue is king |
+| ATR | 0.25 | Renewal timing affects workload |
+| Tier | 0.25 | Fair distribution of priority accounts |
+
+**Prospect Weights** (potential-focused):
+| Factor | Weight | Rationale |
+|--------|--------|-----------|
+| Pipeline | 0.50 | Potential revenue |
+| Tier | 0.50 | Fair distribution of high-potential accounts |
+
+```typescript
+// From _domain/constants.ts
+const DEFAULT_OPTIMIZATION_WEIGHTS = {
+  CUSTOMER: { ARR: 0.50, ATR: 0.25, TIER: 0.25 },
+  PROSPECT: { PIPELINE: 0.50, TIER: 0.50 },
+};
+```
+
+### 9.6 Balance Penalties
 
 The solver penalizes imbalance:
 ```
@@ -462,63 +515,47 @@ Users can override calculated thresholds in `assignment_configuration`:
 
 ---
 
-# Part 3: Audit & Conflicts
+# Part 3: Consolidation Status
 
-## 11. Current Conflicts (v1.3)
+## 11. Resolved Conflicts (v1.3.2+)
 
-### 11.1 ARR Calculation Conflicts
+All conflicts from v1.3 have been resolved. See `_domain/CLEANUP_PLAN.md` for full history.
 
-| File | Logic |
-|------|-------|
-| `domain/calculations.ts` | Parent: `calculated_arr → hierarchy → arr` |
-| `buildDataService.ts` | `hierarchy → calculated_arr` (different order) |
-| `rebalancingAssignmentService.ts` | `calculated_arr → arr` (missing hierarchy) |
+### 11.1 ARR Calculation - RESOLVED ✓
 
-**Resolution**: Update all to use user's confirmed rule (Parent = hierarchy, Child = calculated_arr)
+**All files now use** `getAccountARR()` from `@/_domain`:
+```typescript
+hierarchy_bookings_arr_converted || calculated_arr || arr || 0
+```
 
-### 11.2 Region Hierarchy Conflicts
+### 11.2 Region Hierarchy - RESOLVED ✓
 
-| File | APAC Regions |
-|------|--------------|
-| `domain/geography.ts` | ANZ, Japan, Southeast Asia, India |
-| `optimization/types.ts` | ANZ, Japan, Singapore (missing India) |
+Full EMEA and APAC regions now documented in `_domain/geography.ts`.
 
-**Resolution**: Use full list (ANZ, Japan, Southeast Asia, India)
+### 11.3 Duplicate Files - RESOLVED ✓
 
-### 11.3 Duplicate Files
-
-| Duplicate | Source of Truth |
-|-----------|-----------------|
-| `utils/accountCalculations.ts` | `domain/calculations.ts` |
-| `utils/territoryAutoMapping.ts` | `domain/geography.ts` |
-
-**Resolution**: Delete duplicates, update imports
+| Deleted File | Replaced By |
+|--------------|-------------|
+| `utils/accountCalculations.ts` | `_domain/calculations.ts` |
+| `utils/territoryAutoMapping.ts` | `_domain/geography.ts` |
+| `utils/dynamicScoringEngine.ts` | Dead code - removed |
+| `utils/parentChildValidation.ts` | Dead code - removed |
 
 ---
 
-## 12. Refactoring Plan
+## 12. Maintenance Rules
 
-### Phase 1: Confirm This Document
-- [ ] User reviews and confirms all business rules
-- [ ] Resolve any remaining questions
+### When Adding New Business Logic
 
-### Phase 2: Update Domain Module
-- [ ] Update `src/domain/calculations.ts` with confirmed ARR logic
-- [ ] Update `src/domain/geography.ts` with confirmed regions
-- [ ] Ensure `src/domain/` matches this document exactly
+1. **Add to `_domain/`** - Never add business logic elsewhere
+2. **Update this document** - Keep MASTER_LOGIC.mdc in sync
+3. **Import from `@/_domain`** - All consumers must import
 
-### Phase 3: Delete Duplicates
-- [ ] Delete `src/utils/accountCalculations.ts`
-- [ ] Delete `src/utils/territoryAutoMapping.ts`
-- [ ] Remove duplicate constants from `optimization/types.ts`
+### Intentional Exceptions
 
-### Phase 4: Update Imports
-- [ ] Change 12 files from `@/utils/accountCalculations` → `@/domain`
-- [ ] Update inline logic in services to use domain functions
-
-### Phase 5: Enforce Going Forward
-- [ ] Update `CURSOR.mdc` with mandatory reading rule
-- [ ] Add quick reference glossary to rules
+Some inline logic is intentionally different (documented in `CLEANUP_PLAN.md`):
+- Customer classification filters use ONLY `hierarchy_bookings_arr_converted > 0`
+- This prevents false positives from child account `calculated_arr`
 
 ---
 
@@ -526,8 +563,11 @@ Users can override calculated thresholds in `assignment_configuration`:
 
 | Concept | Source of Truth | Paired Doc Section |
 |---------|-----------------|-------------------|
-| ARR/ATR Calculation | `src/domain/calculations.ts` | Section 2 |
-| Team Tiers | `src/domain/tiers.ts` | Section 5 |
-| Geography | `src/domain/geography.ts` | Section 4 |
-| Constants | `src/domain/constants.ts` | Sections 5, 10 |
-| Normalization | `src/domain/normalization.ts` | Section 6 |
+| ARR/ATR Calculation | `src/_domain/calculations.ts` | Section 2 |
+| Team Tiers | `src/_domain/tiers.ts` | Section 5 |
+| Geography | `src/_domain/geography.ts` | Section 4 |
+| Constants | `src/_domain/constants.ts` | Sections 5, 7, 8, 9, 10 |
+| Normalization | `src/_domain/normalization.ts` | Section 6 |
+| Cleanup History | `src/_domain/CLEANUP_PLAN.md` | Section 11 |
+
+**Import Path**: Always use `@/_domain` (configured in `tsconfig.json`)
