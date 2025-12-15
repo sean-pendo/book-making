@@ -38,7 +38,7 @@
  *     REGION_HIERARCHY
  *   } from '@/_domain';
  * 
- * DOCUMENTATION: src/core/MASTER_LOGIC.md#4-geography--territories
+ * @see MASTER_LOGIC.mdc §4 (Geography & Territories)
  * 
  * ============================================================================
  */
@@ -180,7 +180,7 @@ interface RegionConfig {
 
 /**
  * US region configuration for auto-mapping territories
- * @see src/core/MASTER_LOGIC.md#auto-mapping-patterns
+ * @see MASTER_LOGIC.mdc §4.2
  */
 export const US_REGION_CONFIG: Record<AMERSubRegion, RegionConfig> = {
   'North East': {
@@ -217,7 +217,7 @@ export const US_REGION_CONFIG: Record<AMERSubRegion, RegionConfig> = {
  * 2. Cities
  * 3. State codes
  * 
- * @see src/core/MASTER_LOGIC.md#territory-mapping-logic
+ * @see MASTER_LOGIC.mdc §4.2
  */
 export function autoMapTerritoryToUSRegion(territory: string): AMERSubRegion | null {
   if (!territory) return null;

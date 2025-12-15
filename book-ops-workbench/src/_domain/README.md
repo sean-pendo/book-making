@@ -4,6 +4,8 @@
 
 This folder is the **single source of truth** for all business rules in Book Builder.
 
+**Why SSOT matters:** Before this folder existed, the same business logic was duplicated in 50+ places. When definitions diverged, bugs appeared (dashboard showed $2M, export showed $1.8M). Now there's ONE definition that everything imports.
+
 ---
 
 ## What's In This Folder
@@ -18,6 +20,60 @@ This folder is the **single source of truth** for all business rules in Book Bui
 | `constants.ts` | Thresholds, default values, magic numbers |
 | `normalization.ts` | Typo handling for imported data |
 | `index.ts` | Re-exports everything for easy importing |
+
+---
+
+## Cross-Reference System
+
+Code and documentation are linked bidirectionally so you can trace any rule:
+
+### Code → Doc (in TypeScript files)
+
+Every exported function/constant must have a `@see` tag pointing to its doc section:
+
+```typescript
+/**
+ * Calculates the effective ARR for an account.
+ * @see MASTER_LOGIC.mdc §2.1
+ */
+export function getAccountARR(account: AccountData): number { ... }
+```
+
+**Format**: `@see MASTER_LOGIC.mdc §X.X` where X.X is the section number.
+
+### Doc → Code (in MASTER_LOGIC.mdc)
+
+Every section that has an implementation must include an **Impl** line:
+
+```markdown
+### 2.1 ARR Priority Order
+
+**Impl**: `getAccountARR()` in calculations.ts
+
+The priority order is:
+1. hierarchy_bookings_arr_converted
+2. calculated_arr
+3. arr
+4. 0 (fallback)
+```
+
+### Quick Reference Map
+
+| Doc Section | Implementation | File |
+|-------------|----------------|------|
+| §2.1 ARR Priority | `getAccountARR()` | calculations.ts |
+| §2.2 ATR Calculation | `getAccountATR()` | calculations.ts |
+| §2.3 Pipeline | `calculatePipeline()` | calculations.ts |
+| §5.1 Team Tier | `classifyTeamTier()` | tiers.ts |
+| §5.2 Expansion Tier | `getExpansionTier()` | tiers.ts |
+| §4 Geography | `calculateGeoMatchScore()` | geography.ts |
+| §6 Normalization | `normalizeRegion()`, `normalizePEFirm()` | normalization.ts |
+
+### Why This Matters
+
+- **Verifying parity**: You can check any doc claim by finding its `@see` reference in code
+- **Finding docs**: When reading code, the `@see` tag tells you where to learn more
+- **Avoiding drift**: If code changes, the `@see` tag reminds you to update docs
 
 ---
 
@@ -57,10 +113,32 @@ const tier = employees < 100 ? 'SMB' : employees < 500 ? 'Growth' : 'MM';
 
 ## Rules for Modifying
 
+### Adding New Business Logic
+
 1. **Read `MASTER_LOGIC.mdc` first** - Understand the current rules
-2. **Update `MASTER_LOGIC.mdc`** - Document the change
-3. **Update the `.ts` file** - Implement the change
-4. **Search for inline logic** - Find and update any hardcoded duplicates elsewhere
+2. **Add to appropriate `.ts` file** - Put the implementation here
+3. **Export from `index.ts`** - Make it available via `@/_domain`
+4. **Update `MASTER_LOGIC.mdc`** - Document the rule in the right section
+5. **Search for inline logic** - Find and refactor any hardcoded duplicates
+
+### When You Find a Discrepancy
+
+If code elsewhere differs from `_domain/`:
+
+1. **STOP** - Don't silently change it
+2. **Ask the user**: "I found `X` in this file, but `MASTER_LOGIC.mdc` says `Y`. Which is correct?"
+3. **Possible outcomes**:
+   - Bug → Fix the code to match `_domain/`
+   - Intentional exception → Document it in CLEANUP_PLAN.md
+   - Outdated docs → Update MASTER_LOGIC.mdc
+
+### Intentional Exceptions
+
+Some inline logic is intentionally different (documented in `CLEANUP_PLAN.md`):
+
+| Exception | Reason |
+|-----------|--------|
+| `buildDataService.ts` uses only `hierarchy_bookings_arr_converted > 0` for customer classification | Prevents false positives from child account `calculated_arr` |
 
 ---
 

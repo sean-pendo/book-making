@@ -128,6 +128,22 @@ Codebase has been stabilized and consolidated. Business logic is centralized in 
 2.  **Verify Supabase**: If data looks wrong, check the DB first
 3.  **Console Logs**: Assignment engine logs to console with `[AssignmentEngine]` prefix
 
+### 🔴 Debug Mode Requirements
+
+**When entering Debug Mode, ALWAYS start by reviewing business logic:**
+
+1. **Read `src/_domain/MASTER_LOGIC.mdc`** - Understand the expected behavior before investigating
+2. **Check relevant `_domain/*.ts` files** - Verify the implementation matches documentation
+3. **Compare actual vs expected** - Use `MASTER_LOGIC.mdc` as the source of truth for what *should* happen
+
+**Debug Mode Checklist:**
+- [ ] Did I read `MASTER_LOGIC.mdc` to understand the business rule?
+- [ ] Is the bug in the business logic (fix `_domain/`) or in a consumer (fix component/service)?
+- [ ] Does the current implementation match the documented behavior?
+- [ ] If there's a discrepancy, which is correct - the docs or the code?
+
+**Why this matters:** Many bugs are business logic misunderstandings, not code errors. Reading the docs first prevents "fixing" code that's actually correct.
+
 ## 6. Rules & Guidelines
 
 ### 📜 Documentation Rules

@@ -11,6 +11,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
 import { SalesRepDetailDialog } from './SalesRepDetailDialog';
 import { calculateSalesRepMetrics, type SalesRepMetrics } from '@/utils/salesRepCalculations';
+import { getCRERiskLevel } from '@/_domain';
 
 interface SalesRep {
   rep_id: string;
@@ -515,18 +516,17 @@ export const SalesRepsTable = ({ buildId, onDataRefresh }: SalesRepsTableProps) 
   };
 
 
-  const getRiskLevel = (creCount: number): string => {
-    if (creCount === 0) return 'none';
-    if (creCount <= 2) return 'low';
-    if (creCount <= 5) return 'medium';
-    return 'high';
-  };
+  // Use centralized CRE risk thresholds from @/_domain
+  const getRiskLevel = (creCount: number): string => getCRERiskLevel(creCount);
 
   const getRiskBadge = (creCount: number) => {
-    if (creCount === 0) return <Badge variant="secondary">No CRE Risk</Badge>;
-    if (creCount <= 2) return <Badge variant="outline">Low CRE Risk</Badge>;
-    if (creCount <= 5) return <Badge variant="default">Medium CRE Risk</Badge>;
-    return <Badge variant="destructive">High CRE Risk</Badge>;
+    const level = getCRERiskLevel(creCount);
+    switch (level) {
+      case 'none': return <Badge variant="secondary">No CRE Risk</Badge>;
+      case 'low': return <Badge variant="outline">Low CRE Risk</Badge>;
+      case 'medium': return <Badge variant="default">Medium CRE Risk</Badge>;
+      case 'high': return <Badge variant="destructive">High CRE Risk</Badge>;
+    }
   };
 
   return (

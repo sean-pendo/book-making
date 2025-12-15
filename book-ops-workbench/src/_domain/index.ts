@@ -26,7 +26,7 @@
  * 
  * DOCUMENTATION:
  * --------------
- * Full documentation: src/core/MASTER_LOGIC.md
+ * Full documentation: MASTER_LOGIC.mdc
  * 
  * CONTRIBUTING:
  * -------------

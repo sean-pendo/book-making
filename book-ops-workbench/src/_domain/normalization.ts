@@ -14,7 +14,7 @@
  * 1. Find the appropriate *_ALIASES constant below
  * 2. Add the lowercase variation as the key
  * 3. Add the canonical value as the value
- * 4. Update src/core/MASTER_LOGIC.md#data-normalization
+ * 4. Update MASTER_LOGIC.mdc §6
  * 
  * USAGE:
  *   import { normalizeRegion, normalizePEFirm } from '@/_domain';
@@ -22,7 +22,7 @@
  *   const region = normalizeRegion('NYC');  // → 'North East'
  *   const pe = normalizePEFirm('JMI');      // → 'JMI Private Equity'
  * 
- * DOCUMENTATION: src/core/MASTER_LOGIC.md#data-normalization
+ * @see MASTER_LOGIC.mdc §6 (Data Normalization)
  * 
  * ============================================================================
  */

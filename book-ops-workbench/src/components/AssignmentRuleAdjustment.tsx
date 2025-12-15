@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { AlertTriangle, Settings, Save, RefreshCw, Sliders, Sparkles } from 'lucide-react';
 import { ScoringWeightsEditor } from './ScoringWeightsEditor';
+import { DEFAULT_MAX_ARR_PER_REP } from '@/_domain';
 
 interface AssignmentRule {
   id: string;
@@ -223,19 +224,19 @@ export const AssignmentRuleAdjustment: React.FC<AssignmentRuleAdjustmentProps> =
             <Input
               id={`cutoff-${rule.id}`}
               type="number"
-              value={conditions.minCustomerARR || 2500000}
+              value={conditions.minCustomerARR || DEFAULT_MAX_ARR_PER_REP}
               onChange={(e) => {
                 const newConditions = {
                   ...conditions,
-                  minCustomerARR: parseInt(e.target.value) || 2500000
+                  minCustomerARR: parseInt(e.target.value) || DEFAULT_MAX_ARR_PER_REP
                 };
                 updateRuleConditions(rule.id, newConditions);
               }}
               disabled={saving}
-              placeholder="2500000"
+              placeholder={DEFAULT_MAX_ARR_PER_REP.toString()}
             />
             <p className="text-xs text-muted-foreground">
-              Maximum ARR per sales rep (e.g., 2500000 = $2.5M)
+              Maximum ARR per sales rep (e.g., {DEFAULT_MAX_ARR_PER_REP.toLocaleString()} = ${(DEFAULT_MAX_ARR_PER_REP / 1_000_000).toFixed(1)}M)
             </p>
           </div>
 
@@ -262,7 +263,7 @@ export const AssignmentRuleAdjustment: React.FC<AssignmentRuleAdjustmentProps> =
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
             Changes to the hard cutoff will immediately affect assignment logic. 
-            Current setting: <strong>${((conditions.minCustomerARR || 2500000) / 1000000).toFixed(1)}M ARR per rep</strong>
+            Current setting: <strong>${((conditions.minCustomerARR || DEFAULT_MAX_ARR_PER_REP) / 1000000).toFixed(1)}M ARR per rep</strong>
           </AlertDescription>
         </Alert>
       </div>
