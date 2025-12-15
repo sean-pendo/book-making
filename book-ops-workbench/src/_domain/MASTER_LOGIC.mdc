@@ -1,9 +1,57 @@
 # Book Builder - Business Logic & System Reference
 
-> **Version**: 1.3.4  
-> **Last Updated**: 2025-12-14  
+> **Version**: 1.3.7  
+> **Last Updated**: 2025-12-15  
 > **Status**: ACTIVE - Audited and consolidated  
-> **Purpose**: Single source of truth for all business rules, paired with `src/domain/` code implementation
+> **Purpose**: Single source of truth (SSOT) for all business rules
+
+**Why SSOT?** This document + the `_domain/*.ts` files are the authoritative source for all business logic. No magic numbers scattered across components. When you need to know "how is ARR calculated?" or "what makes an account Enterprise?" - look here first, not in random component files.
+
+---
+
+## Quick Reference
+
+<details>
+<summary><strong>📊 Key Formulas (click to expand)</strong></summary>
+
+| Calculation | Formula | Source |
+|-------------|---------|--------|
+| ARR | `hierarchy_bookings_arr_converted ∥ calculated_arr ∥ arr ∥ 0` | §2.1 |
+| ATR | `SUM(opps.available_to_renew) WHERE type='Renewals'` | §2.2 |
+| Pipeline | `SUM(opps.net_arr) WHERE is_customer=false OR type='Expansion'` | §2.3 |
+| Team Tier | `employees < 100 → SMB, < 500 → Growth, < 1500 → MM, else ENT` | §5.1 |
+| Geo Score | `exact=1.0, sibling=0.85, parent=0.65, global=0.40, cross=0.20` | §4.3 |
+| Balance Target | `Total Value / Number of Active Reps` | §12.1 |
+
+</details>
+
+<details>
+<summary><strong>🔢 Key Thresholds (click to expand)</strong></summary>
+
+| Threshold | Value | Purpose |
+|-----------|-------|---------|
+| Sales Tools ARR | $25,000 | Below this → Sales Tools bucket |
+| High Value ARR | $100,000 | Legacy default - threshold for high-value metrics |
+| High Value Continuity | $500,000 | Legacy default - threshold for continuity metrics |
+| Max ARR per Rep | $2,500,000 | Default capacity cap (configurable) |
+| Overload Variance | 20% | Default variance from target before rep is overloaded (configurable) |
+| Stability Days | 90 | Renewal soon / recent change window |
+| Strategic Variance | 20% | Balance variance for strategic accounts |
+
+</details>
+
+<details>
+<summary><strong>📁 File Quick Reference (click to expand)</strong></summary>
+
+| File | Purpose |
+|------|---------|
+| `calculations.ts` | ARR, ATR, Pipeline formulas |
+| `tiers.ts` | Team tier classification |
+| `geography.ts` | Region hierarchy, geo scoring |
+| `normalization.ts` | Typo handling for imports |
+| `constants.ts` | All thresholds and defaults |
+
+</details>
 
 ---
 
@@ -17,22 +65,27 @@
 5. [Team Tiers](#5-team-tiers)
 6. [Data Normalization](#6-data-normalization)
 
-### Part 2: App-Specific Logic
-7. [Data Import Flow](#7-data-import-flow)
-8. [Assignment Engine](#8-assignment-engine)
-9. [Optimization Model](#9-optimization-model)
-10. [Balancing & Thresholds](#10-balancing--thresholds)
-11. [Analytics & Success Metrics](#11-analytics--success-metrics)
+### Part 2: Organizational Structure
+7. [Manager Hierarchy](#7-manager-hierarchy)
+8. [Backfill & Open Headcount](#8-backfill--open-headcount)
 
-### Part 3: Consolidation Status
-12. [Resolved Conflicts](#12-resolved-conflicts)
-13. [Maintenance Rules](#13-maintenance-rules)
+### Part 3: App-Specific Logic
+9. [Data Import Flow](#9-data-import-flow)
+10. [Assignment Engine](#10-assignment-engine)
+11. [Optimization Model](#11-optimization-model)
+12. [Balancing & Thresholds](#12-balancing--thresholds)
+13. [Analytics & Success Metrics](#13-analytics--success-metrics)
+
+### Appendix
+- [Code Locations](#appendix-code-locations)
+- [Maintenance Rules](#maintenance-rules)
 
 ---
 
 # Part 1: Core Business Definitions
 
-These are the raw business rules that define terminology and calculations. They exist independently of the app implementation.
+> 📋 **What's here**: Terminology, revenue formulas, account types, geography, tiers, normalization.  
+> These rules exist independently of the app - they're universal business definitions.
 
 ---
 
@@ -47,18 +100,29 @@ These are the raw business rules that define terminology and calculations. They 
 | **Parent Account** | Ultimate Parent | Top-level account in a corporate hierarchy |
 | **Child Account** | Subsidiary | Account that belongs to a parent hierarchy |
 | **Split Ownership** | | When a child account has a different owner than its parent |
-| **Strategic Account** | | High-value accounts assigned to dedicated Strategic reps. Always stays with strategic reps, no capacity limits apply. |
+| **Strategic Account** | | High-value accounts assigned to dedicated Strategic reps. No capacity limits apply. |
 | **PE Firm** | Private Equity | Accounts owned by specific PE firms may have special handling rules |
+| **Rep** | Sales Representative | Individual contributor who owns accounts |
+| **Strategic Rep** | | Reps who only receive strategic accounts; strategic accounts must only be assigned to strategic reps |
+| **FLM** | First Line Manager | Direct manager of Reps. Approves Rep book changes. |
+| **SLM** | Second Line Manager | Manager of FLMs. Reviews FLM-approved changes. |
+| **RevOps** | Revenue Operations | Final approver. Executes assignments to Salesforce. |
+| **Backfill Source** | | Rep who is leaving. Accounts need reassignment. |
+| **Backfill Target** | | New Rep created to receive accounts from leaving Rep. |
+| **Placeholder** | Open Headcount | A slot for a future hire, used for capacity planning. |
 
 ### Important Distinctions
 
 - **ARR vs Pipeline**: ARR is real revenue (customers). Pipeline is potential (prospects). Never mix.
-- **ATR vs CRE**: ATR = timing (when does revenue renew). CRE = risk (might churn). Independent metrics.
+- **ATR vs CRE**: ATR = timing (when does revenue renew). CRE = risk (might churn). Independent metrics. Note: ATR is a subset of ARR—specifically, revenue from renewal opportunities.
 - **Parent vs Child**: Business relationship, not data hierarchy. A parent can be a customer while child is prospect.
+- **Parent-Child Assignment**: Implicit priority to keep parent and child accounts with the same rep to maintain relationship continuity.
 
 ---
 
 ## 2. Revenue Metrics
+
+**Impl**: `calculations.ts` - `getAccountARR()`, `getAccountATR()`, `calculatePipelineFromOpportunities()`
 
 ### 2.1 ARR Calculation
 
@@ -84,6 +148,8 @@ function getAccountARR(account) {
 
 ### 2.2 ATR Calculation
 
+**Impl**: `calculations.ts` - `getAccountATR()`, `isRenewalOpportunity()`, `calculateATRFromOpportunities()`
+
 **Rule**: ATR = SUM of `available_to_renew` from **Renewal opportunities only**
 
 ```typescript
@@ -98,18 +164,23 @@ ATR = SUM(opportunities.available_to_renew)
 
 ### 2.3 Pipeline Calculation
 
-**Rule**: Pipeline = SUM of `net_arr` from prospect account opportunities
+**Rule**: Pipeline = SUM of `net_arr` from prospect opportunities AND expansion opportunities on customer accounts
 
 ```typescript
 Pipeline = SUM(opportunities.net_arr)
            WHERE account.is_customer = false
+           OR opportunity_type = 'Expansion'
 ```
+
+**Why include Expansion?** Customer accounts with expansion opportunities represent real pipeline value that should be balanced across reps.
 
 **Fallback**: If `net_arr` is null, use `amount` field.
 
 ---
 
 ## 3. Account Classification
+
+**Impl**: `calculations.ts` - `isCustomer()`, `hasARR()`
 
 ### 3.1 Customer vs Prospect
 
@@ -158,6 +229,10 @@ When a child account has a **different owner** than its parent:
 
 ## 4. Geography & Territories
 
+**Impl**: `geography.ts` - `REGION_HIERARCHY`, `REGION_ANCESTRY`, `calculateGeoMatchScore()`, `autoMapTerritoryToUSRegion()`
+
+> **AI Integration Note**: Geography data is provided to the AI model to help identify territory-to-region relationships and suggest optimal mappings.
+
 ### 4.1 Region Hierarchy
 
 **AMER** (Americas - includes Canada)
@@ -205,7 +280,23 @@ Accounts have a `sales_territory` field with free-text values. We map these to r
 2. Cities - e.g., "San Francisco" → West
 3. State codes - e.g., "CA" → West
 
+**EMEA Country Mapping**:
+
+**Impl**: `commercialPriorityHandlers.ts` - `EMEA_COUNTRY_TO_SUBREGION`
+
+| Sub-Region | Countries |
+|------------|-----------|
+| DACH | DE, AT, CH (Germany, Austria, Switzerland) |
+| UKI | GB, UK, IE (United Kingdom, Ireland) |
+| Nordics | SE, NO, DK, FI, IS |
+| France | FR |
+| Benelux | NL, BE, LU |
+| Southern Europe | ES, IT, PT |
+| Middle East | AE, SA, IL, QA, KW, BH, OM |
+
 ### 4.3 Geo Match Scoring (Hierarchy-Based)
+
+**Impl**: `constants.ts` - `GEO_MATCH_SCORES`
 
 Geography matching rewards **specificity**. More specific matches score higher:
 
@@ -238,6 +329,9 @@ Global (can take anything)
 
 ## 5. Team Tiers
 
+**Impl**: `tiers.ts` - `classifyTeamTier()`, `TEAM_TIER_ORDER`, `getTierDistance()`, `isEnterprise()`, `parseExpansionTier()`, `getAccountExpansionTier()`
+**Constants**: `constants.ts` - `TIER_THRESHOLDS`, `HIGH_VALUE_ARR_THRESHOLD`
+
 ### 5.1 Team Tier (Employee-Based)
 
 | Tier | Employee Count | Rep Specialization |
@@ -267,6 +361,12 @@ function classifyTeamTier(employees) {
 
 **Null Handling**: If employee count is unknown, return `null` rather than forcing a tier. Let the consumer decide how to handle unmapped fields.
 
+**⚠️ Data Quality Note**: 
+- Team tier classification is **only relevant if employee count data is present and accurate**
+- If `employees` field is null, 0, or missing → tier is null → team alignment scoring is skipped
+- ENT threshold (1500+) was chosen to align with typical enterprise sales org structure
+- These thresholds can be adjusted in `TIER_THRESHOLDS` constant if your org uses different breakpoints
+
 ### 5.2 Expansion Tier (Scoring-Based)
 
 | Tier | Meaning | Used For |
@@ -281,6 +381,8 @@ Source fields: `expansion_tier` (customers) or `initial_sale_tier` (prospects)
 ---
 
 ## 6. Data Normalization
+
+**Impl**: `normalization.ts` - `normalizeRegion()`, `normalizePEFirm()`, `normalizeTeamTier()`
 
 Imported data contains typos and variations. These are normalized on import.
 
@@ -313,21 +415,152 @@ Imported data contains typos and variations. These are normalized on import.
 
 ---
 
-# Part 2: App-Specific Logic
+# Part 2: Organizational Structure
 
-These rules are specific to how the Book Builder application works.
+> 👥 **What's here**: Manager roles (Rep/FLM/SLM/RevOps), approval chains, backfill workflows.  
+> How the sales org is structured and how changes flow through approvals.
 
 ---
 
-## 7. Data Import Flow
+## 7. Manager Hierarchy
 
-### 7.1 Import Pipeline
+**Impl**: `utils/approvalChainUtils.ts` - `getApprovalStepsForRegion()`, `getApprovalChainDescription()`
+
+### 7.1 Role Definitions
+
+| Role | Full Name | Description |
+|------|-----------|-------------|
+| **Rep** | Sales Representative | Individual contributor who owns accounts |
+| **FLM** | First Line Manager | Direct manager of Reps. Reviews and approves Rep book changes. |
+| **SLM** | Second Line Manager | Manager of FLMs. Reviews FLM-approved changes before RevOps. |
+| **RevOps** | Revenue Operations | Final approver. Executes assignments to Salesforce. |
+
+### 7.2 Hierarchy Structure
+
+```
+RevOps (Final Authority)
+└── SLM (Second Line Manager)
+    └── FLM (First Line Manager)
+        └── Rep (Account Owner)
+```
+
+**Data Fields**:
+- `sales_reps.flm` → First Line Manager name
+- `sales_reps.slm` → Second Line Manager name
+- `sales_reps.manager` → Legacy field (prefer FLM/SLM)
+
+### 7.3 Approval Chain
+
+When a Rep's book is modified, changes flow through an approval chain:
+
+**Standard Flow (AMER, Global)**:
+```
+Rep Book → FLM Approval → SLM Approval → RevOps Approval → Approved
+```
+
+**EMEA Flow** (no SLMs in EMEA structure):
+```
+Rep Book → FLM Approval → RevOps Approval → Approved
+```
+
+**Status Values**:
+| Status | Meaning |
+|--------|---------|
+| `pending_flm` | Awaiting FLM approval |
+| `pending_slm` | Awaiting SLM approval |
+| `pending_revops` | Awaiting RevOps final approval |
+| `approved` | Fully approved, ready to execute |
+| `rejected` | Rejected at any level |
+
+### 7.4 Portfolio Views
+
+Dashboards group accounts by manager hierarchy:
+- **FLM View**: All accounts owned by Reps under a specific FLM
+- **SLM View**: All accounts owned by Reps under all FLMs reporting to an SLM
+- Metrics (ARR, ATR, account count, tier distribution) roll up through hierarchy
+
+---
+
+## 8. Backfill & Open Headcount
+
+### 8.1 Terminology
+
+| Term | Definition |
+|------|------------|
+| **Backfill Source** | A Rep who is leaving. ALL accounts/prospects are removed from this rep and need reassignment. |
+| **Backfill Target** | A Rep designated to receive accounts from the leaving Rep. Can be a new Rep or an existing Rep. |
+| **Placeholder** | An open headcount slot (no actual person yet). Used for planning. |
+| **Open Headcount** | Same as Placeholder - a slot for a future hire. |
+
+> **Backfill Priority**: When the backfill target is a different (existing) rep rather than a new hire, they receive lower continuity priority than same-rep continuity. This is because the relationship is still changing, even if to a known target.
+
+### 8.2 Data Fields
+
+**Sales Reps Flags**:
+
+| Field | Table | Purpose |
+|-------|-------|---------|
+| `is_active` | `sales_reps` | TRUE = Rep can receive new assignments |
+| `include_in_assignments` | `sales_reps` | TRUE = Rep participates in assignment engine |
+| `is_strategic_rep` | `sales_reps` | TRUE = Handles strategic accounts only |
+| `is_manager` | `sales_reps` | TRUE = FLM/SLM role, may not carry accounts |
+| `is_renewal_specialist` | `sales_reps` | TRUE = Focuses on renewals, different capacity |
+| `is_backfill_source` | `sales_reps` | TRUE = Rep is leaving, excluded from assignments |
+| `is_backfill_target` | `sales_reps` | TRUE = Rep was created as backfill for leaving Rep |
+| `backfill_target_rep_id` | `sales_reps` | Links leaving Rep to their backfill Rep |
+| `is_placeholder` | `sales_reps` | TRUE = Open headcount (no actual person) |
+
+**Account Flags**:
+
+| Field | Table | Purpose |
+|-------|-------|---------|
+| `is_customer` | `accounts` | TRUE = Has revenue (ARR > 0) |
+| `is_parent` | `accounts` | TRUE = Top of hierarchy (no ultimate_parent_id) |
+| `is_strategic` | `accounts` | TRUE = Strategic account, goes to strategic reps only |
+| `exclude_from_reassignment` | `accounts` | TRUE = Manual lock, stays with current owner |
+| `has_customer_hierarchy` | `accounts` | TRUE = Has child accounts |
+| `has_split_ownership` | `accounts` | TRUE = Children have different owners than parent |
+
+### 8.3 Backfill Workflow
+
+1. **Mark Rep as Leaving**: Set `is_backfill_source = true`
+   - Automatically sets `include_in_assignments = false`
+   - Rep's accounts become available for reassignment
+
+2. **Create Backfill Rep**: System auto-generates a backfill target
+   - New Rep with `is_backfill_target = true`
+   - Linked via `backfill_target_rep_id`
+
+3. **Assignment Engine Behavior**:
+   - Backfill source Reps get continuity score = 0 (relationship ending)
+   - Accounts from leaving Reps can be migrated to their backfill target
+   - Stability lock: `backfill_migration` routes accounts to target Rep
+
+### 8.4 Placeholder/Open Headcount
+
+When importing Reps CSV:
+- If `rep_id` is blank but `name` is provided → auto-generates placeholder ID
+- Sets `is_placeholder = true`
+- Used for capacity planning ("what if we hire 2 more reps?")
+
+---
+
+# Part 3: App-Specific Logic
+
+> ⚙️ **What's here**: Data import, assignment engine, LP optimization model, balancing thresholds.  
+> How the Book Builder application implements the business rules above.
+
+---
+
+## 9. Data Import Flow
+
+### 9.1 Import Pipeline
 
 ```
 CSV File → Parse → Validate → Normalize → Insert to Supabase
 ```
 
-### 7.2 Import Tables
+### 9.2 Import Tables
 
 | Data Type | Table | Key Fields |
 |-----------|-------|------------|
@@ -335,7 +568,9 @@ CSV File → Parse → Validate → Normalize → Insert to Supabase
 | Sales Reps | `sales_reps` | `rep_id`, `build_id` |
 | Opportunities | `opportunities` | `sfdc_opportunity_id`, `build_id` |
 
-### 7.3 Batch Sizes
+### 9.3 Batch Sizes
+
+**Impl**: `constants.ts` - `BATCH_SIZES`, `SUPABASE_LIMITS`
 
 Database operations use batching to avoid timeouts:
 
@@ -349,7 +584,13 @@ Database operations use batching to avoid timeouts:
 - Default page size: 1000 rows (use `.range()` for more)
 - Max rows per insert: 500
 
-### 7.4 Post-Import Calculations
+```typescript
+// From constants.ts
+const BATCH_SIZES = { IMPORT: 500, UPDATE: 100, DELETE: 1000 };
+const SUPABASE_LIMITS = { DEFAULT_PAGE_SIZE: 1000, MAX_ROWS_PER_INSERT: 500 };
+```
+
+### 9.4 Post-Import Calculations
 
 After import, database functions compute:
 - `calculated_arr`: ARR with opportunity adjustments
@@ -357,114 +598,539 @@ After import, database functions compute:
 - `is_parent`: Based on `ultimate_parent_id`
 - `child_count`: Number of child accounts
 
+### 9.5 Auto-Mapping System
+
+**Impl**: `autoMapFields()` in autoMappingUtils.ts
+
+The import system automatically maps CSV headers to database fields using a multi-tier matching strategy:
+
+| Match Type | Priority | Confidence | Example |
+|------------|----------|------------|---------|
+| **Exact** | 1st | 1.0 | "Account Name" → `account_name` |
+| **Alias** | 2nd | 0.9 | "Company Name" → `account_name` |
+| **Pattern** | 3rd | 0.8 | "Acct_Nm" → `account_name` (regex match) |
+| **Fuzzy** | 4th | 0.6+ | "Accnt Name" → `account_name` (string similarity) |
+
+#### Field Alias Tables
+
+**Accounts** (key mappings):
+
+| Schema Field | Common Aliases |
+|--------------|----------------|
+| `sfdc_account_id` | Account ID (18), Account_ID, AccountID, SFDC_Account_ID |
+| `account_name` | Account Name, Company Name, organization |
+| `owner_id` | Account Owner User ID, Owner_ID, Sales_Rep_ID |
+| `owner_name` | Account Owner: Full Name, Sales_Rep, account_manager |
+| `hierarchy_bookings_arr_converted` | Hierarchy Bookings ARR, Hierarchy ARR |
+| `employees` | ROE Employee Count, Employee_Count, headcount |
+| `sales_territory` | ROE Sales Territory, Territory, Territory_Code |
+| `pe_firm` | Related Partner Account: Related Partner Account Name, PE Firm, Private_Equity_Firm |
+| `ultimate_parent_id` | Financial Ultimate Parent: Account ID (18), Parent_ID |
+
+**Sales Reps** (key mappings):
+
+| Schema Field | Common Aliases |
+|--------------|----------------|
+| `rep_id` | Rep_ID, Sales_Rep_ID, Employee_ID, SFDC_ID |
+| `name` | Rep Name, Full_Name, Sales_Rep_Name |
+| `email` | Email, Rep_Email, Work_Email |
+| `region` | Region, Sales_Region, Territory |
+| `team` | Team, Sales_Team, Team_Name (SMB/Growth/MM/ENT) |
+| `slm_name` | SLM, SLM_Name, Second_Line_Manager |
+| `flm_name` | FLM, FLM_Name, First_Line_Manager |
+| `is_backfill_source` | Backfill_Source, Is_Leaving |
+| `backfill_target_rep_id` | Backfill_Target, Target_Rep_ID |
+
+**Opportunities** (key mappings):
+
+| Schema Field | Common Aliases |
+|--------------|----------------|
+| `sfdc_opportunity_id` | Opportunity_ID, Opp_ID |
+| `sfdc_account_id` | Account_ID, Related_Account_ID |
+| `opportunity_type` | Opportunity Type, Opp_Type |
+| `available_to_renew` | Available to Renew (converted), ATR |
+| `net_arr` | Net ARR (converted), Net_ARR, NARR |
+| `cre_status` | CRE_Status, Customer_Risk, renewal_risk |
+
+> **Full alias lists**: See `ACCOUNT_FIELD_ALIASES`, `SALES_REP_FIELD_ALIASES`, `OPPORTUNITY_FIELD_ALIASES` in `utils/autoMappingUtils.ts`
+
 ---
 
-## 8. Assignment Engine
+## 10. Assignment Engine
 
-### 8.1 Priority Waterfall
+**Impl**: `simplifiedAssignmentEngine.ts`, `config/priorityRegistry.ts`
+
+> **TL;DR**: Assignments run through priority levels P0→P7. P0-P2 are "holdover" (locked). P3-P7 are "optimization" (LP solver decides). Priorities are customizable per mode (COMMERCIAL, ENT, EMEA, APAC).
+
+### 10.1 Priority Waterfall (Customizable)
+
+> ⚠️ **Priorities are customizable.** The order below is the default. Users can reorder, enable/disable priorities via the UI. Config is stored in `assignment_configuration.priority_config`.
+
+> **Mode-Based Defaults**: Priority order defaults based on detected book type (ENT, COMMERCIAL, EMEA, APAC). See §10.3 for mode-specific configurations.
 
 Assignments are processed in priority order. Each level runs before the next:
 
-| Priority | Name | Type | Description |
-|----------|------|------|-------------|
-| **P0** | Manual Holdover | Holdover | Locked accounts stay put, strategic → strategic reps |
-| **P1** | Sales Tools Bucket | Holdover | Low-ARR customers (<$25K) → Sales Tools |
-| **P2** | Stability Accounts | Holdover | CRE risk, renewal soon, PE firm, recent change |
-| **P3** | Team Alignment | Optimization | Match account tier to rep tier |
-| **P4** | Geo + Continuity | Optimization | Current owner if geography matches |
-| **P5** | Continuity | Optimization | Prefer current owner |
-| **P6** | Geography | Optimization | Match territory to region |
-| **P7** | Residual | Optimization | Balance remaining accounts |
+| Priority | ID | Name | Type | Description |
+|----------|-----|------|------|-------------|
+| **P0** | `manual_holdover` | Manual Holdover | Holdover | Locked accounts stay put, strategic → strategic reps |
+| **P1** | `sales_tools_bucket` | Sales Tools Bucket | Holdover | Low-ARR customers (<$25K) → Sales Tools |
+| **P2** | `stability_accounts` | Stability Accounts | Holdover | CRE risk, renewal soon, PE firm, recent change |
+| **P3** | `team_alignment` | Team Alignment | Optimization | Match account tier to rep tier |
+| **P4** | `geo_and_continuity` | Geo + Continuity | Optimization | Current owner if geography matches |
+| **P5** | `continuity` | Continuity | Optimization | Prefer current owner |
+| **P6** | `geography` | Geography | Optimization | Match territory to region |
+| **P7** | `arr_balance` | Residual | Optimization | Balance remaining accounts |
 
-### 8.2 Holdover vs Optimization
+### 10.2 Priority Types
 
 - **Holdover**: Account is LOCKED to current owner. Runs before optimization.
 - **Optimization**: Account is available for reassignment. LP solver decides.
 
-### 8.3 Stability Lock Conditions
+### 10.3 Preset Configurations by Mode
 
-Accounts are locked (stay with current owner) if:
-- `exclude_from_reassignment = true` (manual lock)
-- `is_strategic = true` (strategic accounts)
-- `cre_risk = true` (at-risk for churn)
-- `renewal_date` within 90 days
-- `pe_firm` is set (PE-owned accounts)
-- `owner_change_date` within 90 days (recent change)
+**Impl**: `modeDetectionService.ts`
 
-**Key Constants**:
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `DEFAULT_CONTINUITY_DAYS` | 90 | Days for stability protection |
-| Sales Tools ARR Threshold | $25,000 | Customer accounts under this → Sales Tools bucket |
-| `HIGH_VALUE_ARR_THRESHOLD` | $100,000 | Small company with large contract → treat as Enterprise |
+Different sales motions use different priority orders:
+
+| Mode | Description | Key Differences |
+|------|-------------|-----------------|
+| **COMMERCIAL** | Standard B2B sales | Includes Sales Tools bucket, team alignment |
+| **ENT** | Enterprise accounts | No Sales Tools, strategic-focused |
+| **EMEA** | European motion | Sub-region routing (DACH, UKI, Nordics, etc.) |
+| **APAC** | Asia-Pacific | Similar to EMEA |
+
+**Auto-Detection Logic**:
+The system auto-detects mode based on build data:
+
+| Signal | Detected Mode | Confidence |
+|--------|---------------|------------|
+| Build region = APAC | APAC | High |
+| Build region = EMEA | EMEA | High |
+| Has team alignment data (employees + rep tiers) | COMMERCIAL | High |
+| Has Renewal Specialists OR PE accounts | COMMERCIAL | Medium |
+| Default (AMER/GLOBAL, no RS/PE data) | ENT | High |
+
+### 10.4 Sales Tools Routing (Commercial Mode)
+
+> **DEPRECATED**: Renewal Specialist concept has been removed. Commercial accounts <$25k now route to Sales Tools bucket.
+
+**Impl**: `commercialPriorityHandlers.ts`
+
+In Commercial mode, low-ARR customer accounts are routed to the Sales Tools bucket:
+
+| Condition | Routing | Rationale |
+|-----------|---------|-----------|
+| ARR < $25,000 | Route to Sales Tools | Free up AE capacity for higher-value accounts |
+| ARR ≥ $25,000 | Keep with AE | Accounts above threshold get dedicated rep attention |
+
+**Default Priority Order by Mode**:
+
+```
+COMMERCIAL:  P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7
+             (holdover) (sales) (stab) (team) (geo+cont) (cont) (geo) (residual)
+
+ENT:         P0 → P1 → P2 → P3 → P4 → P5
+             (holdover) (stab) (geo+cont) (cont) (geo) (residual)
+             [No sales_tools_bucket, no team_alignment]
+
+EMEA/APAC:   P0 → P1 → P2 → P3 → P4 → P5 → P6
+             (holdover) (stab) (geo+cont) (cont) (geo) (team) (residual)
+             [Team alignment after geography]
+```
+
+### 10.5 Priority Conditions (Detailed)
+
+#### P0: Manual Holdover (Locked)
+**Condition**: `exclude_from_reassignment = true` OR `is_strategic = true`
+**Effect**: Account stays with current owner. Cannot be disabled.
+
+#### P1: Sales Tools Bucket (COMMERCIAL only)
+**Condition**: `hierarchy_bookings_arr_converted < $25,000` AND `is_customer = true`
+**Effect**: Routes to Sales Tools team (no SLM/FLM hierarchy)
+
+#### P2: Stability Accounts (Sub-conditions)
+Each sub-condition can be enabled/disabled independently:
+
+| Sub-condition | ID | Condition | Default |
+|---------------|-----|-----------|---------|
+| CRE Risk | `cre_risk` | `cre_risk = true` | Enabled |
+| Renewal Soon | `renewal_soon` | `renewal_date` within 90 days | Enabled |
+| PE Firm | `pe_firm` | `pe_firm IS NOT NULL` | Enabled |
+| Recent Change | `recent_owner_change` | `owner_change_date` within 90 days | Enabled |
+
+#### P3: Team Alignment
+**Condition**: Account tier matches rep tier
+**Penalty System**:
+- Exact match (ENT→ENT): No penalty
+- 1-level mismatch (ENT→MM): γ penalty (100)
+- 2+ level mismatch (ENT→SMB): ε penalty (1000)
+
+#### P4-P6: Optimization Priorities
+These become **weights in the LP objective function**, not hard constraints:
+- **Geo + Continuity**: Score = geo_score × continuity_score
+- **Continuity**: Score = tenure + stability + value weight
+- **Geography**: Score = region match level
+
+#### P7: Residual Optimization (Locked)
+**Condition**: All remaining unassigned accounts
+**Effect**: Multi-metric balancing (ARR, ATR, tier). Cannot be disabled.
+
+### 10.6 Strategic Accounts (P0)
+
+Strategic accounts are handled separately from normal accounts:
+
+| Rule | Description |
+|------|-------------|
+| **Separate Pool** | Strategic accounts only go to strategic reps (`is_strategic_rep = true`) |
+| **No Capacity Limits** | Strategic reps are not subject to ARR/account capacity constraints |
+| **Balanced Distribution** | Accounts distributed evenly by ARR across strategic reps |
+| **Continuity First** | If current owner is strategic rep, account stays |
+
+**Data Fields**:
+- `accounts.is_strategic` → TRUE = strategic account
+- `sales_reps.is_strategic_rep` → TRUE = strategic rep
+
+### 10.7 PE Firm Accounts (P2)
+
+| Rule | Description |
+|------|-------------|
+| **Stability Lock** | PE accounts stay with current owner (relationship continuity) |
+| **PE Firm Normalization** | Typos normalized on import (see Section 6.2) |
+
+**Data Fields**:
+- `accounts.pe_firm` → PE firm name (normalized)
+
+### 10.8 Key Constants
+
+| Constant | Value | Source | Purpose |
+|----------|-------|--------|---------|
+| `DEFAULT_CONTINUITY_DAYS` | 90 | constants.ts | Days for stability protection |
+| `SALES_TOOLS_ARR_THRESHOLD` | $25,000 | constants.ts | Customer accounts under this → Sales Tools bucket |
+| `HIGH_VALUE_ARR_THRESHOLD` | $100,000 | constants.ts | Legacy default - for high-value metrics only (does NOT override tier) |
+| `DEFAULT_MAX_ARR_PER_REP` | $2,500,000 | constants.ts | Default maximum ARR a single rep should manage |
+| `DEFAULT_OVERLOAD_VARIANCE` | 20% | constants.ts | Variance from target before rep is overloaded (configurable) |
+| `STRATEGIC_VARIANCE` | 20% | optimizationSolver.ts | Variance band for strategic account balancing |
+| `HIGH_VALUE_THRESHOLD` | $500,000 | metricsCalculator.ts | Legacy default - threshold for continuity metrics |
+
+> **Important**: Team tier is determined by employee count only (see §5.1). High ARR does NOT override the employee-based tier classification.
 
 ---
 
-## 9. Optimization Model
+## 11. Optimization Model
 
-### 9.1 Solver
+> **TL;DR**: Uses HiGHS LP solver. Maximizes `score = continuity + geography + team_alignment` while penalizing imbalance. Three-tier penalty system (α=0.01, β=1.0, BigM=1000) keeps reps balanced. Locked accounts are hard constraints; everything else is optimized.
+
+### 11.1 Model Formulations: Waterfall vs Relaxed
+
+The app supports two assignment models:
+
+| Model | Description | When to Use |
+|-------|-------------|-------------|
+| **Waterfall** | Cascading priority levels (P0→P7). Each level locks accounts before next level runs. | When priority order is strict (strategic → stability → optimization) |
+| **Relaxed** | Single global LP solve with weighted objectives. All factors considered simultaneously. | When seeking globally optimal balance |
+
+**Waterfall Formulation**:
+```
+For each priority P0 through P7:
+  1. Identify accounts matching priority criteria
+  2. Assign accounts (lock them to selected rep)
+  3. Remove assigned accounts from pool
+  4. Continue to next priority
+```
+
+**Relaxed Formulation**:
+```
+Maximize: Σ (score_ij × x_ij) - Penalties
+
+Where:
+- x_ij = binary decision variable (account i → rep j)
+- score_ij = continuity + geography + team_alignment
+- Penalties = balance deviation penalties
+```
+
+**Why Both Matter**:
+- **Waterfall**: Guarantees priority order is respected (strategic accounts ALWAYS go first)
+- **Relaxed**: May find better global balance but could assign lower-priority factors first
+
+### 11.2 Solver & Full LP Formulation
+
+**Impl**: `lpProblemBuilder.ts`, `highsWrapper.ts`
 
 The app uses **HiGHS** (open-source LP solver) for account assignment.
 
-### 9.2 Objective Function
+#### Complete LP Problem
 
-Maximize total assignment quality:
 ```
-Maximize: Σ (account_weight × rep_score × assignment_variable)
+MAXIMIZE:
+  Σᵢⱼ (score_ij × x_ij)                     // Assignment scores
+  - Σⱼ (α_penalty × α_over_j + α_penalty × α_under_j)    // Alpha penalties
+  - Σⱼ (β_penalty × β_over_j + β_penalty × β_under_j)    // Beta penalties
+  - Σⱼ (BigM_penalty × M_over_j + BigM_penalty × M_under_j)  // BigM penalties
+
+SUBJECT TO:
+
+  // 1. ASSIGNMENT CONSTRAINT: Each account assigned to exactly one rep
+  ∀i: Σⱼ x_ij = 1
+
+  // 2. CAPACITY CONSTRAINT: Rep cannot exceed hard ARR cap
+  ∀j: Σᵢ (ARR_i × x_ij) ≤ hardCapARR_j
+
+  // 3. STABILITY LOCK: Locked accounts must stay with current owner
+  ∀(i,j) where locked: x_ij = 1 (for current owner j)
+  ∀(i,k) where locked: x_ik = 0 (for all other reps k ≠ j)
+
+  // 4. BALANCE CONSTRAINT (with 3-tier slack):
+  ∀j: Σᵢ (metric_i × x_ij) = target_j + α_over - α_under + β_over - β_under + M_over - M_under
+
+  // 5. PARENT-CHILD CONSTRAINT: Same owner for parent and children
+  // This is an implicit priority - the optimizer tries to keep parent/child together
+  ∀(parent p, child c): x_pj = x_cj for all j
+
+VARIABLE TYPES:
+  x_ij ∈ {0, 1}                    // Binary: assign account i to rep j
+  α_over, α_under ≥ 0              // Continuous: variance slack
+  β_over, β_under ≥ 0              // Continuous: buffer slack  
+  M_over, M_under ≥ 0              // Continuous: violation slack
+
+BOUNDS:
+  α_over ≤ prefMax - target        // Can't exceed variance band
+  α_under ≤ target - prefMin
+  β_over ≤ max - prefMax           // Can't exceed buffer zone
+  β_under ≤ prefMin - min
+  M_over, M_under: unbounded       // But 1000x penalty makes it prohibitive
 ```
 
-Where `rep_score` combines:
-- Continuity score (tenure with current owner)
-- Geography score (territory match)
-- Team alignment score (tier match)
+#### Score Composition
 
-### 9.3 Scoring Functions
+```
+score_ij = w_cont × continuity_score(i,j) 
+         + w_geo × geography_score(i,j)
+         + w_team × team_alignment_score(i,j)
 
-#### Continuity Score
+Where weights are normalized to sum to 1.0
+```
+
+#### Default Objective Weights
+
+**Impl**: `optimization/types.ts` - `DEFAULT_LP_OBJECTIVES_CUSTOMER`, `DEFAULT_LP_OBJECTIVES_PROSPECT`
+
+| Factor | Customer Weight | Prospect Weight |
+|--------|-----------------|-----------------|
+| Continuity | 0.35 | 0.20 |
+| Geography | 0.35 | 0.45 |
+| Team Alignment | 0.30 | 0.35 |
+
+**Why different?**
+- **Customers**: Continuity matters more (existing relationship)
+- **Prospects**: Geography matters more (rep needs to be local for new business)
+
+#### Default Balance Configuration
+
+**Impl**: `optimization/types.ts` - `DEFAULT_LP_BALANCE_CONFIG`
+
+| Metric | Variance Band | Penalty | Hard Cap |
+|--------|---------------|---------|----------|
+| ARR | ±10% | 0.5 | $3,000,000 |
+| ATR | ±15% | 0.3 | $750,000 |
+| Pipeline | ±15% | 0.4 | $1,000,000 |
+
+### 11.3 Three-Tier Penalty System (Alpha, Beta, BigM)
+
+Balance constraints use a **three-tier penalty system** to handle deviation from targets:
+
+```
+actual_value = target + α_over - α_under + β_over - β_under + BigM_over - BigM_under
+```
+
+| Zone | Variable | Penalty Weight | Description |
+|------|----------|---------------|-------------|
+| **Alpha (α)** | Within variance band | 0.01 | Small penalty - expected/acceptable deviation |
+| **Beta (β)** | Buffer zone | 1.0 | Medium penalty - undesirable but not catastrophic |
+| **BigM** | Beyond absolute limits | 1000.0 | Huge penalty - effectively forbidden |
+
+**Why Three Tiers?**
+- **Alpha**: Allows the solver flexibility within the configured variance band (soft constraint). Penalty scales linearly the further you deviate from target.
+- **Beta**: Warns when approaching hard limits, but still feasible. Also uses linear penalty scaling.
+- **BigM**: Makes violations extremely expensive → treated as hard constraints
+
+**Visual Representation**:
+```
+         ←───── β_under ─────→←── α_under ──→ TARGET ←── α_over ──→←───── β_over ─────→
+         |                    |               |               |                    |
+       min                 prefMin         target         prefMax                max
+    (absolute)           (variance)                      (variance)          (absolute)
+```
+
+**Bounds**:
+```typescript
+α_over_bound  = max(0, prefMax - target)      // Variance band above target
+α_under_bound = max(0, target - prefMin)      // Variance band below target
+β_over_bound  = max(0, max - prefMax)         // Gap to absolute max
+β_under_bound = max(0, prefMin - min)         // Gap to absolute min
+BigM: unbounded (but 1000x penalty makes it prohibitive)
+```
+
+### 11.4 Scoring Functions
+
+#### Continuity Score (Account-Rep Pair)
+
 ```
 Score = base + tenure_weight×T + stability_weight×B + value_weight×V
-
-Where:
-- T = min(days_owned / 730, 1.0)  // 2 year cap
-- B = 1 - (owner_count / 5)       // Fewer owners = more stable
-- V = min(ARR / 2000000, 1.0)     // $2M cap
 ```
 
-#### Geography Score
-See [Section 4.3](#43-geo-match-scoring)
+| Component | Formula | Description |
+|-----------|---------|-------------|
+| **T** (Tenure) | `min(days_with_owner / 730, 1.0)` | 2-year cap on tenure value |
+| **B** (Stability) | `1 - (owner_count - 1) / (max_owners - 1)` | Fewer owners = higher score |
+| **V** (Value) | `min(ARR / $2M, 1.0)` | Higher ARR = more valuable continuity |
+
+> **Data Quality Note**: The `days_with_owner` field is often empty in imported data. When empty, tenure scoring falls back to default behavior.
+
+**Special Cases**:
+- Not current owner → 0
+- Rep is backfill source (leaving) → 0
+- No current owner → 0
+
+**Default Params** (from `optimization/types.ts`):
+```typescript
+{
+  base_continuity: 0.10,
+  tenure_weight: 0.35,
+  stability_weight: 0.30,
+  value_weight: 0.25,
+  tenure_max_days: 730,
+  stability_max_owners: 5,
+  value_threshold: 2_000_000
+}
+```
+
+#### Geography Score (Account-Rep Pair)
+
+**Impl**: `optimization/scoring/geographyScore.ts`
+
+Uses region hierarchy for scoring:
+
+| Match Type | LP Score | Example |
+|------------|----------|---------|
+| **Exact Match** | 1.00 | Account "North East" → Rep "North East" |
+| **Sibling Region** | 0.65 | Account "NYC" → Rep "Boston" (both in NE) |
+| **Same Parent** | 0.40 | Account "North East" → Rep "AMER" |
+| **Cross-Region** | 0.20 | Account "West" → Rep "EMEA" |
+| **Unknown** | 0.50 | Can't determine territory |
+
+**Note**: `_domain/constants.ts` has slightly different values (`SAME_SUB_REGION: 0.85`, `SAME_PARENT: 0.65`) used for analytics display. The LP solver uses the values above.
+
+**Advanced Geo Mapping**:
+The model can boost specificity by mapping city/state to specific regions:
+```
+Territory "San Francisco" → "West" (auto-map)
+Territory "NYC" → "North East" (auto-map)
+Territory "Custom District" → Explicit mapping in territory_mappings
+```
+
+**Why Specificity Matters**: 
+More specific geo mappings → higher exact match rates → better geo scores → better overall assignment quality.
 
 #### Team Alignment Score
+
+**Impl**: `optimization/scoring/teamAlignmentScore.ts`
+
+Scores based on tier distance (discrete values, not linear):
+
+| Distance | Score | Example |
+|----------|-------|---------|
+| 0 (exact) | 1.00 | ENT account → ENT rep |
+| 1 level | 0.60 | ENT account → MM rep |
+| 2 levels | 0.25 | ENT account → Growth rep |
+| 3 levels | 0.05 | ENT account → SMB rep |
+| Unknown | 0.50 | Missing employee count |
+
+**Reaching Down Penalty**: When a higher-tier rep is assigned to a lower-tier account (e.g., ENT rep → SMB account), an additional penalty is applied:
 ```
-Score = 1.0 - (tier_distance × 0.20)
+penalty = reaching_down_penalty × tier_distance
+final_score = max(0, base_score - penalty)
+```
+Default `reaching_down_penalty = 0.15`. This discourages putting expensive ENT reps on small accounts.
 
-Where tier_distance = |account_tier_index - rep_tier_index|
+| Tier | Index | Employee Count |
+|------|-------|----------------|
+| SMB | 0 | < 100 (`TIER_THRESHOLDS.SMB_MAX = 99`) |
+| Growth | 1 | 100 - 499 (`TIER_THRESHOLDS.GROWTH_MAX = 499`) |
+| MM | 2 | 500 - 1,499 (`TIER_THRESHOLDS.MM_MAX = 1499`) |
+| ENT | 3 | 1,500+ |
+| (null) | -1 | Unknown - alignment not scored |
+
+**Data Quality Note**: Team tier scoring is only meaningful if employee count data is accurate. If `employees` field is null or 0, tier is null and alignment scoring is skipped.
+
+### 11.5 Account Locking Priorities
+
+**Impl**: `optimization/types.ts` - `DEFAULT_LP_STABILITY_CONFIG`, `constraints/stabilityLocks.ts`
+
+Accounts can be locked to their current owner (or backfill target). Locks are evaluated **in priority order** - first match wins:
+
+| Priority | Lock Type | Condition | Effect |
+|----------|-----------|-----------|--------|
+| 1 | **Manual Lock** | `exclude_from_reassignment = true` | Stay with current owner |
+| 2 | **Backfill Migration** | Owner `is_backfill_source = true` | Migrate to backfill target rep |
+| 3 | **CRE Risk** | `cre_risk = true` | Stay with current owner (relationship stability) |
+| 4 | **Renewal Soon** | `renewal_date` within 90 days | Stay with current owner |
+| 5 | **PE Firm** | `pe_firm` is set | Stay with current owner |
+| 6 | **Recent Change** | `owner_change_date` within 90 days | Stay with current owner |
+
+**Stability Config Defaults**:
+```typescript
+// From optimization/types.ts
+const DEFAULT_LP_STABILITY_CONFIG = {
+  cre_risk_locked: true,
+  renewal_soon_locked: true,
+  renewal_soon_days: 90,
+  pe_firm_locked: true,
+  recent_change_locked: true,
+  recent_change_days: 90,
+  backfill_migration_enabled: true
+};
 ```
 
-### 9.4 Constraints
+**Important**: Locked accounts become **hard constraints** in the LP. They are not part of the optimization - they are pre-assigned.
 
-| Constraint | Description |
-|------------|-------------|
-| **One Rep Per Account** | Each account assigned to exactly one rep |
-| **Capacity Limits** | Rep can't exceed ARR/ATR max |
-| **Strategic Pool** | Strategic accounts → strategic reps only |
-| **Parent-Child Linking** | (Optional) Parent and children same owner |
+### 11.6 LP Objective Weights
 
-### 9.5 Optimization Weights
+**Impl**: `optimization/types.ts` - `LPObjectivesConfig`
 
-How much each factor matters in the LP optimization. Weights sum to 1.0 per category.
+The LP solver weighs three scoring factors differently for customers vs prospects:
 
-**Customer Weights** (revenue-focused):
+**Customer Objective Weights** (relationship-focused):
 | Factor | Weight | Rationale |
 |--------|--------|-----------|
-| ARR | 0.50 | Revenue is king |
-| ATR | 0.25 | Renewal timing affects workload |
-| Tier | 0.25 | Fair distribution of priority accounts |
+| Continuity | 0.35 | Preserve existing relationships |
+| Geography | 0.35 | Regional alignment matters |
+| Team Alignment | 0.30 | Match account complexity to rep tier |
 
-**Prospect Weights** (potential-focused):
+**Prospect Objective Weights** (coverage-focused):
 | Factor | Weight | Rationale |
 |--------|--------|-----------|
-| Pipeline | 0.50 | Potential revenue |
-| Tier | 0.50 | Fair distribution of high-potential accounts |
+| Continuity | 0.20 | Less relationship history |
+| Geography | 0.45 | Territory alignment is primary |
+| Team Alignment | 0.35 | Fair distribution by potential |
+
+```typescript
+// From optimization/types.ts
+const DEFAULT_LP_OBJECTIVES_CUSTOMER = {
+  continuity_weight: 0.35,
+  geography_weight: 0.35,
+  team_alignment_weight: 0.30
+};
+
+const DEFAULT_LP_OBJECTIVES_PROSPECT = {
+  continuity_weight: 0.20,
+  geography_weight: 0.45,
+  team_alignment_weight: 0.35
+};
+```
+
+### 11.7 Balance Weights (for Dashboard/Analytics)
+
+These weights are used for **balance calculations** in dashboards, separate from LP scoring:
 
 ```typescript
 // From _domain/constants.ts
@@ -474,53 +1140,158 @@ const DEFAULT_OPTIMIZATION_WEIGHTS = {
 };
 ```
 
-### 9.6 Balance Penalties
+**Note on Tier Balancing**: Each tier (Tier 1, 2, 3, 4) is balanced individually, not grouped. The TIER weight applies to each tier's distribution separately.
 
-The solver penalizes imbalance:
-```
-Penalty = deviation_from_target × penalty_weight
-```
+### 11.8 Balance Penalties
 
-| Metric | Default Penalty | Default Variance |
-|--------|-----------------|------------------|
-| ARR | 1.0 | ±25% |
-| ATR | 1.0 | ±25% |
-| Pipeline | 1.0 | ±25% |
-| Account Count | 0.5 | ±15% |
+**Impl**: `optimization/types.ts` - `LPBalanceConfig`
+
+The solver penalizes imbalance using the three-tier system:
+
+| Metric | LP Variance | Alpha Penalty | Beta Penalty | BigM Penalty |
+|--------|-------------|---------------|--------------|--------------|
+| ARR | ±10% | 0.01 | 1.0 | 1000.0 |
+| ATR | ±15% | 0.01 | 1.0 | 1000.0 |
+| Pipeline | ±15% | 0.01 | 1.0 | 1000.0 |
+| Tier | ±20% (β only) | - | 1.0 | - |
+
+> **Configuration Note**: Variance bands and maximum values should come from the assignment configuration, not be hardcoded. The values above are defaults that can be overridden per-build.
+
+**Note**: LP variance bands are tighter than dashboard defaults (which use ±25%). This is intentional - the solver aims for tighter balance while dashboards show a wider acceptable range.
+
+**Tier Balance**: Uses β-only penalties (soft approach) since tier counts are harder to balance exactly.
+
+### 11.9 Rationale Generation
+
+The optimization generates human-readable rationales for each assignment:
+
+| Priority Level | Rationale Format |
+|----------------|------------------|
+| P0 Strategic | `P0: Strategic Account → {rep_name} (strategic rep, ARR-balanced)` |
+| P1 Stability Lock | `P1: Stability Lock → {rep_name} ({lock_type})` |
+| Optimization | `Optimized: {rep_name} (geo={score}, cont={score}, team={score})` |
+
+**Highest-Scoring Display**: Even in relaxed mode, the rationale shows which factor scored highest for transparency.
 
 ---
 
-## 10. Balancing & Thresholds
+## 12. Balancing & Thresholds
 
-### 10.1 Balance Targets
+> **TL;DR**: Target = Total ÷ Reps. Variance bands: ARR/ATR/Pipeline ±25% (dashboard) or ±10-15% (LP solver). Overload = exceeds configured variance (default 20%) from target.
 
+**Impl**: `calculations.ts` - `calculateBalanceTarget()`, `calculateBalanceRange()`
+**Constants**: `constants.ts` - `DEFAULT_VARIANCE`, `BATCH_SIZES`, `SUPABASE_LIMITS`
+
+### 12.1 Balance Targets
+
+```typescript
+// From calculations.ts
+function calculateBalanceTarget(totalValue: number, repCount: number): number {
+  if (repCount === 0) return 0;
+  return totalValue / repCount;
+}
 ```
-Target per Rep = Total Value / Number of Active Reps
+
+### 12.2 Variance Bands
+
+Two systems use different variance bands:
+
+**Dashboard Variance** (`constants.ts` - `DEFAULT_VARIANCE`):
+Used for analytics/UI to show acceptable ranges.
+
+| Metric | Variance | Min | Max |
+|--------|----------|-----|-----|
+| ARR | 25% | Target × 0.75 | Target × 1.25 |
+| ATR | 25% | Target × 0.75 | Target × 1.25 |
+| Pipeline | 25% | Target × 0.75 | Target × 1.25 |
+| Accounts | 15% | Target × 0.85 | Target × 1.15 |
+| Tier | 20% | Target × 0.80 | Target × 1.20 |
+
+**LP Solver Variance** (`optimization/types.ts` - `LPBalanceConfig`):
+Used by HiGHS solver - intentionally tighter to optimize for balance.
+
+| Metric | Variance | Rationale |
+|--------|----------|-----------|
+| ARR | 10% | Tighter balance for revenue |
+| ATR | 15% | Moderate flexibility for renewals |
+| Pipeline | 15% | Moderate flexibility for prospects |
+
+```typescript
+// From constants.ts
+const DEFAULT_VARIANCE = {
+  ARR: 0.25,
+  ATR: 0.25,
+  PIPELINE: 0.25,
+  ACCOUNT_COUNT: 0.15,
+  TIER: 0.20,
+};
 ```
 
-### 10.2 Variance Bands
+> **Configuration Note**: All variance bands and maximum values should come from the assignment configuration step, not be hardcoded. The values above are defaults that can be overridden per-build.
 
-| Metric | Min | Max |
-|--------|-----|-----|
-| ARR | Target × 0.75 | Target × 1.25 |
-| ATR | Target × 0.75 | Target × 1.25 |
-| Pipeline | Target × 0.75 | Target × 1.25 |
-| Accounts | Target × 0.85 | Target × 1.15 |
-
-### 10.3 Threshold Overrides
+### 12.3 Threshold Overrides
 
 Users can override calculated thresholds in `assignment_configuration`:
 - `arr_min_override`, `arr_max_override`
 - `atr_min_override`, `atr_max_override`
 - `pipeline_min_override`, `pipeline_max_override`
 
+### 12.4 Workload Balance Grades
+
+**Impl**: `utils/workloadBalancing.ts`
+
+The system calculates a composite balance score (0-100) based on ARR, account count, and tier distribution:
+
+| Grade | Score Range | Meaning |
+|-------|-------------|---------|
+| **Excellent** | 90-100 | Near-perfect distribution |
+| **Good** | 75-89 | Acceptable balance |
+| **Fair** | 60-74 | Some imbalances detected |
+| **Poor** | 40-59 | Significant imbalances |
+| **Critical** | 0-39 | Severe imbalances, rebalancing needed |
+
+**Composite Score Formula**:
+```
+ARR Balance Score    = 100 - (ARR CV × 2)        // CV heavily penalized
+Account Balance Score = 100 - (Account CV × 1.5)
+Tier Balance Score   = 100 - (Tier CV × 1)
+
+Composite = (ARR × 0.50) + (Account × 0.30) + (Tier × 0.20)
+```
+
+Where CV = Coefficient of Variation (std dev / mean × 100)
+
+**Default Workload Config**:
+```typescript
+{
+  arrWeight: 0.50,          // ARR is primary factor
+  accountCountWeight: 0.30, // Account distribution secondary
+  tierMixWeight: 0.20,      // Tier mix tertiary
+  maxARRVariance: 25,       // 25% tolerance
+  maxAccountVariance: 15,   // 15% tolerance
+}
+```
+
+### 12.5 Display Utilities
+
+**Impl**: `calculations.ts` - `formatCurrency()`, `formatCurrencyCompact()`
+
+| Function | Example | Output |
+|----------|---------|--------|
+| `formatCurrency(1234567)` | Full format | `$1,234,567` |
+| `formatCurrencyCompact(1500000)` | Compact | `$1.5M` |
+| `formatCurrencyCompact(500000)` | Compact | `$500K` |
+| `formatCurrencyCompact(2500000000)` | Compact | `$2.5B` |
+
 ---
 
-## 11. Analytics & Success Metrics
+## 13. Analytics & Success Metrics
+
+**Impl**: `services/optimization/postprocessing/metricsCalculator.ts`, `constants.ts` - `CRE_RISK_THRESHOLDS`, `getCRERiskLevel()`
 
 The app calculates success metrics to measure assignment quality. These are displayed in dashboards.
 
-### 11.1 LP Success Metrics
+### 13.1 LP Success Metrics
 
 | Metric | Range | Description |
 |--------|-------|-------------|
@@ -530,9 +1301,12 @@ The app calculates success metrics to measure assignment quality. These are disp
 | **Team Alignment Score** | 0-1 | Account tier matching rep tier |
 | **Capacity Utilization** | 0-1+ | Average % of target load per rep |
 
-### 11.2 Balance Score Calculation
+### 13.2 Balance Score Calculation
+
+> **DEPRECATED**: The MSE-based balance score formula below is deprecated. The app now uses **Coefficient of Variation (CV)** displayed on ARR, ATR, and Pipeline Value charts instead.
 
 ```
+# DEPRECATED FORMULA - for reference only
 BalanceScore = 1 - (MSE / MaxMSE)
 
 Where:
@@ -541,13 +1315,9 @@ Where:
 - Higher = more balanced
 ```
 
-Components:
-- Mean ARR per rep
-- Standard deviation
-- Coefficient of variation
-- Outlier counts (overloaded/underloaded)
+**Current Approach**: Each metric chart (ARR, ATR, Pipeline) displays its own CV (standard deviation / mean × 100) for balance assessment.
 
-### 11.3 ARR Distribution Buckets
+### 13.3 ARR Distribution Buckets
 
 For histogram visualizations:
 
@@ -559,77 +1329,104 @@ For histogram visualizations:
 | $500K-1M | 500,000 - 1,000,000 |
 | $1M+ | 1,000,000+ |
 
-### 11.4 Scoring Consistency
+### 13.4 CRE Risk Levels
+
+Customer Renewal risk categorization for dashboard badges:
+
+| Level | CRE Count | Badge Color |
+|-------|-----------|-------------|
+| None | 0 | Secondary (gray) |
+| Low | 1-2 | Outline |
+| Medium | 3-5 | Default |
+| High | 6+ | Destructive (red) |
+
+```typescript
+// From _domain/constants.ts
+CRE_RISK_THRESHOLDS = {
+  LOW_MAX: 2,    // 1-2 = Low
+  MEDIUM_MAX: 5, // 3-5 = Medium
+  // 6+ = High
+}
+```
+
+### 13.5 Balance Threshold Calculator
+
+**Impl**: `services/balanceThresholdCalculator.ts`
+
+Calculates dynamic per-rep targets for additional balance metrics beyond ARR:
+
+| Metric | Calculation | Variance |
+|--------|-------------|----------|
+| **CRE** | Total CRE count ÷ normal reps | Configurable |
+| **ATR** | Total ATR ÷ normal reps | Configurable |
+| **Tier 1** | Tier 1 account count ÷ normal reps | Configurable |
+| **Tier 2** | Tier 2 account count ÷ normal reps | Configurable |
+| **Q1-Q4 Renewals** | Quarterly renewal count ÷ normal reps | renewal_concentration_max |
+
+**Notes**:
+- Only **normal reps** (non-strategic, active, with valid region) are included in denominator
+- Targets are stored in `assignment_configuration.calculated_thresholds`
+
+### 13.6 Scoring Consistency
 
 **All scoring weights are unified across engine and dashboards:**
 
 | Score Type | Source | Used In |
 |------------|--------|---------|
 | Geo Match | `_domain/constants.ts` | Engine + Analytics |
-| Team Alignment | Section 9.3 formula | Engine + Analytics |
-| Continuity | Section 9.3 formula | Engine + Analytics |
+| Team Alignment | Section 11.4 formula | Engine + Analytics |
+| Continuity | Section 11.4 formula | Engine + Analytics |
 
 The `types/analytics.ts` file imports from `@/_domain` to ensure consistency.
 
 ---
 
-# Part 3: Consolidation Status
+# Appendix
 
-## 12. Resolved Conflicts (v1.3.2+)
+## Code Locations
 
-All conflicts from v1.3 have been resolved. See `_domain/CLEANUP_PLAN.md` for full history.
+### File → Section Mapping
 
-### 12.1 ARR Calculation - RESOLVED ✓
+| File | Key Exports | Doc Section |
+|------|-------------|-------------|
+| `calculations.ts` | `getAccountARR()`, `getAccountATR()`, `isCustomer()`, `calculateBalanceTarget()` | §2, §3, §12 |
+| `tiers.ts` | `classifyTeamTier()`, `TEAM_TIER_ORDER`, `getTierDistance()`, `isEnterprise()` | §5 |
+| `geography.ts` | `REGION_HIERARCHY`, `REGION_ANCESTRY`, `calculateGeoMatchScore()`, `autoMapTerritoryToUSRegion()` | §4 |
+| `normalization.ts` | `normalizeRegion()`, `normalizePEFirm()`, `normalizeTeamTier()`, `REGION_ALIASES`, `PE_FIRM_ALIASES` | §6 |
+| `constants.ts` | `TIER_THRESHOLDS`, `GEO_MATCH_SCORES`, `DEFAULT_VARIANCE`, `BATCH_SIZES`, `DEFAULT_OPTIMIZATION_WEIGHTS` | §4, §5, §9, §11, §12 |
 
-**All files now use** `getAccountARR()` from `@/_domain`:
-```typescript
-hierarchy_bookings_arr_converted || calculated_arr || arr || 0
-```
+### External Dependencies
 
-### 12.2 Region Hierarchy - RESOLVED ✓
+| File | Key Exports | Doc Section |
+|------|-------------|-------------|
+| `utils/approvalChainUtils.ts` | `getApprovalStepsForRegion()` | §7 |
+| `utils/autoMappingUtils.ts` | `autoMapFields()`, `ACCOUNT_FIELD_ALIASES`, `SALES_REP_FIELD_ALIASES` | §9.5 |
+| `config/priorityRegistry.ts` | `PRIORITY_REGISTRY`, `getDefaultPriorityConfig()` | §10 |
+| `services/simplifiedAssignmentEngine.ts` | Priority waterfall execution | §10 |
+| `services/optimization/` | LP solver, scoring functions | §11 |
 
-Full EMEA and APAC regions now documented in `_domain/geography.ts`.
-
-### 12.3 Duplicate Files - RESOLVED ✓
-
-| Deleted File | Replaced By |
-|--------------|-------------|
-| `utils/accountCalculations.ts` | `_domain/calculations.ts` |
-| `utils/territoryAutoMapping.ts` | `_domain/geography.ts` |
-| `utils/dynamicScoringEngine.ts` | Dead code - removed |
-| `utils/parentChildValidation.ts` | Dead code - removed |
-
-### 12.4 Analytics Scoring - RESOLVED ✓
-
-`types/analytics.ts` now imports from `@/_domain/constants` for consistent scoring weights.
+**Import Path**: Always use `@/_domain` (configured in `tsconfig.json`)
 
 ---
 
-## 13. Maintenance Rules
+## Cross-Reference System
 
-### When Adding New Business Logic
+Every function/constant in `_domain/*.ts` links back to this doc, and vice versa:
+
+| Direction | Format | Example |
+|-----------|--------|---------|
+| Code → Doc | `@see MASTER_LOGIC.mdc §X.X` in JSDoc | `@see MASTER_LOGIC.mdc §2.1` |
+| Doc → Code | `**Impl**: functionName()` in section | `**Impl**: getAccountARR()` |
+
+> See `_domain/README.md` for the full cross-reference guide.
+
+---
+
+## Maintenance Rules
 
 1. **Add to `_domain/`** - Never add business logic elsewhere
 2. **Update this document** - Keep MASTER_LOGIC.mdc in sync
-3. **Import from `@/_domain`** - All consumers must import
+3. **Add cross-references** - Link code ↔ doc both directions
+4. **Import from `@/_domain`** - All consumers must import
 
-### Intentional Exceptions
-
-Some inline logic is intentionally different (documented in `CLEANUP_PLAN.md`):
-- Customer classification filters use ONLY `hierarchy_bookings_arr_converted > 0`
-- This prevents false positives from child account `calculated_arr`
-
----
-
-## Appendix: Code Locations
-
-| Concept | Source of Truth | Paired Doc Section |
-|---------|-----------------|-------------------|
-| ARR/ATR Calculation | `src/_domain/calculations.ts` | Section 2 |
-| Team Tiers | `src/_domain/tiers.ts` | Section 5 |
-| Geography | `src/_domain/geography.ts` | Section 4 |
-| Constants | `src/_domain/constants.ts` | Sections 5, 7, 8, 9, 10 |
-| Normalization | `src/_domain/normalization.ts` | Section 6 |
-| Cleanup History | `src/_domain/CLEANUP_PLAN.md` | Section 11 |
-
-**Import Path**: Always use `@/_domain` (configured in `tsconfig.json`)
+> See `_domain/README.md` for detailed contribution guidelines.
