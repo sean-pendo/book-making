@@ -10,7 +10,7 @@
  * 
  *   import { getAccountARR, getAccountATR } from '@/_domain';
  * 
- * DOCUMENTATION: src/core/MASTER_LOGIC.md#2-calculation-rules
+ * @see MASTER_LOGIC.mdc §2 (Revenue Metrics)
  * 
  * ============================================================================
  */
@@ -166,7 +166,7 @@ export function isCustomer(account: AccountData): boolean {
  * ATR is calculated from opportunities where opportunity_type = 'Renewals'
  * The calculated_atr field is pre-computed by a database function.
  * 
- * @see src/core/MASTER_LOGIC.md#atr-calculation
+ * @see MASTER_LOGIC.mdc §2.2
  */
 export function getAccountATR(account: AccountData): number {
   // Priority: calculated (from DB function) → raw atr → 0
@@ -189,7 +189,7 @@ export function hasATR(account: AccountData): boolean {
  * 
  * This is case-insensitive and trims whitespace for data quality.
  * 
- * @see src/core/MASTER_LOGIC.md#atr-calculation
+ * @see MASTER_LOGIC.mdc §2.2
  */
 export function isRenewalOpportunity(opportunity: OpportunityData): boolean {
   // Normalize and compare - handles case and whitespace variations
@@ -235,18 +235,59 @@ export function getOpportunityPipelineValue(opportunity: OpportunityData): numbe
 }
 
 /**
+ * IS EXPANSION OPPORTUNITY
+ * ------------------------
+ * Checks if an opportunity is an expansion opportunity.
+ * Expansion opportunities on customer accounts count toward pipeline.
+ * 
+ * @see MASTER_LOGIC.mdc §2.3
+ */
+export function isExpansionOpportunity(opportunity: OpportunityData): boolean {
+  return opportunity.opportunity_type?.toLowerCase().trim() === 'expansion';
+}
+
+/**
  * CALCULATE PIPELINE FROM OPPORTUNITIES
  * -------------------------------------
  * Sums up pipeline value from all opportunities.
  * 
- * Typically used for prospect accounts to measure potential revenue.
+ * Includes:
+ * - All opportunities from prospect accounts
+ * - Expansion opportunities from customer accounts
  * 
  * @example
- * const prospectOpps = opportunities.filter(o => !isCustomerAccount(o.sfdc_account_id));
- * const pipeline = calculatePipelineFromOpportunities(prospectOpps);
+ * const pipeline = calculatePipelineFromOpportunities(allOpportunities);
+ * 
+ * @see MASTER_LOGIC.mdc §2.3
  */
 export function calculatePipelineFromOpportunities(opportunities: OpportunityData[]): number {
   return opportunities.reduce((sum, opp) => sum + getOpportunityPipelineValue(opp), 0);
+}
+
+/**
+ * CALCULATE PIPELINE WITH EXPANSION
+ * ---------------------------------
+ * Enhanced pipeline calculation that includes expansion opportunities
+ * from customer accounts in addition to all prospect opportunities.
+ * 
+ * @param prospectOpportunities - Opportunities from prospect accounts (all count)
+ * @param customerOpportunities - Opportunities from customer accounts (only expansion counts)
+ * 
+ * @see MASTER_LOGIC.mdc §2.3
+ */
+export function calculatePipelineWithExpansion(
+  prospectOpportunities: OpportunityData[],
+  customerOpportunities: OpportunityData[]
+): number {
+  // All prospect opportunities count
+  const prospectPipeline = calculatePipelineFromOpportunities(prospectOpportunities);
+  
+  // Only expansion opportunities from customers count
+  const expansionPipeline = customerOpportunities
+    .filter(isExpansionOpportunity)
+    .reduce((sum, opp) => sum + getOpportunityPipelineValue(opp), 0);
+  
+  return prospectPipeline + expansionPipeline;
 }
 
 // =============================================================================

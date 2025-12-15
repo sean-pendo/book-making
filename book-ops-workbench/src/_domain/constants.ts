@@ -15,7 +15,7 @@
  * - Group related constants in objects
  * - Add comments explaining the "why" not just the "what"
  * 
- * DOCUMENTATION: src/core/MASTER_LOGIC.md
+ * @see MASTER_LOGIC.mdc (various sections)
  * 
  * ============================================================================
  */
@@ -39,7 +39,7 @@
  * These align with common B2B SaaS market segmentation.
  * Adjust if your company uses different thresholds.
  * 
- * @see src/core/MASTER_LOGIC.md#team-tiers-employee-based
+ * @see MASTER_LOGIC.mdc §5.1
  */
 export const TIER_THRESHOLDS = {
   /** SMB = employees less than 100 (so max is 99) */
@@ -63,14 +63,18 @@ export const TIER_THRESHOLDS = {
 export const DEFAULT_ENTERPRISE_THRESHOLD = 1500;
 
 /**
- * HIGH VALUE ARR THRESHOLD
- * ------------------------
- * Accounts with ARR above this are considered "Tier 1" or "Enterprise"
- * even if they have a small employee count.
+ * HIGH VALUE ARR THRESHOLD (Legacy Default)
+ * ------------------------------------------
+ * Threshold for identifying high-value accounts in metrics/analytics.
  * 
- * WHY $100K:
- * A small company with a $100K+ contract is strategically important
- * and should be handled by experienced reps.
+ * NOTE: This does NOT override tier classification.
+ * Team tier is determined by employee count only.
+ * 
+ * Used for:
+ * - High-value continuity metrics
+ * - Analytics dashboards
+ * 
+ * @see MASTER_LOGIC.mdc §10.8
  */
 export const HIGH_VALUE_ARR_THRESHOLD = 100_000;
 
@@ -92,7 +96,7 @@ export const HIGH_VALUE_ARR_THRESHOLD = 100_000;
  * - Account Count: 15% is tighter because count is easier to balance
  * - Tier: 20% allows some flexibility in tier distribution
  * 
- * @see src/core/MASTER_LOGIC.md#balance-constraints
+ * @see MASTER_LOGIC.mdc §12
  */
 export const DEFAULT_VARIANCE = {
   /** ARR variance: ±25% */
@@ -252,3 +256,96 @@ export const DEFAULT_OPTIMIZATION_WEIGHTS = {
     TIER: 0.50,
   },
 } as const;
+
+// =============================================================================
+// SALES TOOLS BUCKET
+// =============================================================================
+
+/**
+ * SALES TOOLS ARR THRESHOLD
+ * -------------------------
+ * Customer accounts with ARR below this threshold are routed to Sales Tools
+ * instead of being assigned to individual reps.
+ * 
+ * WHY $25K:
+ * - Low-value accounts don't justify dedicated rep time
+ * - Sales Tools provides self-service/automated handling
+ * - Frees up rep capacity for higher-value accounts
+ * 
+ * @see MASTER_LOGIC.mdc Section 8.1 (Priority P1: Sales Tools Bucket)
+ */
+export const SALES_TOOLS_ARR_THRESHOLD = 25_000;
+
+// =============================================================================
+// WORKLOAD BALANCING
+// =============================================================================
+
+/**
+ * DEFAULT OVERLOAD VARIANCE
+ * -------------------------
+ * A rep is considered "overloaded" when their workload exceeds
+ * the target by more than this variance percentage.
+ * 
+ * Example: At 20% variance, if target is 10 accounts, rep with 12+ is overloaded.
+ * 
+ * WHY 20%:
+ * - Aligns with balance variance bands
+ * - Triggers visual warning in dashboards
+ * - Configurable per-build in assignment_configuration
+ * 
+ * @see MASTER_LOGIC.mdc §12
+ */
+export const DEFAULT_OVERLOAD_VARIANCE = 0.20;
+
+/**
+ * DEFAULT MAX ARR PER REP
+ * -----------------------
+ * Default maximum ARR a single rep should manage.
+ * Used when no custom threshold is configured.
+ * 
+ * WHY $2.5M:
+ * - Represents reasonable workload for enterprise rep
+ * - Ensures accounts are distributed across team
+ * - Can be overridden in assignment configuration
+ */
+export const DEFAULT_MAX_ARR_PER_REP = 2_500_000;
+
+// =============================================================================
+// CRE RISK LEVELS
+// =============================================================================
+
+/**
+ * CRE RISK THRESHOLDS
+ * -------------------
+ * Thresholds for categorizing accounts by Customer Renewal risk count.
+ * Used for badge display and filtering in dashboards.
+ * 
+ * Categories:
+ * - None: 0 CRE cases
+ * - Low: 1-2 CRE cases
+ * - Medium: 3-5 CRE cases
+ * - High: 6+ CRE cases
+ * 
+ * WHY THESE NUMBERS:
+ * - Based on typical renewal event volume per account
+ * - Aligns with operational capacity thresholds
+ */
+export const CRE_RISK_THRESHOLDS = {
+  /** Max count for "Low" risk (1-2 cases) */
+  LOW_MAX: 2,
+  
+  /** Max count for "Medium" risk (3-5 cases) */
+  MEDIUM_MAX: 5,
+  
+  // High = 6+ (no max, it's the top tier)
+} as const;
+
+/**
+ * Helper to get CRE risk level from count
+ */
+export function getCRERiskLevel(creCount: number): 'none' | 'low' | 'medium' | 'high' {
+  if (creCount === 0) return 'none';
+  if (creCount <= CRE_RISK_THRESHOLDS.LOW_MAX) return 'low';
+  if (creCount <= CRE_RISK_THRESHOLDS.MEDIUM_MAX) return 'medium';
+  return 'high';
+}

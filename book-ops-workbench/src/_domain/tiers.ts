@@ -15,12 +15,12 @@
  * 
  *   import { classifyTeamTier, TIER_THRESHOLDS } from '@/_domain';
  * 
- * DOCUMENTATION: src/core/MASTER_LOGIC.md#5-team-tiers
+ * @see MASTER_LOGIC.mdc §5 (Team Tiers)
  * 
  * ============================================================================
  */
 
-import { TIER_THRESHOLDS, HIGH_VALUE_ARR_THRESHOLD } from './constants';
+import { TIER_THRESHOLDS } from './constants';
 
 // =============================================================================
 // TYPES
@@ -141,7 +141,7 @@ export function getTierIndex(tier: TeamTier | string | null | undefined): number
  * getTierDistance('SMB', 'Growth')  // → 1 (one level)
  * getTierDistance('SMB', 'ENT')     // → 3 (three levels!)
  * 
- * @see src/core/MASTER_LOGIC.md#team-tiers-employee-based
+ * @see MASTER_LOGIC.mdc §5.1
  */
 export function getTierDistance(tier1: TeamTier, tier2: TeamTier): number {
   const idx1 = getTierIndex(tier1);
@@ -167,9 +167,6 @@ export interface EnterpriseCheckParams {
   /** Employee count for threshold check */
   employees?: number | null;
   
-  /** ARR for high-value check */
-  arr?: number | null;
-  
   /** Optional custom threshold (default: 1500) */
   enterpriseThreshold?: number;
 }
@@ -177,25 +174,21 @@ export interface EnterpriseCheckParams {
 /**
  * IS ENTERPRISE
  * -------------
- * Legacy classification - determines if account is "Enterprise" tier.
+ * Determines if account is "Enterprise" tier based on employee count.
  * 
  * An account is Enterprise if ANY of these are true:
- * 1. enterprise_vs_commercial field = 'Enterprise'
+ * 1. enterprise_vs_commercial field = 'Enterprise' (explicit flag)
  * 2. employees > threshold (default 1500)
- * 3. ARR > $100,000 (high-value indicator)
  * 
- * WHY MULTIPLE CRITERIA:
- * - Some imports have explicit flags
- * - Some rely on employee count
- * - Some small companies have big contracts (high ARR)
+ * NOTE: High ARR does NOT override tier classification.
+ * Team tier is determined by employee count only.
  * 
  * @example
  * isEnterprise({ enterprise_vs_commercial: 'Enterprise' }) // → true
  * isEnterprise({ employees: 2000 })                        // → true
- * isEnterprise({ arr: 150000 })                            // → true
- * isEnterprise({ employees: 50, arr: 5000 })               // → false
+ * isEnterprise({ employees: 50 })                          // → false
  * 
- * @see src/core/MASTER_LOGIC.md#enterprise-classification-legacy
+ * @see MASTER_LOGIC.mdc §5.1, §10.8
  */
 export function isEnterprise(account: EnterpriseCheckParams): boolean {
   const threshold = account.enterpriseThreshold ?? 1500;
@@ -204,11 +197,8 @@ export function isEnterprise(account: EnterpriseCheckParams): boolean {
     // Explicit Salesforce flag
     account.enterprise_vs_commercial === 'Enterprise' ||
     
-    // Large employee count
-    (account.employees != null && account.employees > threshold) ||
-    
-    // High-value contract (small company, big deal)
-    (account.arr != null && account.arr > HIGH_VALUE_ARR_THRESHOLD)
+    // Large employee count - this is the primary classification
+    (account.employees != null && account.employees > threshold)
   );
 }
 

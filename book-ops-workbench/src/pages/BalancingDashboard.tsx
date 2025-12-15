@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle, Shuffle, TrendingUp, Users, DollarSign } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useBuildDataRelationships } from '@/hooks/useBuildData';
+import { DEFAULT_OVERLOAD_VARIANCE } from '@/_domain';
 
 interface SwapSimulation {
   fromRep: string;
@@ -99,7 +100,7 @@ export const BalancingDashboard = ({ buildId: propBuildId }: BalancingDashboardP
   // Calculate realistic averages based on reps with accounts
   const repsWithAccounts = ownerMetrics.filter(rep => rep.accounts.parents > 0);
   const avgParentAccounts = repsWithAccounts.length > 0 ? Math.round(totalParentAccounts / repsWithAccounts.length) : 0;
-  const overloadedThreshold = Math.round(avgParentAccounts * 1.3); // 130% of average
+  const overloadedThreshold = Math.round(avgParentAccounts * (1 + DEFAULT_OVERLOAD_VARIANCE));
 
 
   const handleSimulateSwap = () => {
