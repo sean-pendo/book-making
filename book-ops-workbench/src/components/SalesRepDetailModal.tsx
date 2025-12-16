@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { getAccountARR, getAccountATR } from '@/_domain';
 import { 
   Search, 
   Download, 
@@ -49,7 +50,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ChangeChildOwnerDialog } from '@/components/ChangeChildOwnerDialog';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
-import { getAccountARR } from '@/_domain';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -161,7 +161,7 @@ interface ExtendedAccountDetail extends AccountDetail {
         sfdc_account_id: account.sfdc_account_id,
         account_name: account.account_name,
         arr: getAccountARR(account),
-        atr: account.calculated_atr || account.atr || 0,
+        atr: getAccountATR(account),
         employees: account.employees,
         industry: account.industry,
         geo: account.geo,
@@ -255,8 +255,8 @@ interface ExtendedAccountDetail extends AccountDetail {
           childrenByParent[parentId].push({
             sfdc_account_id: child.sfdc_account_id,
             account_name: child.account_name,
-            arr: child.calculated_arr || child.arr || 0,
-            atr: child.calculated_atr || child.atr || 0,
+            arr: getAccountARR(child),
+            atr: getAccountATR(child),
             employees: child.employees,
             industry: child.industry,
             geo: child.geo,

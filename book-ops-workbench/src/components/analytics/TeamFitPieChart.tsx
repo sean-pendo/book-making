@@ -17,49 +17,19 @@ const ALIGNMENT_COLORS = {
   oneLevelMismatch: '#f59e0b', // amber - 1 level off
   twoPlusLevelMismatch: '#ef4444', // red - 2+ levels off
   unassigned: '#6b7280', // gray - no assignment
+  unknown: '#a1a1aa', // zinc - N/A (missing tier data)
 };
 
 const CustomTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     
-    const getTierExplanation = () => {
-      switch (data.name) {
-        case 'Perfect Match':
-          return 'Account tier exactly matches rep tier (SMB→SMB, Growth→Growth, MM→MM, ENT→ENT)';
-        case '1-Level Mismatch':
-          return 'One tier level difference (SMB→Growth, Growth→MM, MM→ENT)';
-        case '2+ Level Mismatch':
-          return 'Two or more tier levels different (SMB→MM, SMB→ENT, Growth→ENT)';
-        case 'Unassigned':
-          return 'Accounts without valid owner assignments';
-        default:
-          return '';
-      }
-    };
-    
     return (
-      <div className="bg-background border rounded-lg px-3 py-2 shadow-lg text-sm max-w-xs">
+      <div className="bg-background border rounded-lg px-2 py-1.5 shadow-lg text-sm">
         <p className="font-medium">{data.name}</p>
-        <p className="text-muted-foreground">
-          {data.value.toLocaleString()} accounts
+        <p className="text-muted-foreground text-xs">
+          {data.value.toLocaleString()} accounts ({data.total > 0 ? Math.round((data.value / data.total) * 100) : 0}%)
         </p>
-        {data.total > 0 && (
-          <p className="text-muted-foreground text-xs">
-            {Math.round((data.value / data.total) * 100)}% of total
-          </p>
-        )}
-        <p className="text-muted-foreground text-xs mt-1 pt-1 border-t">
-          {getTierExplanation()}
-        </p>
-        <div className="text-muted-foreground text-xs mt-1 pt-1 border-t space-y-0.5">
-          <p><strong>Tier Order:</strong> SMB → Growth → MM → ENT</p>
-          <p className="mt-1"><strong>Tier Definitions:</strong></p>
-          <p>• <strong>SMB</strong> = Small Business (&lt;100 employees)</p>
-          <p>• <strong>Growth</strong> = Growth (100-499 employees)</p>
-          <p>• <strong>MM</strong> = Mid-Market (500-1,499 employees)</p>
-          <p>• <strong>ENT</strong> = Enterprise (1,500+ employees)</p>
-        </div>
       </div>
     );
   }
@@ -72,31 +42,38 @@ export const TeamFitPieChart: React.FC<TeamFitPieChartProps> = ({
   title = 'Team Fit',
   compact = false,
 }) => {
-  const total = breakdown.exactMatch + breakdown.oneLevelMismatch + breakdown.twoPlusLevelMismatch + breakdown.unassigned;
-  
+  // Include unknown in total - these are accounts with missing tier data (N/A)
+  const total = breakdown.exactMatch + breakdown.oneLevelMismatch + breakdown.twoPlusLevelMismatch + breakdown.unassigned + (breakdown.unknown || 0);
+
   const chartData = [
-    { 
-      name: 'Perfect Match', 
-      value: breakdown.exactMatch, 
+    {
+      name: 'Perfect Match',
+      value: breakdown.exactMatch,
       color: ALIGNMENT_COLORS.exactMatch,
-      total 
+      total
     },
-    { 
-      name: '1-Level Mismatch', 
-      value: breakdown.oneLevelMismatch, 
+    {
+      name: '1-Level Mismatch',
+      value: breakdown.oneLevelMismatch,
       color: ALIGNMENT_COLORS.oneLevelMismatch,
-      total 
+      total
     },
-    { 
-      name: '2+ Level Mismatch', 
-      value: breakdown.twoPlusLevelMismatch, 
+    {
+      name: '2+ Level Mismatch',
+      value: breakdown.twoPlusLevelMismatch,
       color: ALIGNMENT_COLORS.twoPlusLevelMismatch,
-      total 
+      total
     },
     ...(breakdown.unassigned > 0 ? [{
       name: 'Unassigned',
       value: breakdown.unassigned,
       color: ALIGNMENT_COLORS.unassigned,
+      total
+    }] : []),
+    ...((breakdown.unknown || 0) > 0 ? [{
+      name: 'N/A (Missing Data)',
+      value: breakdown.unknown || 0,
+      color: ALIGNMENT_COLORS.unknown,
       total
     }] : []),
   ].filter(item => item.value > 0); // Only show categories with accounts
@@ -139,117 +116,34 @@ export const TeamFitPieChart: React.FC<TeamFitPieChartProps> = ({
                 <Cell key={`cell-${index}`} fill={entry.color} />
               ))}
             </Pie>
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={<CustomTooltip />} wrapperStyle={{ zIndex: 1000 }} />
           </PieChart>
         </ResponsiveContainer>
       </div>
       
       <div className={`flex-1 ${compact ? 'space-y-1' : 'space-y-2'}`}>
-        {chartData.map((entry) => {
-          const getTooltipContent = () => {
-            switch (entry.name) {
-              case 'Perfect Match':
-                return (
-                  <>
-                    <p className="text-sm font-medium mb-1">Perfect Match</p>
-                    <p className="text-xs text-muted-foreground">
-                      Accounts where the account tier exactly matches the rep's tier specialization. This is the ideal alignment.
-                    </p>
-                    <p className="text-xs mt-1 text-muted-foreground">
-                      <strong>Example:</strong> SMB account assigned to SMB rep, or Growth account assigned to Growth rep
-                    </p>
-                    <div className="text-xs mt-2 pt-2 border-t space-y-0.5">
-                      <p className="font-medium">Tier Definitions:</p>
-                      <p>• <strong>SMB</strong> = Small Business (&lt;100 employees)</p>
-                      <p>• <strong>Growth</strong> = Growth (100-499 employees)</p>
-                      <p>• <strong>MM</strong> = Mid-Market (500-1,499 employees)</p>
-                      <p>• <strong>ENT</strong> = Enterprise (1,500+ employees)</p>
-                    </div>
-                  </>
-                );
-              case '1-Level Mismatch':
-                return (
-                  <>
-                    <p className="text-sm font-medium mb-1">1-Level Mismatch</p>
-                    <p className="text-xs text-muted-foreground">
-                      Accounts where the account tier is one level different from the rep's tier. Acceptable but not ideal.
-                    </p>
-                    <p className="text-xs mt-1 text-muted-foreground">
-                      <strong>Example:</strong> SMB account assigned to Growth rep, or Growth account assigned to MM rep
-                    </p>
-                    <div className="text-xs mt-2 pt-2 border-t space-y-0.5">
-                      <p className="font-medium">Tier Order:</p>
-                      <p><strong>SMB → Growth → MM → ENT</strong></p>
-                      <p className="mt-1 font-medium">Tier Definitions:</p>
-                      <p>• <strong>SMB</strong> = Small Business (&lt;100 employees)</p>
-                      <p>• <strong>Growth</strong> = Growth (100-499 employees)</p>
-                      <p>• <strong>MM</strong> = Mid-Market (500-1,499 employees)</p>
-                      <p>• <strong>ENT</strong> = Enterprise (1,500+ employees)</p>
-                    </div>
-                  </>
-                );
-              case '2+ Level Mismatch':
-                return (
-                  <>
-                    <p className="text-sm font-medium mb-1">2+ Level Mismatch</p>
-                    <p className="text-xs text-muted-foreground">
-                      Accounts where the account tier is two or more levels different from the rep's tier. These assignments may need review.
-                    </p>
-                    <p className="text-xs mt-1 text-muted-foreground">
-                      <strong>Example:</strong> SMB account assigned to MM rep, or SMB account assigned to ENT rep
-                    </p>
-                    <div className="text-xs mt-2 pt-2 border-t space-y-0.5">
-                      <p className="font-medium">Tier Order:</p>
-                      <p><strong>SMB → Growth → MM → ENT</strong></p>
-                      <p className="mt-1 font-medium">Tier Definitions:</p>
-                      <p>• <strong>SMB</strong> = Small Business (&lt;100 employees)</p>
-                      <p>• <strong>Growth</strong> = Growth (100-499 employees)</p>
-                      <p>• <strong>MM</strong> = Mid-Market (500-1,499 employees)</p>
-                      <p>• <strong>ENT</strong> = Enterprise (1,500+ employees)</p>
-                    </div>
-                  </>
-                );
-              case 'Unassigned':
-                return (
-                  <>
-                    <p className="text-sm font-medium mb-1">Unassigned</p>
-                    <p className="text-xs text-muted-foreground">
-                      Accounts that don't have an owner assigned or the assigned owner doesn't exist in the sales reps list.
-                    </p>
-                  </>
-                );
-              default:
-                return null;
-            }
-          };
-
-          return (
-            <UITooltip key={entry.name}>
-              <TooltipTrigger asChild>
-                <div className={`flex items-center justify-between ${compact ? 'text-xs' : 'text-sm'} cursor-help`}>
-                  <div className="flex items-center gap-2">
-                    <div 
-                      className="w-3 h-3 rounded-full flex-shrink-0" 
-                      style={{ backgroundColor: entry.color }}
-                    />
-                    <span className="text-muted-foreground">{entry.name}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="font-medium">
-                      {entry.value.toLocaleString()}
-                    </span>
-                    <span className="text-muted-foreground text-xs ml-1">
-                      ({Math.round((entry.value / total) * 100)}%)
-                    </span>
-                  </div>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                {getTooltipContent()}
-              </TooltipContent>
-            </UITooltip>
-          );
-        })}
+        {chartData.map((entry) => (
+          <div 
+            key={entry.name}
+            className={`flex items-center justify-between ${compact ? 'text-xs' : 'text-sm'}`}
+          >
+            <div className="flex items-center gap-2">
+              <div 
+                className="w-3 h-3 rounded-full flex-shrink-0" 
+                style={{ backgroundColor: entry.color }}
+              />
+              <span className="text-muted-foreground">{entry.name}</span>
+            </div>
+            <div className="text-right">
+              <span className="font-medium">
+                {entry.value.toLocaleString()}
+              </span>
+              <span className="text-muted-foreground text-xs ml-1">
+                ({Math.round((entry.value / total) * 100)}%)
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

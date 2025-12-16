@@ -180,6 +180,16 @@ interface RegionConfig {
 
 /**
  * US region configuration for auto-mapping territories
+ * 
+ * NOTE: This rules-based mapping covers most major US cities and state codes.
+ * It works well for standard territory names but could be improved with:
+ * - AI-powered territory recognition for edge cases
+ * - Learning from user corrections over time
+ * - More granular city/metro area mappings
+ * 
+ * For now, this should be sufficient as it handles the main cities and regions.
+ * The AI Auto-Map feature (Gemini) supplements this for initial bulk mapping.
+ * 
  * @see MASTER_LOGIC.mdc §4.2
  */
 export const US_REGION_CONFIG: Record<AMERSubRegion, RegionConfig> = {

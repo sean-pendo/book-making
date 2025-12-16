@@ -30,6 +30,13 @@ export interface AccountData {
   /** Is this a customer (has revenue) vs prospect (no revenue)? */
   is_customer?: boolean;
   
+  /** 
+   * Does this parent account have customer children?
+   * Used to determine if parent is a customer even if parent ARR is 0.
+   * @see MASTER_LOGIC.mdc §3.1.1
+   */
+  has_customer_hierarchy?: boolean | null;
+  
   /** Raw ARR from import */
   arr?: number | null;
   
@@ -146,6 +153,63 @@ export function isCustomer(account: AccountData): boolean {
   
   // Otherwise, check if account has any positive ARR
   return getAccountARR(account) > 0;
+}
+
+/**
+ * IS PARENT CUSTOMER
+ * ------------------
+ * Determines if a PARENT account should be classified as a customer.
+ * 
+ * A parent is a customer if:
+ * 1. They have direct ARR > 0 (paying us directly), OR
+ * 2. They have customer children (has_customer_hierarchy = true)
+ * 
+ * WHY CHILDREN MATTER:
+ * A parent account may have $0 direct ARR but have children who are paying
+ * customers. For grouping, rollups, and assignment purposes, this parent 
+ * represents a CUSTOMER RELATIONSHIP because they pay us (through children).
+ * 
+ * USE CASES:
+ * - Customer/Prospect grouping in UI
+ * - ARR rollup calculations
+ * - Assignment engine priority handling
+ * - Database sync (syncIsCustomerField)
+ * 
+ * @example
+ * // Use this for parent accounts
+ * if (account.is_parent && isParentCustomer(account)) {
+ *   // This is a customer parent
+ * }
+ * 
+ * @see MASTER_LOGIC.mdc §3.1.1
+ */
+export function isParentCustomer(account: AccountData): boolean {
+  // Has direct ARR = customer
+  if (getAccountARR(account) > 0) return true;
+  
+  // Has customer children = customer (for grouping purposes)
+  if (account.has_customer_hierarchy === true) return true;
+  
+  return false;
+}
+
+/**
+ * IS PARENT ACCOUNT
+ * -----------------
+ * Determines if an account is a parent (top of hierarchy) vs child.
+ * 
+ * Parent accounts have no ultimate_parent_id (they ARE the ultimate parent).
+ * Child accounts have an ultimate_parent_id pointing to their parent.
+ * 
+ * @example
+ * if (isParentAccount(account)) {
+ *   // This is a top-level account
+ * }
+ * 
+ * @see MASTER_LOGIC.mdc §3.2
+ */
+export function isParentAccount(account: { ultimate_parent_id?: string | null }): boolean {
+  return !account.ultimate_parent_id || account.ultimate_parent_id.trim() === '';
 }
 
 // =============================================================================

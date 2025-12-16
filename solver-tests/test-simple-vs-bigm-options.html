@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple vs Big-M with Options</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #00d9ff; }
+    .test-row {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin: 8px 0;
+      background: #16213e;
+      border-radius: 8px;
+      border-left: 4px solid #666;
+    }
+    .test-row.passed { border-left-color: #4caf50; }
+    .test-row.failed { border-left-color: #f44336; }
+    .test-name { flex: 1; font-weight: 500; }
+    .test-time { width: 100px; text-align: right; }
+    .test-status { width: 120px; text-align: right; font-weight: bold; }
+    .passed .test-status { color: #4caf50; }
+    .failed .test-status { color: #f44336; }
+    button {
+      background: #00d9ff;
+      color: #1a1a2e;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 20px 0;
+    }
+    button:hover { background: #00b8d9; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    #log {
+      background: #0f0f1a;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .summary {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    .summary h2 { margin-top: 0; color: #00d9ff; }
+  </style>
+</head>
+<body>
+  <h1>🔬 Simple LP vs Big-M LP with Options</h1>
+  <p>Testing if the issue is Big-M slacks + options, not just options.</p>
+  
+  <button id="runBtn" onclick="runTests()">Run Test</button>
+  
+  <div id="tests"></div>
+  
+  <div id="summary" class="summary" style="display:none;">
+    <h2>📊 Results</h2>
+    <div id="summaryContent"></div>
+  </div>
+  
+  <h3>Console Log</h3>
+  <div id="log"></div>
+
+  <script src="https://lovasoa.github.io/highs-js/highs.js"></script>
+  
+  <script>
+    const log = (msg) => {
+      const el = document.getElementById('log');
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
+      console.log(msg);
+    };
+
+    // SIMPLE LP - like waterfall (no slacks)
+    function buildSimpleLP(numAccounts, numReps) {
+      const lines = [];
+      const binaries = [];
+      
+      lines.push('Maximize');
+      lines.push(' obj:');
+      
+      const objTerms = [];
+      for (let a = 0; a < numAccounts; a++) {
+        for (let r = 0; r < numReps; r++) {
+          const varName = `x${a}_${r}`;
+          const score = (10 + (a * 7 + r * 13) % 90).toFixed(2);
+          objTerms.push(`+ ${score} ${varName}`);
+          binaries.push(varName);
+        }
+      }
+      
+      let currentLine = '';
+      for (const term of objTerms) {
+        if (currentLine.length + term.length > 200) {
+          lines.push(' ' + currentLine);
+          currentLine = term;
+        } else {
+          currentLine += ' ' + term;
+        }
+      }
+      if (currentLine) lines.push(' ' + currentLine);
+      
+      lines.push('Subject To');
+      let cIdx = 0;
+      
+      // Assignment constraints only
+      for (let a = 0; a < numAccounts; a++) {
+        const terms = [];
+        for (let r = 0; r < numReps; r++) {
+          terms.push(`+ 1 x${a}_${r}`);
+        }
+        lines.push(` c${cIdx++}: ${terms.join(' ')} = 1`);
+      }
+      
+      // Simple capacity constraints
+      for (let r = 0; r < numReps; r++) {
+        const terms = [];
+        for (let a = 0; a < numAccounts; a++) {
+          const arr = 10000 + (a * 1234) % 50000;
+          terms.push(`+ ${arr} x${a}_${r}`);
+        }
+        const maxCap = Math.ceil(numAccounts / numReps) * 100000;
+        lines.push(` c${cIdx++}: ${terms.join(' ')} <= ${maxCap}`);
+      }
+      
+      lines.push('Bounds');
+      for (const v of binaries) {
+        lines.push(` 0 <= ${v} <= 1`);
+      }
+      
+      lines.push('Binary');
+      for (let i = 0; i < binaries.length; i += 50) {
+        lines.push(' ' + binaries.slice(i, i + 50).join(' '));
+      }
+      
+      lines.push('End');
+      return lines.join('\n');
+    }
+
+    // BIG-M LP - like global optimization (with slacks)
+    function buildBigMLP(numAccounts, numReps) {
+      const lines = [];
+      const binaries = [];
+      
+      const totalARR = numAccounts * 30000;
+      const targetARR = totalARR / numReps;
+      const variance = 0.10;
+      
+      lines.push('Maximize');
+      lines.push(' obj:');
+      
+      const objTerms = [];
+      
+      for (let a = 0; a < numAccounts; a++) {
+        for (let r = 0; r < numReps; r++) {
+          const varName = `x${a}_${r}`;
+          const score = (0.1 + ((a * 7 + r * 13) % 90) / 100).toFixed(4);
+          objTerms.push(`+ ${score} ${varName}`);
+          binaries.push(varName);
+        }
+      }
+      
+      // Add slack penalties
+      for (let r = 0; r < numReps; r++) {
+        objTerms.push(`- 0.0005 ao${r}`);
+        objTerms.push(`- 0.0005 au${r}`);
+        objTerms.push(`- 0.005 bo${r}`);
+        objTerms.push(`- 0.005 bu${r}`);
+        objTerms.push(`- 0.05 mo${r}`);
+        objTerms.push(`- 0.05 mu${r}`);
+      }
+      
+      let currentLine = '';
+      for (const term of objTerms) {
+        if (currentLine.length + term.length > 200) {
+          lines.push(' ' + currentLine);
+          currentLine = term;
+        } else {
+          currentLine += ' ' + term;
+        }
+      }
+      if (currentLine) lines.push(' ' + currentLine);
+      
+      lines.push('Subject To');
+      let cIdx = 0;
+      
+      for (let a = 0; a < numAccounts; a++) {
+        const terms = [];
+        for (let r = 0; r < numReps; r++) {
+          terms.push(`+ 1 x${a}_${r}`);
+        }
+        lines.push(` c${cIdx++}: ${terms.join(' ')} = 1`);
+      }
+      
+      for (let r = 0; r < numReps; r++) {
+        const terms = [];
+        for (let a = 0; a < numAccounts; a++) {
+          const arr = 10000 + (a * 1234) % 50000;
+          const normalizedCoef = (arr / targetARR).toFixed(6);
+          terms.push(`+ ${normalizedCoef} x${a}_${r}`);
+        }
+        lines.push(` c${cIdx++}: ${terms.join(' ')} - 1 ao${r} + 1 au${r} - 1 bo${r} + 1 bu${r} - 1 mo${r} + 1 mu${r} = 1`);
+      }
+      
+      lines.push('Bounds');
+      for (let r = 0; r < numReps; r++) {
+        lines.push(` 0 <= ao${r} <= ${variance}`);
+        lines.push(` 0 <= au${r} <= ${variance}`);
+        lines.push(` 0 <= bo${r} <= 0.5`);
+        lines.push(` 0 <= bu${r} <= 0.5`);
+        lines.push(` mo${r} >= 0`);
+        lines.push(` mu${r} >= 0`);
+      }
+      for (const v of binaries) {
+        lines.push(` 0 <= ${v} <= 1`);
+      }
+      
+      lines.push('Binary');
+      for (let i = 0; i < binaries.length; i += 50) {
+        lines.push(' ' + binaries.slice(i, i + 50).join(' '));
+      }
+      
+      lines.push('End');
+      return lines.join('\n');
+    }
+
+    const testCases = [
+      { name: 'Simple LP + options (20K)', accounts: 432, reps: 48, builder: buildSimpleLP, withOptions: true },
+      { name: 'Simple LP no options (20K)', accounts: 432, reps: 48, builder: buildSimpleLP, withOptions: false },
+      { name: 'Big-M LP + options (20K)', accounts: 432, reps: 48, builder: buildBigMLP, withOptions: true },
+      { name: 'Big-M LP no options (20K)', accounts: 432, reps: 48, builder: buildBigMLP, withOptions: false },
+    ];
+
+    let results = [];
+    let highs = null;
+
+    function renderTests() {
+      const container = document.getElementById('tests');
+      container.innerHTML = testCases.map((tc, i) => {
+        const vars = tc.accounts * tc.reps;
+        const result = results[i];
+        const statusClass = result ? (result.passed ? 'passed' : 'failed') : '';
+        const status = result ? (result.passed ? '✓ PASS' : '✗ FAIL') : 'pending';
+        const time = result ? (result.time ? `${result.time}ms` : result.error?.substring(0, 15) || 'error') : '-';
+        
+        return `
+          <div class="test-row ${statusClass}" id="test-${i}">
+            <span class="test-name">${tc.name}</span>
+            <span class="test-time">${time}</span>
+            <span class="test-status">${status}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function runTests() {
+      const btn = document.getElementById('runBtn');
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      
+      results = [];
+      renderTests();
+      document.getElementById('log').textContent = '';
+      
+      log('Loading HiGHS...');
+      highs = await Module();
+      log('✓ HiGHS loaded\n');
+      
+      for (let i = 0; i < testCases.length; i++) {
+        const tc = testCases[i];
+        log(`[${tc.name}]`);
+        
+        await new Promise(r => setTimeout(r, 50));
+        
+        try {
+          const lp = tc.builder(tc.accounts, tc.reps);
+          log(`  LP size: ${(lp.length / 1024).toFixed(1)} KB`);
+          
+          const startTime = performance.now();
+          let solution;
+          
+          if (tc.withOptions) {
+            solution = highs.solve(lp, {
+              presolve: 'on',
+              time_limit: 60,
+              mip_rel_gap: 0.01,
+            });
+          } else {
+            solution = highs.solve(lp);
+          }
+          
+          const solveTime = Math.round(performance.now() - startTime);
+          
+          if (solution.Status === 'Optimal' || solution.Status === 'Feasible') {
+            log(`  ✓ ${solution.Status} in ${solveTime}ms\n`);
+            results[i] = { passed: true, time: solveTime };
+          } else {
+            log(`  ✗ Status: ${solution.Status}\n`);
+            results[i] = { passed: false, error: solution.Status };
+          }
+        } catch (err) {
+          const errMsg = err.message || err.toString();
+          log(`  ✗ CRASHED: ${errMsg.substring(0, 60)}\n`);
+          results[i] = { passed: false, error: errMsg.substring(0, 30) };
+          
+          highs = await Module();
+          log('  (HiGHS reloaded)\n');
+        }
+        
+        renderTests();
+      }
+      
+      // Summary
+      const simpleWithOpts = results[0]?.passed;
+      const simpleNoOpts = results[1]?.passed;
+      const bigMWithOpts = results[2]?.passed;
+      const bigMNoOpts = results[3]?.passed;
+      
+      log('='.repeat(50));
+      log('SUMMARY');
+      log('='.repeat(50));
+      log(`Simple LP + options: ${simpleWithOpts ? '✓' : '✗'}`);
+      log(`Simple LP no options: ${simpleNoOpts ? '✓' : '✗'}`);
+      log(`Big-M LP + options: ${bigMWithOpts ? '✓' : '✗'}`);
+      log(`Big-M LP no options: ${bigMNoOpts ? '✓' : '✗'}`);
+      
+      let finding = '';
+      if (simpleWithOpts && !bigMWithOpts) {
+        finding = '🔍 FINDING: Big-M slacks + options = crash. Simple LP + options = OK.';
+        log('\n' + finding);
+      } else if (!simpleWithOpts && !bigMWithOpts) {
+        finding = '🔍 FINDING: Options break BOTH LP types.';
+        log('\n' + finding);
+      }
+      
+      const summaryEl = document.getElementById('summaryContent');
+      summaryEl.innerHTML = `
+        <table style="width:100%; color:#eee;">
+          <tr><th></th><th>With Options</th><th>No Options</th></tr>
+          <tr><td>Simple LP</td><td>${simpleWithOpts ? '✓' : '✗'}</td><td>${simpleNoOpts ? '✓' : '✗'}</td></tr>
+          <tr><td>Big-M LP</td><td>${bigMWithOpts ? '✓' : '✗'}</td><td>${bigMNoOpts ? '✓' : '✗'}</td></tr>
+        </table>
+        <p style="margin-top:16px;">${finding}</p>
+      `;
+      document.getElementById('summary').style.display = 'block';
+      
+      btn.disabled = false;
+      btn.textContent = 'Run Test Again';
+    }
+
+    renderTests();
+  </script>
+</body>
+</html>
+

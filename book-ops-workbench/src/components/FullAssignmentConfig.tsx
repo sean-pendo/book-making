@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { SALES_TOOLS_ARR_THRESHOLD } from '@/_domain';
 import { Save, CheckCircle, MapPin, X, Loader2, Sparkles, Calculator, HelpCircle, Settings2, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -55,8 +56,6 @@ interface ConfigState {
   // Shared
   territory_mappings: Record<string, string>;
   max_cre_per_rep: number;
-  // Geographic scoring weight (0-1)
-  geo_weight: number;
   // Optimization model
   optimization_model: 'waterfall' | 'relaxed_optimization';
   // Priority configuration
@@ -93,7 +92,6 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
     // Shared
     territory_mappings: {},
     max_cre_per_rep: 3,
-    geo_weight: 0.3,  // Default: 30% weight for geographic scoring
     optimization_model: 'waterfall',  // Default: waterfall optimization
     // Priority configuration
     assignment_mode: 'ENT',
@@ -108,6 +106,7 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
   const [activeRepCount, setActiveRepCount] = useState(0);
   const [totalProspectNetARR, setTotalProspectNetARR] = useState(0);
   const [totalCustomerARR, setTotalCustomerARR] = useState(0);
+  const [totalCustomerATR, setTotalCustomerATR] = useState(0);
   
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -173,14 +172,13 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             // Shared
             territory_mappings: (data.territory_mappings as Record<string, string>) || {},
             max_cre_per_rep: data.max_cre_per_rep || 3,
-            geo_weight: data.geo_weight ?? 0.3,  // Default 30% if not set
             optimization_model: ((data as any).optimization_model as 'waterfall' | 'relaxed_optimization') || 'waterfall',
             // Priority configuration
             assignment_mode: savedMode,
             priority_config: savedPriorityConfig.length > 0 
               ? savedPriorityConfig 
               : getDefaultPriorityConfig(savedMode === 'CUSTOM' ? 'ENT' : savedMode),
-            rs_arr_threshold: data.rs_arr_threshold || 25000,
+            rs_arr_threshold: data.rs_arr_threshold || SALES_TOOLS_ARR_THRESHOLD,
             is_custom_priority: data.is_custom_priority || false
           });
           setLastCalculatedAt(data.last_calculated_at);
@@ -259,6 +257,53 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
           setTotalProspectNetARR(totalPipeline);
         }
         
+        // Calculate total ATR from renewal opportunities linked to customer parent accounts
+        // Per MASTER_LOGIC.mdc §2.2: ATR = SUM(available_to_renew) WHERE opportunity_type = 'Renewals'
+        // Note: ATR must be ≤ ARR (ATR is a subset of existing revenue)
+        // First try accounts.calculated_atr, fall back to opportunities if empty
+        const { data: accountAtrData } = await supabase
+          .from('accounts')
+          .select('calculated_atr')
+          .eq('build_id', buildId)
+          .eq('is_customer', true)
+          .eq('is_parent', true)
+          .gt('calculated_atr', 0);
+        
+        const accountATR = (accountAtrData || []).reduce((sum, acc) => sum + (acc.calculated_atr || 0), 0);
+        
+        if (accountATR > 0) {
+          console.log('[Config] Total ATR from accounts.calculated_atr:', accountATR);
+          setTotalCustomerATR(accountATR);
+        } else {
+          // Fallback: sum from opportunities (joined to customer parent accounts)
+          const { data: oppAtrData, error: atrError } = await supabase
+            .from('opportunities')
+            .select('available_to_renew, sfdc_account_id')
+            .eq('build_id', buildId)
+            .ilike('opportunity_type', 'renewals')
+            .gt('available_to_renew', 0);
+          
+          if (atrError) {
+            console.error('[Config] ATR query error:', atrError);
+            setTotalCustomerATR(0);
+          } else {
+            // Get customer parent account IDs to filter
+            const { data: customerAccounts } = await supabase
+              .from('accounts')
+              .select('sfdc_account_id')
+              .eq('build_id', buildId)
+              .eq('is_customer', true)
+              .eq('is_parent', true);
+            
+            const customerAccountIds = new Set((customerAccounts || []).map(a => a.sfdc_account_id));
+            const totalATR = (oppAtrData || [])
+              .filter(opp => customerAccountIds.has(opp.sfdc_account_id))
+              .reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0);
+            console.log('[Config] Total ATR from opportunities:', totalATR);
+            setTotalCustomerATR(totalATR);
+          }
+        }
+        
         // Load unique rep regions
         const { data: reps } = await supabase
           .from('sales_reps')
@@ -306,19 +351,21 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
           .eq('is_active', true)
           .eq('include_in_assignments', true),
         // Get account data for balance limits calculation (including ARR for max account check)
+        // Include sfdc_account_id to filter opportunities to customer accounts
         supabase
           .from('accounts')
-          .select('cre_count, calculated_atr, expansion_tier, renewal_quarter, arr')
+          .select('sfdc_account_id, cre_count, calculated_atr, expansion_tier, renewal_quarter, arr')
           .eq('build_id', buildId)
           .eq('is_parent', true)
           .eq('is_customer', true)
           .limit(50000),
-        // Get ATR from renewal opportunities
+        // Get ATR from renewal opportunities (need sfdc_account_id to filter to customer accounts)
         supabase
           .from('opportunities')
-          .select('available_to_renew, opportunity_type')
+          .select('available_to_renew, opportunity_type, sfdc_account_id')
           .eq('build_id', buildId)
-          .ilike('opportunity_type', '%renewal%')
+          .ilike('opportunity_type', 'renewals')
+          .gt('available_to_renew', 0)
           .limit(50000)
       ]);
       
@@ -344,54 +391,96 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       let totalTier1 = 0;
       let totalTier2 = 0;
       let accountATR = 0;
-      let maxAccountARR = 0; // Track largest individual account for floor calculation
+      let maxAccountARR = 0; // Track largest individual customer account ARR
+      let maxAccountATR = 0; // Track largest individual account ATR
+      let maxCREPerAccount = 0; // Track max CRE count on any single account
       
       accounts.forEach(account => {
-        totalCRE += account.cre_count || 0;
-        accountATR += account.calculated_atr || 0;
+        const cre = account.cre_count || 0;
+        totalCRE += cre;
+        if (cre > maxCREPerAccount) maxCREPerAccount = cre;
+        
+        const atr = account.calculated_atr || 0;
+        accountATR += atr;
+        if (atr > maxAccountATR) maxAccountATR = atr;
+        
         const accountArr = Number(account.arr) || 0;
-        if (accountArr > maxAccountARR) {
-          maxAccountARR = accountArr;
-        }
+        if (accountArr > maxAccountARR) maxAccountARR = accountArr;
+        
         const tier = account.expansion_tier?.toLowerCase();
         if (tier === 'tier 1' || tier === 'tier1') totalTier1++;
         if (tier === 'tier 2' || tier === 'tier2') totalTier2++;
       });
       
-      // Calculate total ATR: use opportunities first, fall back to accounts
-      const oppsATR = renewalOpps.reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0);
+      // Calculate total ATR: filter opportunities to customer parent accounts only
+      // Per MASTER_LOGIC.mdc §2.2: ATR ≤ ARR (ATR is subset of customer revenue)
+      const customerAccountIds = new Set(accounts.map(a => a.sfdc_account_id));
+      let maxOppATR = 0;
+      const oppsATR = renewalOpps
+        .filter(opp => customerAccountIds.has(opp.sfdc_account_id))
+        .reduce((sum, opp) => {
+          const atr = opp.available_to_renew || 0;
+          if (atr > maxOppATR) maxOppATR = atr;
+          return sum + atr;
+        }, 0);
       const totalATR = oppsATR > 0 ? oppsATR : accountATR;
+      const maxATR = Math.max(maxAccountATR, maxOppATR);
       
       console.log('[CalculateTargets] Customer ARR:', totalCustomerARR, 'Prospect Pipeline:', totalProspectPipeline, 'Reps:', normalRepCount);
       console.log('[CalculateTargets] CRE:', totalCRE, 'ATR (from opps):', totalATR, 'Tier1:', totalTier1, 'Tier2:', totalTier2);
-      console.log('[CalculateTargets] Max individual account ARR:', maxAccountARR);
+      console.log('[CalculateTargets] Max individual - ARR:', maxAccountARR, 'ATR:', maxATR, 'CRE:', maxCREPerAccount);
       
       // Calculate recommended ARR targets
-      // IMPORTANT: Target must be at least as large as the biggest account so every account can be assigned
-      const calculatedTarget = normalRepCount > 0 && totalCustomerARR > 0 
+      // Target = pure average (continuity will handle large accounts staying with current owner)
+      const recommendedCustomerTarget = normalRepCount > 0 && totalCustomerARR > 0 
         ? Math.round(totalCustomerARR / normalRepCount) 
         : 2000000;
-      // Ensure target is at least as large as the largest individual account
-      const recommendedCustomerTarget = Math.max(calculatedTarget, maxAccountARR);
-      const recommendedCustomerMax = Math.round(recommendedCustomerTarget * 1.5);
+      // Max must be large enough to fit the biggest account
+      // Use 150% of target OR largest account + 20% buffer, whichever is bigger
+      const recommendedCustomerMax = Math.max(
+        Math.round(recommendedCustomerTarget * 1.5),
+        Math.round(maxAccountARR * 1.2)
+      );
       
+      // Prospect target = pure average
       const recommendedProspectTarget = normalRepCount > 0 && totalProspectPipeline > 0
         ? Math.round(totalProspectPipeline / normalRepCount)
         : 2000000;
+      // Prospect max - for now use 150% of target (we don't have max prospect pipeline per account in this query)
       const recommendedProspectMax = Math.round(recommendedProspectTarget * 1.5);
       
-      // Calculate balance limits (target + 20% variance for max)
+      // Calculate balance limits
+      // Target = pure average, Max = average * 1.2 OR largest individual value * 1.2 (whichever is bigger)
       const variance = 1.2;
-      const maxCre = normalRepCount > 0 ? Math.ceil((totalCRE / normalRepCount) * variance) : 3;
-      const maxAtr = normalRepCount > 0 ? Math.ceil((totalATR / normalRepCount) * variance) : 150000;
+      
+      // ATR: average * 1.2 OR largest account ATR * 1.2
+      const avgAtr = normalRepCount > 0 ? totalATR / normalRepCount : 150000;
+      const maxAtr = Math.max(
+        Math.ceil(avgAtr * variance),
+        Math.ceil(maxATR * variance)
+      );
+      
+      // CRE: average * 1.2 OR largest account CRE count * 1.2
+      const avgCre = normalRepCount > 0 ? totalCRE / normalRepCount : 3;
+      const maxCre = Math.max(
+        Math.ceil(avgCre * variance),
+        Math.ceil(maxCREPerAccount * variance)
+      );
+      
+      // Tier counts - these are account counts, so average * 1.2 is fine
       const maxTier1 = normalRepCount > 0 ? Math.ceil((totalTier1 / normalRepCount) * variance) : 5;
       const maxTier2 = normalRepCount > 0 ? Math.ceil((totalTier2 / normalRepCount) * variance) : 8;
       
       // Update config with all calculated values
+      const recommendedAtrTarget = normalRepCount > 0 && totalATR > 0
+        ? Math.round(totalATR / normalRepCount)
+        : 500000;
+      
       setConfig(prev => ({
         ...prev,
         customer_target_arr: recommendedCustomerTarget,
         customer_max_arr: recommendedCustomerMax,
+        customer_target_atr: recommendedAtrTarget,
         prospect_target_arr: recommendedProspectTarget,
         prospect_max_arr: recommendedProspectMax,
         // Balance limits
@@ -404,6 +493,9 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       
       setLastCalculatedAt(new Date().toISOString());
       setIsDirty(true);
+      
+      // Store totals for slider scaling
+      setTotalCustomerATR(totalATR);
       
       toast({
         title: "Targets calculated",
@@ -422,12 +514,32 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
     }
   };
 
-  const formatCurrency = (value: number) => `$${(value / 1000000).toFixed(1)}M`;
+  const formatCurrency = (value: number) => {
+    if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
+    if (value >= 1000) return `$${(value / 1000).toFixed(0)}K`;
+    return `$${value.toFixed(0)}`;
+  };
   const formatNumber = (value: number) => value.toLocaleString();
   
   // Dynamic slider ranges based on actual totals
-  const customerSliderMax = Math.max(5000000, Math.ceil((totalCustomerARR / Math.max(activeRepCount, 1)) * 2 / 100000) * 100000);
-  const prospectSliderMax = Math.max(500000, Math.ceil((totalProspectNetARR / Math.max(activeRepCount, 1)) * 2 / 10000) * 10000);
+  const avgCustomerARR = totalCustomerARR / Math.max(activeRepCount, 1);
+  const avgProspectARR = totalProspectNetARR / Math.max(activeRepCount, 1);
+  
+  // Customer slider: scale from 10% of average to 300% of average (or reasonable defaults)
+  const customerSliderMin = Math.max(1000, Math.floor(avgCustomerARR * 0.1 / 1000) * 1000);
+  const customerSliderMax = Math.max(100000, Math.ceil(avgCustomerARR * 3 / 1000) * 1000);
+  const customerSliderStep = Math.max(1000, Math.round((customerSliderMax - customerSliderMin) / 100 / 1000) * 1000);
+  
+  // Prospect slider: similar scaling
+  const prospectSliderMin = Math.max(1000, Math.floor(avgProspectARR * 0.1 / 1000) * 1000);
+  const prospectSliderMax = Math.max(50000, Math.ceil(avgProspectARR * 3 / 1000) * 1000);
+  const prospectSliderStep = Math.max(1000, Math.round((prospectSliderMax - prospectSliderMin) / 100 / 1000) * 1000);
+  
+  // ATR slider: scale based on totalCustomerATR
+  const avgCustomerATR = totalCustomerATR / Math.max(activeRepCount, 1);
+  const atrSliderMin = Math.max(1000, Math.floor(avgCustomerATR * 0.1 / 1000) * 1000);
+  const atrSliderMax = Math.max(100000, Math.ceil(avgCustomerATR * 3 / 1000) * 1000);
+  const atrSliderStep = Math.max(1000, Math.round((atrSliderMax - atrSliderMin) / 100 / 1000) * 1000);
 
   const handleChange = (field: keyof ConfigState, value: number | Record<string, string>) => {
     setConfig(prev => ({ ...prev, [field]: value }));
@@ -570,7 +682,6 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         // Shared
         territory_mappings: config.territory_mappings,
         max_cre_per_rep: config.max_cre_per_rep,
-        geo_weight: config.geo_weight,
         optimization_model: config.optimization_model,
         // Priority configuration
         assignment_mode: config.assignment_mode,
@@ -756,11 +867,11 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             </Label>
             <div className="flex items-center gap-4">
               <Slider
-                value={[config.customer_target_arr]}
+                value={[Math.max(customerSliderMin, Math.min(customerSliderMax, config.customer_target_arr))]}
                 onValueChange={([value]) => handleChange('customer_target_arr', value)}
-                min={500000}
+                min={customerSliderMin}
                 max={customerSliderMax}
-                step={100000}
+                step={customerSliderStep}
                 className="flex-1"
               />
               <Input
@@ -912,6 +1023,11 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
               <CardTitle>Customer ATR Targets</CardTitle>
               <CardDescription>Available to Renew (ATR) goals - revenue coming up for renewal</CardDescription>
             </div>
+            {totalCustomerATR > 0 && activeRepCount > 0 && (
+              <Badge variant="outline" className="text-xs">
+                Total: {formatCurrency(totalCustomerATR)} across {activeRepCount} reps
+              </Badge>
+            )}
           </div>
         </CardHeader>
         
@@ -925,11 +1041,11 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             </Label>
             <div className="flex items-center gap-4">
               <Slider
-                value={[config.customer_target_atr]}
+                value={[Math.max(atrSliderMin, Math.min(atrSliderMax, config.customer_target_atr))]}
                 onValueChange={([value]) => handleChange('customer_target_atr', value)}
-                min={0}
-                max={2000000}
-                step={50000}
+                min={atrSliderMin}
+                max={atrSliderMax}
+                step={atrSliderStep}
                 className="flex-1"
               />
               <Input
@@ -1081,9 +1197,9 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
               <CardTitle>Prospect Pipeline Targets</CardTitle>
               <CardDescription>Opportunity pipeline value goals (potential revenue from prospects)</CardDescription>
             </div>
-            {totalProspectNetARR > 0 && (
+            {totalProspectNetARR > 0 && activeRepCount > 0 && (
               <Badge variant="outline" className="text-xs">
-                Total Pipeline: {formatCurrency(totalProspectNetARR)} across {prospectAccountCount} prospects
+                Total: {formatCurrency(totalProspectNetARR)} across {activeRepCount} reps
               </Badge>
             )}
           </div>
@@ -1099,11 +1215,11 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             </Label>
             <div className="flex items-center gap-4">
               <Slider
-                value={[config.prospect_target_arr]}
+                value={[Math.max(prospectSliderMin, Math.min(prospectSliderMax, config.prospect_target_arr))]}
                 onValueChange={([value]) => handleChange('prospect_target_arr', value)}
-                min={0}
+                min={prospectSliderMin}
                 max={prospectSliderMax}
-                step={10000}
+                step={prospectSliderStep}
                 className="flex-1"
               />
               <Input
@@ -1249,58 +1365,7 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       </Card>
 
       {/* Balance Limits removed - now handled by ARR/ATR/Pipeline min/max constraints in HIGHS optimization */}
-
-      {/* Geographic Preference Weight */}
-      <Card className="border-0 shadow-none bg-transparent">
-        <CardHeader className="px-0 pb-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <MapPin className="w-4 h-4" />
-            Geographic Preference
-          </CardTitle>
-          <CardDescription className="text-xs">
-            How strongly should assignments prefer exact geography matches?
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="px-0 pb-4">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <Label className="flex items-center gap-2 text-sm">
-                Geography Weight
-                <Tooltip>
-                  <TooltipTrigger>
-                    <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-sm">
-                    <p className="font-medium mb-1">Controls geographic match preference</p>
-                    <p className="text-xs">• <strong>Low (0-30%)</strong>: Prioritize balanced books over geography</p>
-                    <p className="text-xs">• <strong>Medium (30-60%)</strong>: Balance geography and book size</p>
-                    <p className="text-xs">• <strong>High (60-100%)</strong>: Strongly prefer exact geo matches</p>
-                    <p className="text-xs mt-2 text-muted-foreground">
-                      Note: Accounts still cascade through priority levels. This affects ranking within each level.
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </Label>
-              <span className="text-sm text-muted-foreground">
-                {Math.round(config.geo_weight * 100)}%
-              </span>
-            </div>
-            <div className="flex items-center gap-4">
-              <Slider
-                value={[config.geo_weight * 100]}
-                onValueChange={([value]) => handleChange('geo_weight', value / 100)}
-                min={0}
-                max={100}
-                step={10}
-                className="flex-1"
-              />
-              <div className="w-20 text-xs text-muted-foreground text-right">
-                {config.geo_weight < 0.3 ? 'Balance' : config.geo_weight < 0.6 ? 'Mixed' : 'Geo-first'}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Geographic Preference removed - handled internally by priority rules */}
 
       {/* Territory Mapping */}
       <Card className="border-0 shadow-none bg-transparent">

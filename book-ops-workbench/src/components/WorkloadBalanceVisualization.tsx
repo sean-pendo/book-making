@@ -189,7 +189,7 @@ export const WorkloadBalanceVisualization: React.FC<WorkloadBalanceVisualization
                       label={{ value: 'ARR (Millions)', angle: -90, position: 'insideLeft' }}
                       tick={{ fontSize: 12 }}
                     />
-                    <Tooltip content={<CustomTooltip />} />
+                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ zIndex: 1000 }} />
                     <Bar dataKey="proposedARR" radius={[4, 4, 0, 0]}>
                       {prepareChartData(stratReps).map((entry, index) => (
                         <Cell 
@@ -225,7 +225,7 @@ export const WorkloadBalanceVisualization: React.FC<WorkloadBalanceVisualization
                       label={{ value: 'ARR (Millions)', angle: -90, position: 'insideLeft' }}
                       tick={{ fontSize: 12 }}
                     />
-                    <Tooltip content={<CustomTooltip />} />
+                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ zIndex: 1000 }} />
                     <Bar dataKey="proposedARR" radius={[4, 4, 0, 0]}>
                       {prepareChartData(normalReps).map((entry, index) => (
                         <Cell 

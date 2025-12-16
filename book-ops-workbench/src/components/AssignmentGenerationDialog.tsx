@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle, XCircle, Clock, RefreshCw, Target, Users, TrendingUp, Database, Loader2, AlertTriangle } from "lucide-react";
+import { CheckCircle, XCircle, RefreshCw, Target, Users, TrendingUp, Database, Loader2, AlertTriangle } from "lucide-react";
 import type { AssignmentProgress } from '@/services/enhancedAssignmentService';
 
 interface AssignmentGenerationDialogProps {
@@ -21,26 +21,22 @@ export const AssignmentGenerationDialog: React.FC<AssignmentGenerationDialogProp
   isGenerating,
   onCancel
 }) => {
-  const [elapsedTime, setElapsedTime] = React.useState(0);
-  const [startTime] = React.useState(Date.now());
+  const [maxProgress, setMaxProgress] = React.useState(0);
   
-  // Update elapsed time every second
+  // Track maximum progress to prevent backwards jumps
   React.useEffect(() => {
-    if (!isGenerating) return;
-    
-    const interval = setInterval(() => {
-      setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
-    }, 1000);
-    
-    return () => clearInterval(interval);
-  }, [isGenerating, startTime]);
+    const currentProgress = progress?.progress || 0;
+    if (currentProgress > maxProgress) {
+      setMaxProgress(currentProgress);
+    }
+    // Reset when dialog closes or new generation starts
+    if (!open || (!isGenerating && currentProgress === 0)) {
+      setMaxProgress(0);
+    }
+  }, [progress?.progress, open, isGenerating, maxProgress]);
   
-  // Format elapsed time as MM:SS
-  const formatElapsedTime = () => {
-    const minutes = Math.floor(elapsedTime / 60);
-    const seconds = elapsedTime % 60;
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
+  // Use the higher of current progress or max progress (prevents going backwards)
+  const displayProgress = Math.max(progress?.progress || 0, maxProgress);
   
   // Parse batch progress from status string
   const parseBatchProgress = () => {
@@ -56,7 +52,6 @@ export const AssignmentGenerationDialog: React.FC<AssignmentGenerationDialogProp
   };
 
   const batchProgress = parseBatchProgress();
-  const isAIProcessing = batchProgress !== null;
 
   const getStageIcon = () => {
     if (progress?.error) {
@@ -121,19 +116,13 @@ export const AssignmentGenerationDialog: React.FC<AssignmentGenerationDialogProp
           <DialogTitle className="flex items-center gap-2">
             {getStageIcon()}
             Assignment Generation
-            {isGenerating && (
-              <Badge variant="outline" className="ml-auto">
-                <Clock className="h-3 w-3 mr-1" />
-                {formatElapsedTime()}
-              </Badge>
-            )}
           </DialogTitle>
           <DialogDescription>
             Real-time progress of the assignment generation process
-            {progress && progress.totalAccounts > 500 && isAIProcessing && (
+            {progress && progress.totalAccounts > 500 && (
               <div className="mt-1 text-amber-600 text-xs flex items-center gap-1">
                 <AlertTriangle className="h-3 w-3" />
-                Large dataset - AI processing may take 15-20 minutes
+                Large dataset - optimization may take several minutes
               </div>
             )}
           </DialogDescription>
@@ -154,11 +143,11 @@ export const AssignmentGenerationDialog: React.FC<AssignmentGenerationDialogProp
                 )}
               </div>
               <span className="text-sm text-muted-foreground">
-                {Math.round(progress?.progress || 0)}%
+                {Math.round(displayProgress)}%
               </span>
             </div>
             
-            <Progress value={progress?.progress || 0} className="w-full" />
+            <Progress value={displayProgress} className="w-full" />
             
             <div className={`text-sm ${getStageColor()}`}>
               {progress?.status || stageDetails.description}
@@ -211,74 +200,47 @@ export const AssignmentGenerationDialog: React.FC<AssignmentGenerationDialogProp
                 { id: 'loading', name: 'Loading Data', icon: <Database className="h-4 w-4" /> },
                 { id: 'analyzing', name: 'Analyzing', icon: <Target className="h-4 w-4" /> },
                 { id: 'applying', name: 'Applying Rules', icon: <TrendingUp className="h-4 w-4" /> },
-                { id: 'ai-optimization', name: 'AI Optimization', icon: <RefreshCw className="h-4 w-4" /> },
                 { id: 'finalizing', name: 'Finalizing', icon: <Users className="h-4 w-4" /> }
               ].map((stage, index) => {
-                // Special handling for AI Optimization stage
-                const isAIOptimizationStage = stage.id === 'ai-optimization';
-                const isAIOptimizationActive = isAIOptimizationStage && isAIProcessing;
-                const isAIOptimizationCompleted = isAIOptimizationStage && !isAIProcessing && 
-                  (progress?.stage === 'finalizing' || progress?.stage === 'saving' || progress?.stage === 'complete');
-                
-                // Mark "Applying Rules" as complete when AI processing starts
-                const isApplyingStage = stage.id === 'applying';
-                const isApplyingCompleted = isApplyingStage && isAIProcessing;
-                
-                // Regular stage logic - map 'assigning' and 'initializing' to their UI equivalents
-                const currentStage = progress?.stage === 'assigning' ? 'applying' : 
+                // Map internal stages to UI stages
+                const currentStage = progress?.stage === 'assigning' ? 'applying' :
                                    progress?.stage === 'initializing' ? 'loading' :
                                    progress?.stage === 'saving' ? 'finalizing' :
+                                   progress?.stage === 'solving' ? 'applying' :
+                                   progress?.stage === 'postprocessing' ? 'finalizing' :
                                    progress?.stage;
-                                   
-                const stageOrder = ['loading', 'analyzing', 'applying', 'ai-optimization', 'finalizing'];
+
+                const stageOrder = ['loading', 'analyzing', 'applying', 'finalizing'];
                 const currentIndex = stageOrder.indexOf(currentStage || '');
                 const isCompleted = currentIndex > index;
-                const isActive = currentStage === stage.id && !isAIOptimizationStage;
-                
-                // Final state determination
-                const finalIsCompleted = isCompleted || isApplyingCompleted || isAIOptimizationCompleted;
-                const finalIsActive = isActive || isAIOptimizationActive;
-                
-                // Calculate progress percentage for AI stage
-                // Show 100% when completed to prevent flash to 0
-                const aiProgressPercentage = isAIOptimizationCompleted 
-                  ? 100
-                  : isAIOptimizationActive && batchProgress 
-                    ? Math.round((batchProgress.current / batchProgress.total) * 100)
-                    : 0;
-                
+                const isActive = currentStage === stage.id;
+
                 return (
                   <div key={stage.id} className="flex items-center gap-2 p-2 rounded-md bg-muted/30">
                     <div className={`flex-shrink-0 ${
-                      finalIsCompleted ? 'text-green-600' : 
-                      finalIsActive ? 'text-primary' : 'text-muted-foreground'
+                      isCompleted ? 'text-green-600' :
+                      isActive ? 'text-primary' : 'text-muted-foreground'
                     }`}>
-                      {finalIsCompleted ? (
+                      {isCompleted ? (
                         <CheckCircle className="h-4 w-4" />
-                      ) : finalIsActive ? (
+                      ) : isActive ? (
                         <div className="animate-pulse">{stage.icon}</div>
                       ) : (
                         stage.icon
                       )}
                     </div>
                     <div className={`flex-1 text-sm font-medium ${
-                      finalIsCompleted ? 'text-green-600' : 
-                      finalIsActive ? 'text-primary' : 'text-muted-foreground'
+                      isCompleted ? 'text-green-600' :
+                      isActive ? 'text-primary' : 'text-muted-foreground'
                     }`}>
                       {stage.name}
-                      {isAIOptimizationActive && batchProgress && (
-                        <span className="text-xs ml-2 text-muted-foreground">
-                          (Batch {batchProgress.current}/{batchProgress.total})
-                        </span>
-                      )}
                     </div>
                     <div className={`text-xs ${
-                      finalIsCompleted ? 'text-green-600' : 
-                      finalIsActive ? 'text-primary' : 'text-muted-foreground'
+                      isCompleted ? 'text-green-600' :
+                      isActive ? 'text-primary' : 'text-muted-foreground'
                     }`}>
-                      {finalIsCompleted ? '✓' : 
-                       isAIOptimizationActive ? `${aiProgressPercentage}%` :
-                       finalIsActive && progress ? `${Math.round(progress.progress)}%` : ''}
+                      {isCompleted ? '✓' :
+                       isActive && progress ? `${Math.round(displayProgress)}%` : ''}
                     </div>
                   </div>
                 );

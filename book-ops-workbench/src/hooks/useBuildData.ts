@@ -1,8 +1,23 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { buildDataService, type BuildDataSummary, type BuildDataRelationships } from '@/services/buildDataService';
+import { useState, useEffect } from 'react';
+import { buildDataService, type BuildDataSummary, type BuildDataRelationships, subscribeToLoadProgress, type LoadProgress } from '@/services/buildDataService';
 import type { MetricsSnapshot, MetricsComparison } from '@/types/analytics';
 import { supabase } from '@/integrations/supabase/client';
-import { getPriorityById } from '@/config/priorityRegistry';
+import { SUPABASE_LIMITS } from '@/_domain';
+
+// Hook to track loading progress
+export const useLoadProgress = () => {
+  const [progress, setProgress] = useState<LoadProgress | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToLoadProgress((p) => {
+      setProgress(p);
+    });
+    return unsubscribe;
+  }, []);
+
+  return progress;
+};
 
 export const useBuildDataSummary = (buildId: string | undefined) => {
   return useQuery({
@@ -81,11 +96,13 @@ export const useInvalidateBuildData = () => {
 /**
  * Hook for fetching analytics metrics (LP success metrics + distributions)
  * Used in Data Overview and Assignment Preview
+ * @param buildId - Build ID
+ * @param useProposed - Whether to use proposed assignments (new_owner_id) or original (owner_id). Defaults to true.
  */
-export const useAnalyticsMetrics = (buildId: string | undefined) => {
+export const useAnalyticsMetrics = (buildId: string | undefined, useProposed = true) => {
   return useQuery<MetricsSnapshot>({
-    queryKey: ['analytics-metrics', buildId],
-    queryFn: () => buildDataService.getAnalyticsMetrics(buildId!),
+    queryKey: ['analytics-metrics', buildId, useProposed],
+    queryFn: () => buildDataService.getAnalyticsMetrics(buildId!, useProposed),
     enabled: !!buildId,
     staleTime: 2 * 60 * 1000, // 2 minutes
     gcTime: 5 * 60 * 1000, // 5 minutes
@@ -162,61 +179,126 @@ export interface PriorityDistributionItem {
 }
 
 /**
+ * Parse priority code and name from rationale string
+ * 
+ * Rationale formats:
+ * - LP solver: "P1: Geography + Continuity → Rep Name (details)"
+ * - Legacy: "CONTINUITY: Reason text"
+ * 
+ * Returns { code: "P1", name: "Geography + Continuity" }
+ */
+function parsePriorityFromRationale(rationale: string): { code: string; name: string } {
+  // Match LP solver format: "P1: Name → Rep (details)" or "RO: Name → Rep (details)"
+  // The priority name is between the code and the arrow (→)
+  const lpMatch = rationale.match(/^(P\d+|RO):\s*(.+?)\s*→/i);
+  
+  if (lpMatch) {
+    return {
+      code: lpMatch[1].toUpperCase(),
+      name: lpMatch[2].trim()
+    };
+  }
+  
+  // Match simplified format without arrow: "P1: Name" or "RO: Name"
+  // Stop at dash, parenthesis, or end of string
+  const simpleMatch = rationale.match(/^(P\d+|RO):\s*(.+?)(?:\s*[-:(]|$)/i);
+  
+  if (simpleMatch) {
+    return {
+      code: simpleMatch[1].toUpperCase(),
+      name: simpleMatch[2].trim()
+    };
+  }
+  
+  // Fallback: try to at least get the code
+  const codeMatch = rationale.match(/^(P\d+|RO):/i);
+  if (codeMatch) {
+    return {
+      code: codeMatch[1].toUpperCase(),
+      name: 'Unknown'
+    };
+  }
+  
+  return { code: 'Other', name: 'Other' };
+}
+
+/**
  * Hook for fetching priority distribution data
  * Shows breakdown of accounts by assignment priority level
- * Extracts priority from the assignments table's rationale field
+ *
+ * Parses priority code and name directly from rationale strings.
+ * Rationale format: "P1: Continuity + Geography" or "RO: Force Assignment"
+ *
+ * Uses pagination to fetch all assignments (Supabase defaults to 1000 row limit).
  */
 export const usePriorityDistribution = (buildId: string | undefined) => {
   return useQuery<PriorityDistributionItem[]>({
     queryKey: ['priority-distribution', buildId],
     queryFn: async () => {
-      // Get all approved assignments with their rationale
-      const { data: assignments, error } = await supabase
-        .from('assignments')
-        .select('rationale')
-        .eq('build_id', buildId!)
-        .eq('is_approved', true);
-      
-      if (error) throw error;
-      if (!assignments || assignments.length === 0) return [];
-      
-      // Parse priority from rationale (format: "P1: Geography + Continuity")
-      const priorityCounts: Record<string, number> = {};
+      // Fetch all approved assignments using pagination
+      // Supabase defaults to 1000 rows per request
+      const allAssignments: { rationale: string | null }[] = [];
+      const pageSize = SUPABASE_LIMITS.DEFAULT_PAGE_SIZE;
+      let from = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('assignments')
+          .select('rationale')
+          .eq('build_id', buildId!)
+          .eq('is_approved', true)
+          .range(from, from + pageSize - 1);
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          allAssignments.push(...data);
+          from += pageSize;
+          hasMore = data.length === pageSize;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      const assignments = allAssignments;
+      if (assignments.length === 0) return [];
+
+      // Group by priority code, tracking the name from the rationale
+      const priorityCounts: Record<string, { count: number; name: string }> = {};
+
       assignments.forEach(assignment => {
         const rationale = assignment.rationale || '';
-        // Extract priority ID (e.g., "P1", "P2") from start of rationale
-        const priorityMatch = rationale.match(/^(P\d+)/i);
-        const priorityId = priorityMatch ? priorityMatch[1].toUpperCase() : 'Other';
-        priorityCounts[priorityId] = (priorityCounts[priorityId] || 0) + 1;
+        const { code, name } = parsePriorityFromRationale(rationale);
+
+        if (!priorityCounts[code]) {
+          priorityCounts[code] = { count: 0, name };
+        }
+        priorityCounts[code].count++;
       });
-      
+
       const total = assignments.length;
-      
-      // Map to distribution items with priority metadata
+
+      // Map to distribution items
       const distribution: PriorityDistributionItem[] = Object.entries(priorityCounts)
-        .map(([priorityId, count]) => {
-          const priorityDef = getPriorityById(priorityId);
-          // Extract description from the first matching rationale
-          const sampleRationale = assignments.find(a => 
-            a.rationale?.toUpperCase().startsWith(priorityId)
-          )?.rationale || '';
-          const description = sampleRationale.replace(/^P\d+:\s*/i, '');
-          
-          return {
-            priorityId,
-            priorityName: priorityDef?.name || priorityId,
-            priorityDescription: priorityDef?.description || description,
-            count,
-            percentage: (count / total) * 100
-          };
-        })
+        .map(([code, data]) => ({
+          priorityId: code,
+          priorityName: data.name,
+          priorityDescription: '', // No description needed - name is self-explanatory
+          count: data.count,
+          percentage: (data.count / total) * 100
+        }))
         .sort((a, b) => {
-          // Sort by priority level (P0, P1, P2, etc.)
-          const aNum = parseInt(a.priorityId.replace(/\D/g, '')) || 999;
-          const bNum = parseInt(b.priorityId.replace(/\D/g, '')) || 999;
-          return aNum - bNum;
+          // Sort by priority level (P0, P1, P2, ... RO last, Other after)
+          const getPriority = (id: string) => {
+            if (id === 'Other') return 9999;
+            if (id === 'RO') return 1000;
+            const num = parseInt(id.replace(/\D/g, ''));
+            return isNaN(num) ? 9998 : num;
+          };
+          return getPriority(a.priorityId) - getPriority(b.priorityId);
         });
-      
+
       return distribution;
     },
     enabled: !!buildId,

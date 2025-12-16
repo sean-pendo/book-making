@@ -21,4 +21,5 @@ export default defineConfig(({ mode }) => ({
     __APP_VERSION__: JSON.stringify(packageJson.version),
     __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
   },
+  // HiGHS is loaded from CDN - no special bundler config needed
 }));

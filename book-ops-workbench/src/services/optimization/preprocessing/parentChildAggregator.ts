@@ -13,6 +13,8 @@
  */
 
 import type { AggregatedAccount, LPAssignmentProposal } from '../types';
+import type { PriorityConfig } from '@/config/priorityRegistry';
+import { getPositionLabel } from '../postprocessing/rationaleGenerator';
 
 /**
  * Already done in dataLoader.ts during load
@@ -32,7 +34,8 @@ export function aggregateChildrenIntoParents(
  */
 export function cascadeToChildren(
   parentProposals: LPAssignmentProposal[],
-  allAccounts: AggregatedAccount[]
+  allAccounts: AggregatedAccount[],
+  priorityConfig?: PriorityConfig[]
 ): LPAssignmentProposal[] {
   const result: LPAssignmentProposal[] = [...parentProposals];
   
@@ -62,7 +65,7 @@ export function cascadeToChildren(
         scores: proposal.scores, // Inherit parent's scores
         totalScore: proposal.totalScore,
         lockResult: null,
-        rationale: `P0: Child follows parent → ${proposal.repName} (inherited from ${proposal.accountName})`,
+        rationale: `${getPositionLabel('manual_holdover', priorityConfig)}: Child follows parent → ${proposal.repName} (inherited from ${proposal.accountName})`,
         isStrategicPreAssignment: proposal.isStrategicPreAssignment,
         childIds: [] // Children don't have children
       });

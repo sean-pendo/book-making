@@ -1,0 +1,4 @@
+Building using Dockerfile and deploying container to Cloud Run service [highs-solver] in project [highs-solver-poc] region [us-central1]
+Building and deploying...
+Validating Service.......done
+Uploading sources............done

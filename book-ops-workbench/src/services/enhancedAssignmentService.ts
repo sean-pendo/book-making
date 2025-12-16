@@ -1,5 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { resolveParentChildConflicts, ParentalAlignmentWarning } from './parentalAlignmentService';
+import { getAccountARR } from '@/_domain';
+import { getPositionLabel } from '@/services/optimization';
 
 // ============= TYPE DEFINITIONS =============
 
@@ -242,7 +244,7 @@ export class EnhancedAssignmentService {
           proposedOwnerId: account.owner_id!,
           proposedOwnerName: account.owner_name || 'Unknown',
           proposedOwnerRegion: undefined,
-          assignmentReason: 'P0: Excluded from reassignment (manually locked)',
+          assignmentReason: `${getPositionLabel('manual_holdover')}: Excluded from reassignment (manually locked)`,
           ruleApplied: 'Manual Holdover',
           conflictRisk: 'LOW' as const
         }));
@@ -729,7 +731,7 @@ export class EnhancedAssignmentService {
         const workload = repWorkloads.get(targetRep.rep_id);
         if (workload) {
           workload.accountCount++;
-          workload.totalARR += account.calculated_arr || account.arr || 0;
+          workload.totalARR += getAccountARR(account);
         }
 
         if (isReassignment) {

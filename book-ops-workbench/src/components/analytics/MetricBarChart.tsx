@@ -86,7 +86,7 @@ export const MetricBarChart: React.FC<MetricBarChartProps> = ({
                 tickLine={false}
                 width={35}
               />
-              <Tooltip content={(props) => <CustomTooltip {...props} formatValue={formatValue} />} />
+              <Tooltip content={(props) => <CustomTooltip {...props} formatValue={formatValue} />} wrapperStyle={{ zIndex: 1000 }} />
               <Bar 
                 dataKey="value" 
                 radius={[4, 4, 0, 0]}

@@ -1,5 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, getAccountATR } from '@/_domain';
 
 // ============= TYPE DEFINITIONS =============
 
@@ -439,7 +439,7 @@ export class RebalancingAssignmentService {
       const normalAccounts = accounts.filter(a => !a.is_strategic && getAccountARR(a) <= 0);
       
       const stratTotalARR = stratAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
-      const normalTotalARR = normalAccounts.reduce((sum, a) => sum + (a.calculated_arr || a.arr || 0), 0);
+      const normalTotalARR = normalAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
       
       // Load values from user configuration or use sensible defaults
       const customerTargetARR = assignmentConfig?.customer_target_arr || config?.normalTargetARR || 2000000;
@@ -659,7 +659,7 @@ export class RebalancingAssignmentService {
 
     // Log regional distribution
     Object.entries(accountsByRegion).forEach(([region, accts]) => {
-      const totalARR = accts.reduce((sum, acc) => sum + (acc.calculated_arr || acc.arr || 0), 0);
+      const totalARR = accts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
       console.log(`[REBALANCE] 📊 ${region}: ${accts.length} accounts, $${(totalARR/1000000).toFixed(1)}M ARR`);
     });
 
@@ -702,7 +702,7 @@ export class RebalancingAssignmentService {
 
     // Sort accounts - smallest first for better bin-packing distribution
     const sortedAccounts = [...regionAccounts].sort((a, b) => 
-      (a.calculated_arr || a.arr || 0) - (b.calculated_arr || b.arr || 0)
+      getAccountARR(a) - getAccountARR(b)
     );
 
     // SMART DISTRIBUTION WITH HARD LIMITS
@@ -712,7 +712,7 @@ export class RebalancingAssignmentService {
       const poolTargets = isStrategic && targets.strategic ? targets.strategic : targets.normal;
       
       // Get account characteristics for balance limit checks
-      const accountATR = account.calculated_atr || account.atr || 0;
+      const accountATR = getAccountATR(account);
       const accountCRECount = account.cre_count || 0;
       const isTier1Account = account.expansion_tier === 'Tier 1' || account.initial_sale_tier === 'Tier 1';
       const isTier2Account = account.expansion_tier === 'Tier 2' || account.initial_sale_tier === 'Tier 2';
@@ -921,7 +921,7 @@ export class RebalancingAssignmentService {
     
     proposals.forEach(proposal => {
       const account = accounts.find(acc => acc.sfdc_account_id === proposal.accountId);
-      const accountARR = account?.calculated_arr || account?.arr || 0;
+      const accountARR = account ? getAccountARR(account) : 0;
       
       const current = repBalances.get(proposal.proposedOwnerId) || { accountCount: 0, totalARR: 0 };
       current.accountCount++;
@@ -946,7 +946,7 @@ export class RebalancingAssignmentService {
         return false;
       }
 
-      const accountARR = account.calculated_arr || account.arr || 0;
+      const accountARR = getAccountARR(account);
       
       // Only allow swap if it maintains good balance
       return originalOwnerBalance.totalARR + accountARR <= this.TARGET_ARR_PER_REP * 1.05 &&
@@ -1140,7 +1140,7 @@ export class RebalancingAssignmentService {
 
       const totalARR = repAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
       const totalATR = repAccounts.reduce((sum, acc) => 
-        sum + Number(acc.calculated_atr || acc.atr || 0), 0);
+        sum + getAccountATR(acc), 0);
       const tier1Count = repAccounts.filter(acc => 
         acc.initial_sale_tier === 'Tier 1' || acc.expansion_tier === 'Tier 1').length;
       const tier2Count = repAccounts.filter(acc => 
@@ -1172,7 +1172,7 @@ export class RebalancingAssignmentService {
             stats.byGeo[repRegion].prospectAccounts++;
           }
           stats.byGeo[repRegion].totalARR += getAccountARR(acc);
-          stats.byGeo[repRegion].totalATR += Number(acc.calculated_atr || acc.atr || 0);
+          stats.byGeo[repRegion].totalATR += getAccountATR(acc);
         });
       }
     });

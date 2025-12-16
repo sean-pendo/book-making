@@ -27,16 +27,21 @@ import type {
 import { continuityScore } from '../scoring/continuityScore';
 import { geographyScore } from '../scoring/geographyScore';
 import { teamAlignmentScore } from '../scoring/teamAlignmentScore';
-import { normalizeWeights } from '../utils/weightNormalizer';
+import { normalizeWeights, deriveWeightsFromPriorityConfig } from '../utils/weightNormalizer';
+import { LP_PENALTY } from '@/_domain';
 
 /**
- * Three-tier penalty constants (matching waterfall engine)
+ * Three-tier penalty constants
+ * @see _domain/constants.ts LP_PENALTY
+ * @see _domain/MASTER_LOGIC.mdc §11.3 Three-Tier Penalty System
+ * 
+ * NUMERICAL STABILITY FIX (December 2025):
+ * Values are normalized for HiGHS WASM stability. Original conceptual
+ * values (0.01, 1.0, 1000.0) caused coefficient magnitude mismatch.
+ * The relative ratios (1:10:100) are preserved.
  */
-const PENALTY = {
-  ALPHA: 0.01,    // Small penalty for being within variance band
-  BETA: 1.0,      // Medium penalty for being in buffer zone
-  BIG_M: 1000.0   // Huge penalty for violating absolute limits
-};
+const PENALTY = LP_PENALTY;
+
 
 /**
  * Metric weights for normalization
@@ -80,19 +85,19 @@ function buildMetricPenaltyTerms(
   penalties: Map<string, number>;
   bounds: { varName: string; lower: number; upper: number | null }[];
 } {
+  // NUMERICAL STABILITY: Normalize slack bounds to 0-1 scale
+  // This keeps all coefficients in a numerically stable range
   const normFactor = Math.max(target, 1);
   
-  // Calculate zone boundaries
+  // Calculate zone boundaries (in original units)
   const prefMin = target * (1 - variance);
   const prefMax = target * (1 + variance);
   
-  // Alpha band size (variance * target)
-  const alphaOverBound = Math.max(0, prefMax - target);
-  const alphaUnderBound = Math.max(0, target - prefMin);
-  
-  // Beta band size (gap between variance boundary and absolute limit)
-  const betaOverBound = Math.max(0, max - prefMax);
-  const betaUnderBound = Math.max(0, prefMin - min);
+  // Zone sizes in original units, then normalize to 0-1 scale
+  const alphaOverBound = Math.max(0, (prefMax - target) / normFactor);
+  const alphaUnderBound = Math.max(0, (target - prefMin) / normFactor);
+  const betaOverBound = Math.max(0, (max - prefMax) / normFactor);
+  const betaUnderBound = Math.max(0, (prefMin - min) / normFactor);
   
   // Slack variable names
   const slacks: MetricPenaltySlacks = {
@@ -105,10 +110,12 @@ function buildMetricPenaltyTerms(
   };
   
   // Penalty coefficients (negative because we maximize, penalties reduce score)
+  // NUMERICAL STABILITY: Penalties are now in the same scale as assignment scores (0.1-1.0)
+  // No division by normFactor - keeps coefficients in stable range
   const penalties = new Map<string, number>();
-  const alphaPenalty = PENALTY.ALPHA * weight / normFactor;
-  const betaPenalty = PENALTY.BETA * weight / normFactor;
-  const bigMPenalty = PENALTY.BIG_M * weight / normFactor;
+  const alphaPenalty = PENALTY.ALPHA * weight;  // ~0.0005 for ARR (weight=0.5)
+  const betaPenalty = PENALTY.BETA * weight;     // ~0.005 for ARR
+  const bigMPenalty = PENALTY.BIG_M * weight;    // ~0.05 for ARR
   
   penalties.set(slacks.alphaOver, -alphaPenalty);
   penalties.set(slacks.alphaUnder, -alphaPenalty);
@@ -117,14 +124,14 @@ function buildMetricPenaltyTerms(
   penalties.set(slacks.bigMOver, -bigMPenalty);
   penalties.set(slacks.bigMUnder, -bigMPenalty);
   
-  // Bounds on slack variables
+  // Bounds on slack variables (normalized to 0-1 scale)
   const bounds = [
     { varName: slacks.alphaOver, lower: 0, upper: alphaOverBound },
     { varName: slacks.alphaUnder, lower: 0, upper: alphaUnderBound },
     { varName: slacks.betaOver, lower: 0, upper: betaOverBound },
     { varName: slacks.betaUnder, lower: 0, upper: betaUnderBound },
-    { varName: slacks.bigMOver, lower: 0, upper: null }, // Unbounded
-    { varName: slacks.bigMUnder, lower: 0, upper: null }  // Unbounded
+    { varName: slacks.bigMOver, lower: 0, upper: null }, // Unbounded (but normalized)
+    { varName: slacks.bigMUnder, lower: 0, upper: null }  // Unbounded (but normalized)
   ];
   
   return { slacks, penalties, bounds };
@@ -151,21 +158,26 @@ export interface ProblemBuildResult {
  */
 export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
   const { accounts, reps, lockedAccounts, config, assignmentType, territoryMappings, hardCapArr } = input;
-  
+
   // IMPORTANT: Combine unlocked accounts AND locked accounts for full problem
   // Locked accounts need variables too (so they contribute to capacity/balance constraints)
   const lockedAccountsList = lockedAccounts.map(la => la.account);
   const allAccountsInProblem = [...accounts, ...lockedAccountsList];
-  
+
   console.log(`[LPBuilder] Building problem: ${accounts.length} unlocked + ${lockedAccountsList.length} locked = ${allAccountsInProblem.length} accounts, ${reps.length} reps, ${assignmentType} mode`);
   
-  // Get normalized weights
-  const objectivesConfig = assignmentType === 'customer' 
-    ? config.lp_objectives_customer 
-    : config.lp_objectives_prospect;
-  const weights = normalizeWeights(objectivesConfig);
-  
-  console.log(`[LPBuilder] Weights: C=${weights.wC.toFixed(2)}, G=${weights.wG.toFixed(2)}, T=${weights.wT.toFixed(2)}`);
+  // Derive weights from priority_config positions (SSOT)
+  // Falls back to lp_objectives if priority_config is empty
+  const weights = config.priority_config && config.priority_config.length > 0
+    ? deriveWeightsFromPriorityConfig(config.priority_config)
+    : normalizeWeights(
+        assignmentType === 'customer'
+          ? config.lp_objectives_customer
+          : config.lp_objectives_prospect
+      );
+
+  const weightSource = config.priority_config?.length ? 'priorities' : 'defaults';
+  console.log(`[LPBuilder] Weights: C=${weights.wC.toFixed(2)}, G=${weights.wG.toFixed(2)}, T=${weights.wT.toFixed(2)} (from ${weightSource})`);
   
   // Calculate all scores and build decision variables
   const assignmentVars: DecisionVariable[] = [];
@@ -190,25 +202,35 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
       const contScore = continuityScore(account, rep, config.lp_continuity_params);
       const geoScore = geographyScore(account, rep, territoryMappings, config.lp_geography_params);
       const teamScore = teamAlignmentScore(account, rep, config.lp_team_params);
-      
+
       // Rank-based tie-breaker (higher ARR = higher rank = higher score)
       const rank = accountRanks.get(account.sfdc_account_id) || 0;
       const tieBreaker = 1 - (rank / numAccounts);
-      
+
       const scores: AssignmentScores = {
         continuity: contScore,
         geography: geoScore,
-        teamAlignment: teamScore,
+        teamAlignment: teamScore,  // Can be null (N/A)
         tieBreaker
       };
       repScores.set(rep.rep_id, scores);
-      
-      // Calculate coefficient
-      const coefficient = 
-        weights.wC * contScore +
-        weights.wG * geoScore +
-        weights.wT * teamScore +
-        0.001 * tieBreaker;
+
+      // Calculate coefficient with weight redistribution for N/A team alignment
+      // When teamScore is null, redistribute team weight to continuity & geography
+      let coefficient: number;
+      if (teamScore === null) {
+        // N/A: redistribute wT proportionally to wC and wG
+        const totalCG = weights.wC + weights.wG;
+        const adjustedWC = totalCG > 0 ? (weights.wC + weights.wT * (weights.wC / totalCG)) : weights.wC;
+        const adjustedWG = totalCG > 0 ? (weights.wG + weights.wT * (weights.wG / totalCG)) : weights.wG;
+        coefficient = adjustedWC * contScore + adjustedWG * geoScore + 0.001 * tieBreaker;
+      } else {
+        coefficient =
+          weights.wC * contScore +
+          weights.wG * geoScore +
+          weights.wT * teamScore +
+          0.001 * tieBreaker;
+      }
       
       assignmentVars.push({
         name: varName,
@@ -226,7 +248,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
   // Build THREE-TIER PENALTY slack variables (Big-M system)
   const balanceSlacks: BalanceSlack[] = [];
   const balanceConfig = config.lp_balance_config;
-  
+
   // Get absolute limits from config (with fallbacks)
   const arrMin = config.lp_balance_config.arr_min ?? 0;
   const arrMax = config.lp_balance_config.arr_max ?? hardCapArr;
@@ -237,23 +259,23 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
   const pipelineMin = config.lp_balance_config.pipeline_min ?? 0;
   const pipelineMax = config.lp_balance_config.pipeline_max ?? 1000000;
   const pipelineVariance = config.lp_balance_config.pipeline_variance ?? 0.15;
-  
+
   // Calculate targets using ALL accounts in problem
   const totalARR = allAccountsInProblem.reduce((sum, a) => sum + a.aggregated_arr, 0);
   const totalATR = allAccountsInProblem.reduce((sum, a) => sum + a.aggregated_atr, 0);
   const totalPipeline = allAccountsInProblem.reduce((sum, a) => sum + a.pipeline_value, 0);
   const numReps = reps.length;
-  
+
   // Protect against division by zero
   const arrTarget = numReps > 0 ? totalARR / numReps : 0;
   const atrTarget = numReps > 0 ? totalATR / numReps : 0;
   const pipelineTarget = numReps > 0 ? totalPipeline / numReps : 0;
-  
+
   console.log(`[LPBuilder] Big-M Penalty Config: ARR target=${arrTarget.toFixed(0)}, min=${arrMin}, max=${arrMax}, variance=${arrVariance}`);
-  
+
   // Store all penalty slack bounds for later use in LP generation
   const penaltySlackBounds: { varName: string; lower: number; upper: number | null }[] = [];
-  
+
   for (const rep of reps) {
     // ARR balance with Big-M penalty (always for customers and prospects)
     if (balanceConfig.arr_balance_enabled && arrTarget > 0) {
@@ -261,15 +283,15 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
       const penaltyTerms = buildMetricPenaltyTerms(
         'arr', rep.rep_id, arrTarget, arrVariance, arrMin, arrMax, metricWeight
       );
-      
+
       // Add penalties to objective
       for (const [varName, penalty] of penaltyTerms.penalties) {
         objectiveCoefficients.set(varName, penalty);
       }
-      
+
       // Store bounds
       penaltySlackBounds.push(...penaltyTerms.bounds);
-      
+
       // Still need old-style slack for balance constraints (using alpha as primary)
       balanceSlacks.push({
         repId: rep.rep_id,
@@ -279,18 +301,18 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
         target: arrTarget
       });
     }
-    
+
     // ATR balance with Big-M penalty (customers only)
     if (balanceConfig.atr_balance_enabled && assignmentType === 'customer' && atrTarget > 0) {
       const penaltyTerms = buildMetricPenaltyTerms(
         'atr', rep.rep_id, atrTarget, atrVariance, atrMin, atrMax, CUSTOMER_WEIGHTS.atr
       );
-      
+
       for (const [varName, penalty] of penaltyTerms.penalties) {
         objectiveCoefficients.set(varName, penalty);
       }
       penaltySlackBounds.push(...penaltyTerms.bounds);
-      
+
       balanceSlacks.push({
         repId: rep.rep_id,
         metric: 'atr',
@@ -299,18 +321,18 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
         target: atrTarget
       });
     }
-    
+
     // Pipeline balance with Big-M penalty (prospects only)
     if (balanceConfig.pipeline_balance_enabled && assignmentType === 'prospect' && pipelineTarget > 0) {
       const penaltyTerms = buildMetricPenaltyTerms(
         'pipeline', rep.rep_id, pipelineTarget, pipelineVariance, pipelineMin, pipelineMax, PROSPECT_WEIGHTS.pipeline
       );
-      
+
       for (const [varName, penalty] of penaltyTerms.penalties) {
         objectiveCoefficients.set(varName, penalty);
       }
       penaltySlackBounds.push(...penaltyTerms.bounds);
-      
+
       balanceSlacks.push({
         repId: rep.rep_id,
         metric: 'pipeline',
@@ -373,6 +395,8 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
   // Feasibility slack variables
   const feasibilitySlacks: { repId: string; name: string }[] = [];
   const feasibilityPenalty = config.lp_solver_params.feasibility_penalty;
+  
+  console.log(`[LPBuilder] Feasibility penalty from config: ${feasibilityPenalty}`);
   
   for (const rep of reps) {
     const slackVar = `feas_${rep.rep_id}`;
@@ -437,18 +461,20 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
   }
   
   // 4. Balance decomposition constraints using Big-M penalty system
-  // Decomposition formula: actual = target + alpha_over - alpha_under + beta_over - beta_under + bigM_over - bigM_under
-  // Rearranged: actual - alpha_over + alpha_under - beta_over + beta_under - bigM_over + bigM_under = target
+  // NUMERICAL STABILITY: All values normalized by target to keep coefficients in 0-2 range
+  // Decomposition formula: actual/target = 1 + alpha_over - alpha_under + beta_over - beta_under + bigM_over - bigM_under
+  // Rearranged: (actual/target) - alpha_over + alpha_under - beta_over + beta_under - bigM_over + bigM_under = 1
   
   // ARR balance (all account types)
   if (balanceConfig.arr_balance_enabled && arrTarget > 0) {
+    const arrNormFactor = arrTarget; // Normalize by target
     for (const rep of reps) {
       const loadVars = allAccountsInProblem.map(account => ({
         name: `x_${account.sfdc_account_id}_${rep.rep_id}`,
-        coefficient: account.aggregated_arr
+        coefficient: account.aggregated_arr / arrNormFactor  // Normalized: each account contributes its fraction of target
       }));
       
-      // Decomposition constraint with all six slacks
+      // Decomposition constraint with all six slacks (all in normalized 0-1 scale)
       constraints.push({
         name: `arr_decomp_${rep.rep_id}`,
         type: 'eq',
@@ -461,17 +487,18 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
           { name: `arr_bigM_over_${rep.rep_id}`, coefficient: -1 },
           { name: `arr_bigM_under_${rep.rep_id}`, coefficient: 1 }
         ],
-        rhs: arrTarget
+        rhs: 1  // Normalized: target / target = 1
       });
     }
   }
   
-  // 5. ATR balance constraints (customers only) with Big-M
+  // 5. ATR balance constraints (customers only) with Big-M - NORMALIZED
   if (balanceConfig.atr_balance_enabled && assignmentType === 'customer' && atrTarget > 0) {
+    const atrNormFactor = atrTarget;
     for (const rep of reps) {
       const loadVars = allAccountsInProblem.map(account => ({
         name: `x_${account.sfdc_account_id}_${rep.rep_id}`,
-        coefficient: account.aggregated_atr
+        coefficient: account.aggregated_atr / atrNormFactor
       }));
       
       constraints.push({
@@ -486,17 +513,18 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
           { name: `atr_bigM_over_${rep.rep_id}`, coefficient: -1 },
           { name: `atr_bigM_under_${rep.rep_id}`, coefficient: 1 }
         ],
-        rhs: atrTarget
+        rhs: 1  // Normalized
       });
     }
   }
   
-  // 6. Pipeline balance constraints (prospects only) with Big-M
+  // 6. Pipeline balance constraints (prospects only) with Big-M - NORMALIZED
   if (balanceConfig.pipeline_balance_enabled && assignmentType === 'prospect' && pipelineTarget > 0) {
+    const pipelineNormFactor = pipelineTarget;
     for (const rep of reps) {
       const loadVars = allAccountsInProblem.map(account => ({
         name: `x_${account.sfdc_account_id}_${rep.rep_id}`,
-        coefficient: account.pipeline_value
+        coefficient: account.pipeline_value / pipelineNormFactor
       }));
       
       constraints.push({
@@ -511,24 +539,25 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
           { name: `pipeline_bigM_over_${rep.rep_id}`, coefficient: -1 },
           { name: `pipeline_bigM_under_${rep.rep_id}`, coefficient: 1 }
         ],
-        rhs: pipelineTarget
+        rhs: 1  // Normalized
       });
     }
   }
   
-  // 7. Tier balance constraints with Big-M (each tier individually)
+  // 7. Tier balance constraints with Big-M (each tier individually) - NORMALIZED
   for (const tierNum of [1, 2, 3, 4] as const) {
     const tierKey = `tier${tierNum}` as keyof typeof tierTargets;
     const tierTarget = tierTargets[tierKey];
     
     if (tierTarget > 0) {
+      const tierNormFactor = tierTarget;  // Normalize by tier target
       for (const rep of reps) {
         // Build tier count expression: sum of x vars for accounts of this tier
         const tierVars = allAccountsInProblem
           .filter(account => account.tier === `Tier ${tierNum}`)
           .map(account => ({
             name: `x_${account.sfdc_account_id}_${rep.rep_id}`,
-            coefficient: 1  // Each account counts as 1
+            coefficient: 1 / tierNormFactor  // Each account contributes fraction of target
           }));
         
         if (tierVars.length > 0) {
@@ -544,7 +573,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
               { name: `tier${tierNum}_bigM_over_${rep.rep_id}`, coefficient: -1 },
               { name: `tier${tierNum}_bigM_under_${rep.rep_id}`, coefficient: 1 }
             ],
-            rhs: tierTarget
+            rhs: 1  // Normalized: target / target = 1
           });
         }
       }
@@ -555,11 +584,12 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     assignmentVars,
     balanceSlacks,
     feasibilitySlacks,
+    slackBounds: penaltySlackBounds,  // Include all Big-M penalty slack bounds
     constraints,
     objectiveCoefficients,
     numAccounts: allAccountsInProblem.length,
     numReps: reps.length,
-    numVariables: assignmentVars.length + balanceSlacks.length * 2 + feasibilitySlacks.length,
+    numVariables: assignmentVars.length + penaltySlackBounds.length + feasibilitySlacks.length,
     numConstraints: constraints.length
   };
   

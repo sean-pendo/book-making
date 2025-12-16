@@ -13,7 +13,8 @@
  */
 
 import { supabase } from '@/integrations/supabase/client';
-import { Account, SalesRep } from './priorityExecutor';
+import { getAccountARR } from '@/_domain';
+import { Account, SalesRep } from './optimization/types';
 
 // ============================================================================
 // Types
@@ -208,8 +209,8 @@ function determineParentOwner(
   
   // Sort by ARR descending, then deterministic tiebreaker using account ID
   const sorted = [...candidates].sort((a, b) => {
-    const arrA = a.calculated_arr || a.arr || 0;
-    const arrB = b.calculated_arr || b.arr || 0;
+    const arrA = getAccountARR(a);
+    const arrB = getAccountARR(b);
     
     if (arrB !== arrA) {
       return arrB - arrA; // Higher ARR wins

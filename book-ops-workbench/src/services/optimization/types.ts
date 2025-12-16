@@ -1,9 +1,11 @@
 /**
  * Pure Optimization LP Engine - Type Definitions
- * 
+ *
  * Complete type definitions for the weighted LP assignment model.
  * This replaces the cascading priority waterfall with a single global solve.
  */
+
+import type { PriorityConfig } from '@/config/priorityRegistry';
 
 // =============================================================================
 // Configuration Types (from database JSONB columns)
@@ -112,6 +114,7 @@ export interface LPSolverParams {
   tie_break_method: 'rank_based' | 'random';
   feasibility_penalty: number;  // Large penalty for capacity overflow (1000)
   log_level: 'silent' | 'info' | 'debug';
+  use_simplified_model?: boolean;  // Skip Big-M penalty system for numerical stability (default: false)
 }
 
 /**
@@ -128,6 +131,7 @@ export interface LPConfiguration {
   lp_geography_params: LPGeographyParams;
   lp_team_params: LPTeamParams;
   lp_solver_params: LPSolverParams;
+  priority_config?: PriorityConfig[];  // User's configured priority order for rationale labels
 }
 
 // =============================================================================
@@ -229,12 +233,14 @@ export interface NormalizedWeights {
 }
 
 /**
- * Per-assignment scores (all 0-1)
+ * Per-assignment scores (all 0-1, or null for N/A)
+ *
+ * @see MASTER_LOGIC.mdc §5.1.1 - teamAlignment can be null when tier data is missing
  */
 export interface AssignmentScores {
   continuity: number;
   geography: number;
-  teamAlignment: number;
+  teamAlignment: number | null;  // null = N/A (missing tier data)
   tieBreaker: number;  // Small bonus based on ARR rank
 }
 
@@ -284,22 +290,34 @@ export interface BalanceSlack {
 }
 
 /**
+ * Slack variable bound definition
+ */
+export interface SlackBound {
+  varName: string;
+  lower: number;
+  upper: number | null;  // null = unbounded
+}
+
+/**
  * Complete LP problem for HiGHS
  */
 export interface LPProblem {
   // Decision variables (binary)
   assignmentVars: DecisionVariable[];
-  
+
   // Slack variables (continuous)
   balanceSlacks: BalanceSlack[];
   feasibilitySlacks: { repId: string; name: string }[];
-  
+
+  // All slack variable bounds (including Big-M penalty slacks)
+  slackBounds: SlackBound[];
+
   // Constraints
   constraints: LPConstraint[];
-  
+
   // Objective (maximize)
   objectiveCoefficients: Map<string, number>;
-  
+
   // Metadata
   numAccounts: number;
   numReps: number;
@@ -545,11 +563,22 @@ export const DEFAULT_LP_CONTINUITY_PARAMS: LPContinuityParams = {
   base_continuity: 0.10
 };
 
+/**
+ * LP Geography Params - Intentionally tighter than analytics GEO_MATCH_SCORES
+ * 
+ * The LP solver uses more aggressive scoring to drive stronger geographic
+ * alignment during optimization. For reference:
+ * - _domain/constants GEO_MATCH_SCORES: sibling=0.85, parent=0.65, global=0.40
+ * - LP solver (below): sibling=0.65, parent=0.40, global=0.20
+ * 
+ * This is intentional per MASTER_LOGIC.mdc - LP needs tighter constraints
+ * while analytics shows the softer "display" scores to users.
+ */
 export const DEFAULT_LP_GEOGRAPHY_PARAMS: LPGeographyParams = {
   exact_match_score: 1.0,
-  sibling_score: 0.65,
-  parent_score: 0.40,
-  global_score: 0.20,
+  sibling_score: 0.65,    // vs GEO_MATCH_SCORES.SAME_SUB_REGION (0.85)
+  parent_score: 0.40,     // vs GEO_MATCH_SCORES.SAME_PARENT (0.65)
+  global_score: 0.20,     // vs GEO_MATCH_SCORES.GLOBAL_FALLBACK (0.40)
   unknown_territory_score: 0.50
 };
 
@@ -565,7 +594,7 @@ export const DEFAULT_LP_TEAM_PARAMS: LPTeamParams = {
 export const DEFAULT_LP_SOLVER_PARAMS: LPSolverParams = {
   timeout_seconds: 60,
   tie_break_method: 'rank_based',
-  feasibility_penalty: 1000,
+  feasibility_penalty: 10,  // Reduced from 1000 for numerical stability (still >> assignment scores of 0.1-1.0)
   log_level: 'info'
 };
 
@@ -595,4 +624,57 @@ export { REGION_HIERARCHY, REGION_SIBLINGS } from '@/_domain';
 
 export const TIER_ORDER = ['SMB', 'Growth', 'MM', 'ENT'] as const;
 export type TeamTier = typeof TIER_ORDER[number];
+
+// =============================================================================
+// Legacy Types (moved from priorityExecutor.ts)
+// Used by: parentalAlignmentService.ts, commercialPriorityHandlers.ts
+// =============================================================================
+
+/**
+ * Account data for assignment processing
+ */
+export interface Account {
+  sfdc_account_id: string;
+  account_name: string;
+  calculated_arr: number | null;
+  calculated_atr: number | null;
+  hierarchy_bookings_arr_converted: number | null;
+  cre_count: number | null;
+  cre_risk: boolean | null;
+  sales_territory: string | null;
+  geo: string | null;
+  owner_id: string | null;
+  owner_name: string | null;
+  exclude_from_reassignment: boolean | null;
+  pe_firm: string | null;
+  is_customer: boolean | null;
+  is_parent: boolean | null;
+  is_strategic: boolean | null;
+  hq_country: string | null;
+  renewal_quarter: string | null;
+  expansion_tier: string | null;
+  initial_sale_tier: string | null;
+  employees?: number | null;
+  pipeline_value?: number | null;
+  renewal_date?: string | null;
+  owner_change_date?: string | null;
+}
+
+/**
+ * Sales rep data for assignment processing
+ */
+export interface SalesRep {
+  rep_id: string;
+  name: string;
+  region: string | null;
+  sub_region: string | null;
+  is_renewal_specialist: boolean | null;
+  is_strategic_rep: boolean;
+  is_active: boolean | null;
+  include_in_assignments: boolean | null;
+  flm: string | null;
+  slm: string | null;
+  team?: string | null;
+  team_tier?: 'SMB' | 'Growth' | 'MM' | 'ENT' | null;
+}
 

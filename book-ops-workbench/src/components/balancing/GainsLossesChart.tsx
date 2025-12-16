@@ -134,9 +134,6 @@ export const GainsLossesChart: React.FC<GainsLossesChartProps> = ({
     return `${sign}$${value.toFixed(0)}`;
   };
 
-  // Get chart color based on direction
-  const barColor = direction === 'gains' ? '#22c55e' : '#ef4444';
-
   // Custom tooltip
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
@@ -335,14 +332,16 @@ export const GainsLossesChart: React.FC<GainsLossesChartProps> = ({
                 <RechartsTooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
                 <Bar
                   dataKey={direction === 'gains' ? 'change' : 'absChange'}
-                  fill={barColor}
+                  fill={direction === 'gains' ? '#22c55e' : '#ef4444'}
+                  stroke={direction === 'gains' ? '#16a34a' : '#dc2626'}
+                  strokeWidth={1}
                   radius={[0, 6, 6, 0]}
                   barSize={24}
                   label={{
                     position: 'right',
                     fontSize: 11,
                     fontWeight: 600,
-                    fill: barColor,
+                    fill: direction === 'gains' ? '#22c55e' : '#ef4444',
                     formatter: (value: number) => formatValue(direction === 'gains' ? value : -value),
                   }}
                 />

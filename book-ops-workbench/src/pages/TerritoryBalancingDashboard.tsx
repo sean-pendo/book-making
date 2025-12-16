@@ -331,7 +331,7 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
           {buildId && (
             <BalancingSuccessMetrics
               buildId={buildId}
-              continuityScore={data.retentionMetrics.ownerRetentionRate / 100}
+              continuityScore={analyticsMetrics?.lpMetrics?.continuityScore ?? 0}
               geoAlignment={analyticsMetrics?.geoAlignment || null}
               isLoading={analyticsLoading}
             />

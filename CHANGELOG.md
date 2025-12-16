@@ -2,6 +2,817 @@
 
 ---
 
+## [2025-12-16 06:55] - 🎉 MILESTONE: Cloud Run Solver Production Verified
+
+**First successful full-scale production run using Cloud Run native HiGHS solver!**
+
+**Results:**
+- **8,051 total accounts** (432 customers + 7,619 prospects)
+- **386,448 total LP variables** solved across both runs
+- **~8 minutes total solve time** (2.4 min customers, ~6 min prospects)
+- **Status: Optimal** on both solves
+
+**What was validated:**
+1. ✅ Cloud Run service handles 365K+ variable problems
+2. ✅ Variable name mapping (compact `x0_0` → `accountId/repId`) works correctly
+3. ✅ Solution parsing and assignment extraction successful
+4. ✅ Rationale generation using pre-computed scores works
+5. ✅ Preview dialog shows all assignments correctly
+6. ✅ No browser memory crashes (WASM would have failed on this scale)
+
+**Performance:**
+| Solve | Accounts | Variables | Constraints | Time |
+|-------|----------|-----------|-------------|------|
+| Customers | 432 | 22,224 | 733 | ~143s |
+| Prospects | 7,619 | 367,200 | 7,907 | ~340s |
+
+This proves the Cloud Run integration is production-ready for large-scale territory balancing.
+
+---
+
+## [2025-12-16] - Feature: Cloud Run Native HiGHS Solver Integration
+
+**Problem:** Browser WASM HiGHS can't handle large optimization problems (>3000 accounts) due to memory limits and dense constraint matrices.
+
+**Solution:** Integrated Cloud Run native HiGHS solver service as a fallback for large problems.
+
+**Changes:**
+
+1. **Cloud Run solver service deployed** (`cloud-run-solver/`):
+   - Native HiGHS binary running on Google Cloud Run
+   - Can handle millions of variables (no practical limit)
+   - Service URL: `https://highs-solver-710441294184.us-central1.run.app`
+   - Fixed CLI argument format (space separator, not `=`)
+
+2. **Integrated into highsWrapper.ts**:
+   - Added `solveWithCloudRun()` function
+   - Automatic fallback: problems > 3000 accounts → Cloud Run
+   - Also used as last-resort fallback on WASM memory errors
+   - Removed old edge function code (replaced by Cloud Run)
+
+3. **Updated pureOptimizationEngine.ts**:
+   - No longer rejects large problems with error
+   - Instead, logs that Cloud Run will be used
+   - Adds warning to result for visibility
+
+**Files:**
+- `cloud-run-solver/server-native.js` - Fixed CLI args format
+- `cloud-run-solver/Dockerfile` - Native HiGHS build
+- `src/services/optimization/solver/highsWrapper.ts` - Cloud Run integration
+- `src/services/optimization/pureOptimizationEngine.ts` - Removed hard rejection
+
+**Impact:** Large builds (8000+ accounts) can now run global optimization using Cloud Run native solver. No more "use waterfall mode" errors.
+
+---
+
+## [2025-12-15] - Feature: HiGHS Scale Guard & Diagnostics
+
+**Problem:** Global optimization LP hangs for 3+ minutes on large builds (8000+ accounts) despite `mip_rel_gap` fix.
+
+**Root Cause:** Dense constraint matrix - each balance constraint references ALL accounts, creating O(accounts × reps × metrics) non-zeros. At 8000 accounts, this is ~2.3M non-zeros.
+
+**Solution:**
+
+1. **Added diagnostic logging** (`highsWrapper.ts`):
+   - Coefficient range analysis (min/max/range)
+   - Matrix density calculation (non-zeros, avg terms per constraint)
+   - Helps identify if normalization is working
+
+2. **Added scale limits** (`_domain/constants.ts`):
+   - `LP_SCALE_LIMITS.MAX_ACCOUNTS_FOR_GLOBAL_LP = 3000`
+   - `LP_SCALE_LIMITS.WARN_ACCOUNTS_THRESHOLD = 2000`
+
+3. **Implemented scale guard** (`pureOptimizationEngine.ts`):
+   - Rejects global LP for >3000 accounts with clear error message
+   - Warns for >2000 accounts about potential slow solve
+   - Suggests waterfall mode for large builds
+
+4. **Added scale threshold test** (`solver-tests/test-scale-threshold.html`):
+   - Tests 500-5000 accounts with 30s timeout
+   - Finds exact threshold where HiGHS starts hanging
+
+**Files:**
+- `src/services/optimization/solver/highsWrapper.ts` - Diagnostic logging
+- `src/_domain/constants.ts` - `LP_SCALE_LIMITS` constant
+- `src/_domain/MASTER_LOGIC.mdc` - Added §11.10 Scale Limits
+- `src/services/optimization/pureOptimizationEngine.ts` - Scale guard
+- `solver-tests/test-scale-threshold.html` - Scale threshold test
+
+**Impact:** Large builds now fail fast with clear message instead of hanging indefinitely. Users directed to use waterfall mode.
+
+---
+
+## [2025-12-15] - SSOT: Big-M Penalty System & Waterfall LP Upgrade
+
+**Changes:**
+
+1. **Added `LP_PENALTY` to SSOT** (`_domain/constants.ts`):
+   - `ALPHA: 0.001` - Small penalty for variance band deviation
+   - `BETA: 0.01` - Medium penalty for buffer zone deviation
+   - `BIG_M: 0.1` - Large penalty for absolute limit violation
+   - Documented rationale for normalized values (HiGHS WASM stability)
+
+2. **Updated `MASTER_LOGIC.mdc` §11.3**:
+   - Changed penalty values from conceptual (0.01, 1.0, 1000.0) to normalized (0.001, 0.01, 0.1)
+   - Added numerical stability note explaining the change
+   - Updated bounds documentation to show normalized format
+
+3. **Upgraded Waterfall LP with Big-M penalty structure** (`simplifiedAssignmentEngine.ts`):
+   - Added 6 slack variables per rep (alpha/beta/bigM × over/under)
+   - Changed from hard capacity constraint (`<= preferredMax`) to soft balance constraint with penalties
+   - Now allows reps to exceed `preferredMaxARR` but penalizes it
+   - Strongly penalizes exceeding `absoluteMaxARR` via Big-M
+   - Uses `mip_rel_gap: 0.05` (5% gap for faster waterfall batches)
+
+4. **Refactored `lpProblemBuilder.ts`**:
+   - Now imports `LP_PENALTY` from SSOT instead of local constant
+   - Removed duplicate penalty definition
+
+**Files:**
+- `src/_domain/constants.ts` - Added `LP_PENALTY` constant
+- `src/_domain/MASTER_LOGIC.mdc` - Updated §11.3 with normalized values
+- `src/services/simplifiedAssignmentEngine.ts` - Big-M penalty structure for waterfall
+- `src/services/optimization/constraints/lpProblemBuilder.ts` - Import from SSOT
+
+**Impact:** Waterfall now enforces balance constraints with same penalty system as global optimization, preventing reps from exceeding absolute max ARR.
+
+---
+
+## [2025-12-15] - CRITICAL FIX: mip_rel_gap Required for Complex LPs
+
+**Problem:** HiGHS WASM crashed with `RuntimeError: Aborted()` on complex LPs with Big-M penalty slacks (1728 slack variables).
+
+**Root Cause:** Complex LPs with many slack variables crash HiGHS WASM unless `mip_rel_gap` option is set. This changes the MIP solving strategy to avoid a problematic code path.
+
+**Evidence (deterministic pattern):**
+| Options | Complex LP (1728 slacks) |
+|---------|--------------------------|
+| NO options | ❌ CRASHED |
+| `presolve: 'on'` only | ❌ CRASHED |
+| `time_limit: 60` only | ❌ CRASHED |
+| `mip_rel_gap: 0.01` only | ✅ Optimal 499ms |
+| ALL options | ✅ Optimal 465ms |
+
+**Solution:** Use `mip_rel_gap` option for complex LPs:
+```javascript
+// WORKS for complex LPs!
+highs.solve(lpString, { mip_rel_gap: 0.01 });
+```
+
+**Files:**
+- `src/services/optimization/solver/highsWrapper.ts` - Added mip_rel_gap option
+- `solver-tests/test-presolve-only.html` - Test proving mip_rel_gap is the key
+- `solver-tests/test-full-production-slacks.html` - Full production structure test
+- `solver-tests/HIGHS_SOLVER_NOTES.md` - Documented findings
+
+**Impact:** HiGHS now reliably solves full global optimization (20K binary + 1728 slack vars) in ~465ms.
+
+---
+
+## [2025-12-15] - Fix: HiGHS Numerical Stability for Global Optimization
+
+**Problem:** HiGHS WASM crashed on global optimization LPs but worked fine for waterfall sub-optimization at each priority level.
+
+**Root Cause:** The global optimization LP used Big-M penalty slack variables with extremely small coefficients:
+- Penalty coefficients were divided by `targetARR` (~500,000)
+- This created coefficients like `8e-9` (alpha penalty) 
+- Mixed with assignment scores of `0.5-1.0`, the coefficient ratio was ~10^9
+- This magnitude mismatch caused numerical instability in HiGHS WASM
+
+**Why waterfall worked:** Waterfall LPs are simpler (no Big-M slacks) with all coefficients in 1-100 range.
+
+**Solution:** Normalize all balance constraints and penalties to 0-1 scale:
+1. **Penalty coefficients**: Changed from `0.01/500k` to `0.001` (no division)
+2. **Balance constraints**: Normalize by target (`arr/target` instead of raw `arr`)
+3. **Slack bounds**: Normalize by target (`variance` instead of `variance * target`)
+4. **RHS values**: Use `1` instead of `targetARR`
+
+**Result:** All coefficients now in 0.001-2.0 range, well within solver tolerance.
+
+**Test Results:**
+| Problem Size | OLD Style | NORMALIZED |
+|--------------|-----------|------------|
+| 50×10 (500 vars) | ❌ CRASHED | ✅ Optimal |
+
+**Files:**
+- `src/services/optimization/constraints/lpProblemBuilder.ts` - Normalized penalties and constraints
+- `solver-tests/HIGHS_SOLVER_NOTES.md` - Documented findings
+- `solver-tests/test-normalized-lp.js` - Added test case
+
+---
+
+## [2025-12-15] - Fix: Data Overview shows original imported data (not proposed assignments)
+
+**Problem:** The Data Overview page was incorrectly showing post-assignment data:
+1. "Sales Tools" bucket appeared in ARR Distribution chart (should only appear after assignment)
+2. Coverage KPI showed 100% (post-assignment) instead of original import coverage (~22%)
+
+Sales Tools is a balancing concept that routes low-ARR accounts (<$25K) during assignment - it shouldn't appear on the "before" snapshot of imported data.
+
+**Root Cause:**
+- `buildDataService.calculateRepDistribution()` was adding Sales Tools regardless of `useProposed` parameter
+- Both BuildDetail.tsx and DataOverviewAnalytics.tsx were using `useProposed=true` (default)
+
+**Solution:**
+1. Wrapped Sales Tools pseudo-rep addition in `if (useProposed)` check - only shows in proposed views
+2. Changed DataOverviewAnalytics to pass `useProposed=false` for charts
+3. Changed BuildDetail.tsx to pass `useProposed=false` for KPI cards (Coverage, Team Fit)
+
+**Result:**
+- **Data Overview**: Shows original imported data (real reps only, actual import coverage %)
+- **Balancing Dashboard**: Shows Sales Tools and 100% coverage after assignment (correct)
+
+**Files:**
+- `src/services/buildDataService.ts` - Conditional Sales Tools inclusion
+- `src/components/DataOverviewAnalytics.tsx` - Pass useProposed=false
+- `src/pages/BuildDetail.tsx` - Pass useProposed=false for analytics metrics
+
+---
+
+## [2025-12-15] - Refactor: SSOT Parent Customer Classification
+
+**Problem:** Logic for determining if a parent account is a "customer" was scattered across multiple files with inconsistent approaches.
+
+**Solution:** Added SSOT function `isParentCustomer()` to `_domain/calculations.ts`.
+
+**Rule:** A parent account is a customer if:
+1. Has direct ARR (`hierarchy_bookings_arr_converted > 0`), OR
+2. Has customer children (`has_customer_hierarchy = true`)
+
+**Why children matter:** A parent may have $0 direct ARR but children who are paying customers. For grouping, rollups, and assignment purposes, this parent represents a customer relationship.
+
+**Changes:**
+1. **Updated MASTER_LOGIC.mdc** - Added §3.1.1 documenting parent customer classification rule
+2. **Added `isParentCustomer()` to calculations.ts** - New SSOT function for parent customer determination
+3. **Updated `AccountData` interface** - Added `has_customer_hierarchy` field
+4. **Updated `syncIsCustomerField()` in batchImportService.ts** - Now uses both ARR and `has_customer_hierarchy` to classify customers
+
+**Files:**
+- `src/_domain/MASTER_LOGIC.mdc`
+- `src/_domain/calculations.ts`
+- `src/services/batchImportService.ts`
+
+---
+
+## [2025-12-15] - Feature: Config-Driven Priority Labels
+
+**Problem:** The priority distribution chart showed incorrect P# labels (P1, P2, P3, P4) that didn't match the user's configured priority order (P0, P1, P2, P3, P4, RO).
+
+**Root Causes:**
+1. `formatPriorityLabel()` in the waterfall engine used hardcoded position numbers
+2. `stability_accounts` handler was a stub that did nothing
+
+**Changes:**
+1. **Exported `getPositionLabel` from LP solver** for shared config-driven position labeling
+   - Files: `rationaleGenerator.ts`, `optimization/index.ts`
+
+2. **Replaced `formatPriorityLabel` with config-driven version**
+   - Now uses `this.priorityConfig` loaded from database
+   - Position labels dynamically match user configuration
+   - File: `simplifiedAssignmentEngine.ts`
+
+3. **Updated all 13 call sites** to use new method without hardcoded numbers
+   - Removed second parameter from all `formatPriorityLabel()` calls
+
+4. **Implemented `handleStabilityAccounts` handler**
+   - Locks accounts with CRE risk, renewal soon, PE firm ownership, or recent owner change
+   - Uses enabled sub-conditions from priority configuration
+   - Accounts meeting conditions stay with current owner
+   - File: `simplifiedAssignmentEngine.ts`
+
+**Expected Outcome:**
+- Priority chart shows P0, P1, P2, P3, P4, RO matching user configuration
+- Stability Accounts (when enabled) appear in chart with correct P# label
+- Changing priority order in configuration immediately reflects in assignment rationales
+
+---
+
+## [2025-12-15] - Fix: ARR Distribution Chart Bar Color & Legend
+
+**Changes:**
+1. Changed default bar color from slate gray to blue (`#3b82f6`) for better visibility
+2. Added average line indicator to the legend when `showStats` is enabled
+3. Shows minimal legend (just average) even when no thresholds are configured
+4. Account Distribution: Changed to distinct colors - Customers green (`#22c55e`), Prospects blue (`#3b82f6`) instead of same blue with opacity
+
+**File:** `RepDistributionChart.tsx`
+
+---
+
+## [2025-12-15] - Fix: Priority Chart & Geo Alignment UI Improvements
+
+**Issues Fixed:**
+
+1. **Priority Names Don't Make Sense**
+   - The priority distribution chart was incorrectly mapping priority names using keyword matching against a registry
+   - Now parses the priority name directly from the rationale string (e.g., "P1: Continuity + Geography" → name is "Continuity + Geography")
+   - File: `useBuildData.ts` - Rewrote `parsePriorityFromRationale()` function
+
+2. **Geo Alignment Breakdown by Rep Regions**
+   - Added `byRegion` breakdown to `GeoAlignmentMetrics` type
+   - Geo pie chart now shows slices by rep region (AMER, EMEA, APAC, etc.) instead of just Aligned/Misaligned
+   - Hover tooltip shows alignment breakdown (green/red/gray) for each region
+   - Files: `types/analytics.ts`, `buildDataService.ts`, `BalancingSuccessMetrics.tsx`
+
+3. **Unassigned/Misaligned Colors**
+   - Unassigned: Gray (#6b7280)
+   - Misaligned: Red (#ef4444)  
+   - Aligned: Green (#22c55e)
+
+4. **Continuity Tooltip with Counts**
+   - Added retained/changed/total account counts to continuity info tooltip
+   - File: `BalancingSuccessMetrics.tsx`
+
+5. **UI Adjustments**
+   - Centered geo pie chart with more space for tooltip
+   - Smaller font (10px) for priorities legend to fit content
+   - Added overflow-visible to allow tooltips to escape card bounds
+   - Files: `BalancingSuccessMetrics.tsx`, `PriorityDistributionPie.tsx`
+
+---
+
+## [2025-12-15] - Fix: Analytics Dashboard Improvements
+
+**Issues Fixed:**
+
+1. **Geo Alignment Discrepancy (22% vs 99%)**
+   - Overview was showing original `owner_id` alignment while Before/After showed proposed `new_owner_id`
+   - Changed `useAnalyticsMetrics` to default to `useProposed=true` so Overview shows the proposed state
+   - Added `useProposed` parameter to both `useAnalyticsMetrics` hook and `getAnalyticsMetrics` service
+   - Files: `useBuildData.ts:100-110`, `buildDataService.ts:1573-1586`
+
+2. **Priority Chart Limited to 1000 Records**
+   - Supabase defaults to 1000 rows without explicit limit
+   - Added pagination using `range()` to fetch all approved assignments
+   - Uses `SUPABASE_LIMITS.DEFAULT_PAGE_SIZE` from `@/_domain/constants`
+   - File: `useBuildData.ts:263-302`
+
+3. **Average/Target Labels Overlap in ARR Distribution Charts**
+   - Removed inline text labels from reference lines
+   - The lines themselves are sufficient for visual distinction
+   - File: `RepDistributionChart.tsx`
+
+4. **Removed Account Distribution by Region Concept**
+   - Removed region-based bar coloring (now uses uniform slate/blue colors)
+   - Removed region legend from RepDistributionChart
+   - Deleted unused `RegionPieChart.tsx` component
+   - Updated barrel export in `analytics/index.ts`
+   - Threshold-based coloring (red/green/blue) still works when thresholds are set
+   - Files: `RepDistributionChart.tsx`, `analytics/index.ts`
+
+---
+
+## [2025-12-15] - Feature: LP Solver Edge Function for Reliable Optimization
+
+**Problem:**
+HiGHS WASM in the browser has non-deterministic state corruption issues. After multiple solves in the same tab, the WASM module can enter a corrupted state causing random crashes with errors like `RuntimeError: Aborted()`, `memory access out of bounds`, etc.
+
+**Solution:**
+Created a Supabase Edge Function (`lp-solver`) that runs HiGHS in an isolated Deno environment. Each request gets a fresh WASM context, avoiding state corruption.
+
+**Implementation:**
+- New file: `supabase/functions/lp-solver/index.ts`
+- Uses `npm:highs@1.8.0` via Deno's npm compatibility
+- Updated `config.toml` to include `[functions.lp-solver]`
+- Modified `highsWrapper.ts` to use edge function as Layer 0 in multi-layer defense
+
+**Multi-Layer Defense:**
+1. **Layer 0: Edge Function** (most reliable, ~150-200ms latency)
+2. **Layer 1: Pre-check** (skip browser HiGHS if problem too large)
+3. **Layer 2: Browser HiGHS** (fast but unreliable)
+4. **Layer 3: GLPK** (final fallback)
+
+**Testing:**
+```bash
+curl -X POST "https://lolnbotrdamhukdrrsmh.supabase.co/functions/v1/lp-solver" \
+  -H "Content-Type: application/json" \
+  -d '{"lpString": "Maximize\n obj: x + y\nSubject To\n c1: x + y <= 10\nBounds\n x >= 0\n y >= 0\nEnd"}'
+```
+
+**Files Modified:**
+- `supabase/functions/lp-solver/index.ts` - NEW edge function
+- `supabase/config.toml` - Added lp-solver function config
+- `src/services/optimization/solver/highsWrapper.ts` - Added edge function integration
+- `solver-tests/HIGHS_SOLVER_NOTES.md` - Updated documentation
+
+---
+
+## [2025-12-15] - Fix: Analytics Dashboard Display Issues
+
+**Issues Fixed:**
+
+1. **Sales Tools Not Visible in Charts**
+   - Removed `useProposed` guard from `isSalesToolsAccount()` helper
+   - Sales Tools pseudo-rep now appears in all analytics views regardless of proposed/original state
+   - File: `buildDataService.ts:1351-1358, 1427-1444`
+
+2. **Geo Alignment Shows 100% With Unassigned Accounts**
+   - Changed alignment rate calculation to include unassigned in denominator
+   - Was: `aligned / (aligned + misaligned)` → Now: `aligned / (aligned + misaligned + unassigned)`
+   - 100% alignment now requires ALL accounts to be assigned AND aligned
+   - File: `buildDataService.ts:1078-1079`
+
+3. **Priority Chart Legend Shows Codes Not Names**
+   - Legend now shows priority name (e.g., "Team Alignment") instead of code (e.g., "P3")
+   - Hover tooltip shows full name with code: "Team Alignment (P3)"
+   - File: `PriorityDistributionPie.tsx:149-154`
+
+4. **Priority Tooltip Blocked**
+   - Added `overflow-visible` to Card, CardContent, and chart container
+   - Increased z-index from 1000 to 9999
+   - File: `PriorityDistributionPie.tsx:103-104, 117, 137`
+
+5. **Rep Distribution Chart - Region Colors**
+   - Added `REGION_COLORS` map with distinct colors per region (AMER=blue, EMEA=green, APAC=violet)
+   - Bars now colored by rep region when no thresholds set
+   - Added region legend showing color + count per region
+   - Sales Tools remains orange for distinction
+   - File: `RepDistributionChart.tsx:95-139, 280, 562-579, 615-660`
+
+**Terminology Clarified:**
+- **Priority Number** (P3, RO): Position in waterfall - for sorting
+- **Priority Name** ("Team Alignment"): Human-readable label - for display
+- **Reason** ("exact geo match, score 0.87"): Per-account detail - NEVER aggregate
+
+**Files Modified:**
+- `src/services/buildDataService.ts` - Sales Tools visibility, Geo alignment fix
+- `src/components/balancing/PriorityDistributionPie.tsx` - Legend labels, tooltip fix
+- `src/components/analytics/RepDistributionChart.tsx` - Region color coding
+
+---
+
+## [2025-12-15] - Investigation: HiGHS WASM Root Cause Analysis
+
+**Problem:** HiGHS LP solver crashes have been persistent despite multiple format fixes. Needed to understand the actual root cause.
+
+**Investigation Summary:**
+Extensive testing in `solver-tests/` folder with 15+ test files revealed:
+
+1. **LINE LENGTH IS NOT THE ISSUE** - Testing showed 1275-character lines work fine
+2. **COEFFICIENT FORMAT IS NOT THE ISSUE** - Scientific notation (1e-10) and fixed notation work
+3. **THE REAL ISSUE: Non-deterministic WASM failures** - HiGHS WASM can get into a corrupted state that causes seemingly random crashes
+
+**Key Findings:**
+- Same LP solving 10 times in a fresh Node.js process: WORKS
+- Same LP after test file corruption: FAILS with various errors
+- Errors include: `RuntimeError: Aborted()`, `null function or function signature mismatch`, `memory access out of bounds`
+- Creating a new `highsLoader()` instance doesn't fully reset state
+
+**Conclusion:**
+HiGHS WASM is fast but inherently unreliable. The crashes are NOT caused by LP format issues - they're WASM runtime issues. The waterfall fallback implemented earlier is the correct architectural solution.
+
+**Changes Made:**
+- Added solver options to HiGHS calls (timeout, presolve, mip_gap)
+- Added comprehensive documentation in `solver-tests/HIGHS_SOLVER_NOTES.md`
+- Created 15+ test files documenting the investigation
+
+**Files Modified:**
+- `src/services/optimization/solver/highsWrapper.ts` - Added solver options with documentation
+- `solver-tests/HIGHS_SOLVER_NOTES.md` - Comprehensive HiGHS documentation with findings
+
+---
+
+## [2025-12-15] - Feature: Sales Tools pseudo-rep in analytics dashboards
+
+**Problem:** Sales Tools accounts (low-ARR customers routed to Sales Tools bucket) were invisible in analytics dashboards. After assignment generation, these accounts had `new_owner_name = 'Sales Tools'` and `new_owner_id = null`, but didn't appear in rep distribution charts or metrics.
+
+**Solution:** Sales Tools now appears as a distinct pseudo-rep in all analytics views:
+
+1. **Domain Constants:** Added `SALES_TOOLS_REP_ID` and `SALES_TOOLS_REP_NAME` to `@/_domain/constants.ts`
+2. **Rep Distribution:** Modified `calculateRepDistribution()` in `buildDataService.ts` to:
+   - Detect Sales Tools accounts via `new_owner_name = 'Sales Tools' && !new_owner_id`
+   - Exclude them from normal rep calculations
+   - Add Sales Tools as a separate entry with `repId: '__SALES_TOOLS__'`, `region: 'Sales Tools'`
+3. **Visual Distinction:** Updated `RepDistributionChart.tsx` with:
+   - Orange color bars for Sales Tools (all metrics)
+   - 📦 emoji instead of initials in Y-axis
+   - Special tooltip with Briefcase icon and "Low-ARR Customer Bucket (No FLM/SLM)" description
+   - Orange-tinted background on hover
+
+**Files Modified:**
+- `src/_domain/constants.ts` - Added SALES_TOOLS_REP_ID, SALES_TOOLS_REP_NAME
+- `src/services/buildDataService.ts` - Sales Tools pseudo-rep in calculateRepDistribution()
+- `src/components/analytics/RepDistributionChart.tsx` - Orange visual treatment
+
+---
+
+## [2025-12-15] - Feature: Waterfall Fallback for LP Optimization
+
+**Problem:** HiGHS and GLPK LP solvers have been unreliable - HiGHS crashes on even small problems (34 accounts) due to WASM memory issues, and GLPK times out on large problems. Previous fixes were all LP format fixes that addressed symptoms, not the root cause.
+
+**Solution:** Instead of continuing to patch LP format generation, added automatic waterfall fallback. When LP solver fails (any reason), the system now automatically falls back to the proven waterfall assignment engine.
+
+**How it works:**
+1. LP optimization is attempted first (as configured)
+2. If LP fails (crash, timeout, infeasible, or any error), automatically run waterfall engine
+3. User sees toast notification indicating fallback was used
+4. Rationale shows "(Waterfall Fallback)" suffix for affected accounts
+
+**This is different from previous HiGHS fixes:**
+- Dec 12-15 fixes were LP format fixes (variable names, slacks in bounds, line breaking, etc.)
+- This fix ensures users ALWAYS get results, regardless of solver stability
+- LP solver can continue to be debugged without blocking users
+
+**Files Modified:**
+- `src/hooks/useAssignmentEngine.ts` - Added `runLPWithFallback()` helper with automatic waterfall fallback
+
+---
+
+## [2025-12-15] - Fix: Remove AI Optimization stage from UI & HiGHS stability improvements
+
+**UI Cleanup:**
+- Removed obsolete "AI Optimization" stage from AssignmentGenerationDialog
+- Progress stages now show: Loading Data → Analyzing → Applying Rules → Finalizing
+- Updated large dataset warning message (removed AI reference)
+
+**HiGHS Stability (incremental fixes - see waterfall fallback above for definitive fix):**
+- Fixed dummy variable issue in LP format (was causing "Aborted()" crashes)
+- Added LP format validation before solving (checks for required sections)
+- Track consecutive HiGHS failures - skip HiGHS and use GLPK directly after 2 failures
+- Simplified HiGHS solve call (removed options that may cause WASM issues)
+- Added usingGLPK reset in resetHiGHSInstance()
+
+**Files Modified:**
+- `src/components/AssignmentGenerationDialog.tsx` - Removed AI stage, simplified progress display
+- `src/services/optimization/solver/highsWrapper.ts` - LP format fixes, failure tracking
+
+---
+
+## [2025-12-15] - Fix: HiGHS WASM memory crashes for large LP problems
+
+**Problem:** HiGHS WebAssembly crashed with "RuntimeError: memory access out of bounds" when solving large problems (2,000+ accounts). The error was due to the LP problem exceeding WASM heap memory limits (~256MB).
+
+**Root Cause:** The `highs` npm package uses pre-compiled WASM with fixed memory limits. Large problems (20K+ binary variables, 5MB+ LP strings) exceeded memory during parsing or solving.
+
+**Solution:** Multi-layer defense with GLPK fallback:
+
+1. **Pre-check threshold:** If problem > 30K assignment variables, skip HiGHS and use GLPK directly
+2. **LP string size check:** If LP format > 5MB, fall back to GLPK before solve attempt
+3. **Memory error catch:** If HiGHS throws memory-related RuntimeError, fall back to GLPK
+4. **Critical fix for GLPK:** Added handling for ALL Big-M penalty slacks from `problem.slackBounds` (beta, bigM variants were missing)
+5. **Direct GLPK loader:** Created independent GLPK loading function (not dependent on HiGHS failure)
+6. **Enhanced logging:** LP size, estimated memory, and solver selection logged to console
+7. **User-friendly errors:** Memory errors now show helpful messages instead of cryptic RuntimeError
+8. **GLPK timeout increased:** Extended GLPK timeout from 60s to 300s (5 minutes) for large MIP problems
+9. **GLPK status handling:** Added proper handling for GLP_UNDEF (status 1) as 'timeout' instead of error
+10. **NaN/Infinity detection:** Added diagnostic logging to detect invalid coefficients before solve
+
+**Files Modified:**
+- `src/services/optimization/solver/highsWrapper.ts` - Multi-layer defense, GLPK fixes, logging
+- `src/services/optimization/pureOptimizationEngine.ts` - User-facing error messages
+
+---
+
+## [2025-12-15] - Fix: Big-M penalty slacks missing from LP objective function
+
+**Problem:** HiGHS crashed with `RuntimeError: Aborted()` and `Unable to read LP model` when running optimization with custom priority configurations (e.g., disabling Team Alignment, Geography, etc.).
+
+**Root Cause:** Big-M penalty slack variables (beta_over, beta_under, bigM_over, bigM_under) were:
+1. ✅ Added to `objectiveCoefficients` in `lpProblemBuilder.ts`
+2. ✅ Declared in the Bounds section of LP format
+3. ❌ **NOT written to the objective function line in LP format**
+
+The LP format had variables referenced in constraints that weren't defined in the objective, causing HiGHS to reject the model.
+
+**Fix:** In `highsWrapper.ts`, added code to iterate over `problem.slackBounds` and write ALL Big-M penalty slack variables to the objective function (in addition to just the alpha slacks from `balanceSlacks`).
+
+**Files Modified:**
+- `src/services/optimization/solver/highsWrapper.ts` - Add Big-M penalty slacks to objective function
+
+---
+
+## [2025-12-15] - Fix: LP optimization weights now derived from priority configuration
+
+**CRITICAL FIX:** The LP solver now derives objective weights from the user's priority configuration instead of using hardcoded equal weights.
+
+**Problem:** User configured P5=continuity, P6=geography (continuity should outweigh geography), but the LP solver used hardcoded weights: `wC=0.35, wG=0.35, wT=0.30`. Both continuity and geography had **equal** influence, so the optimization didn't respect priority order.
+
+**Root Cause:**
+- `priority_config` was loaded from DB but only used for rationale **labels**
+- `calculatePriorityWeight()` function existed but was **never called**
+- LP weights came from `DEFAULT_LP_OBJECTIVES_CUSTOMER` - completely disconnected from priority config
+
+**Solution:** Created `deriveWeightsFromPriorityConfig()` in `weightNormalizer.ts`:
+- Formula: `raw_weight = 1 / (position + 1)` (positions are 0-indexed)
+- `geo_and_continuity` contributes 50% of its weight to both factors
+- Normalize so weights sum to 1.0
+- Called in `lpProblemBuilder.ts` instead of using hardcoded defaults
+
+**Example (P3=team, P5=continuity, P6=geography):**
+```
+Before: wC=0.35, wG=0.35, wT=0.30 (hardcoded, equal)
+After:  wC=0.30, wG=0.25, wT=0.45 (derived, respects priority order)
+```
+
+**Console Output:** `[LPBuilder] Weights: C=0.30, G=0.25, T=0.45 (from priorities)`
+
+**Files Modified:**
+- `src/services/optimization/utils/weightNormalizer.ts` - Add `deriveWeightsFromPriorityConfig()`
+- `src/services/optimization/constraints/lpProblemBuilder.ts` - Use priority-derived weights
+- `src/services/optimization/index.ts` - Export new function
+- `src/_domain/MASTER_LOGIC.mdc` - Update §10.2.1 with implementation details
+
+---
+
+## [2025-12-15] - Fix: Geo Alignment dashboard metric now uses hierarchy-based scoring
+
+**Problem:** Dashboard showed 0% Geo Alignment even though LP optimization assigned accounts based on geography (P6: Geography Match). The metrics were measuring different things.
+
+**Root Cause:** `calculateGeoAlignment()` in `buildDataService.ts` used simple string matching between territory mappings and rep regions. Territory mappings output values like "Central", "North East" that didn't exist in rep data (reps only had "California", "Global", "NYC", "LATAM").
+
+**Solution:** Updated `calculateGeoAlignment()` to use `calculateGeoMatchScore()` from `@/_domain/geography.ts` which implements hierarchy-based scoring:
+
+| Score | Match Type | Example |
+|-------|------------|---------|
+| 1.00 | Exact match | Account "NYC" → Rep "NYC" |
+| 0.85 | Same sub-region | Account "NYC" → Rep "North East" |
+| 0.65 | Same parent | Account "North East" → Rep "AMER" |
+| 0.40 | Global fallback | Account "Central" → Rep "Global" |
+| 0.20 | Cross-region | Account "NYC" → Rep "EMEA" |
+
+**New logic:** Score >= 0.40 = Aligned, Score < 0.40 = Misaligned
+
+This means accounts assigned to "Global" reps are now counted as aligned (Global fallback is acceptable per MASTER_LOGIC.mdc §4.3).
+
+**Files Modified:**
+- `src/services/buildDataService.ts` - Import `calculateGeoMatchScore` from `@/_domain`, rewrite `calculateGeoAlignment()` to use hierarchy-based scoring
+
+---
+
+## [2025-12-15] - Fix: Priorities card shows priority name instead of full rationale
+
+**Problem:** The Priorities breakdown card on the Balancing Overview was showing full rationale text like "P6: Geography Match → Hank Blalock (Global - exact geo match, score 0.65)" instead of just the priority name.
+
+**Root Cause:** `usePriorityDistribution()` was extracting the description by stripping the "P6: " prefix from the rationale, leaving the entire rest of the string including rep name and details.
+
+**Solution:** Updated regex to extract just the priority name from between the colon and arrow:
+- Pattern: `^(P\d+|RO):\s*([^→]+)` extracts position code AND priority name
+- "P6: Geography Match → Hank Blalock..." now shows as "P6: Geography Match"
+
+**Files Modified:**
+- `src/hooks/useBuildData.ts` - Rewrote `usePriorityDistribution()` to properly parse rationale format
+
+---
+
+## [2025-12-15] - Fix: Priority codes now match user's configured priority order
+
+**MAJOR FIX:** Priority codes in LP optimization rationales now use the user's configured priority order instead of hardcoded values.
+
+**Problem:** The rationale generator was using hardcoded priority codes (P0-P4, RO) that didn't match the user's configured priority order in the Priority Configuration UI. For example, if user configured P6=Geography, the engine still showed "P3: Geography Match".
+
+**Root Cause:** `rationaleGenerator.ts` had hardcoded priority codes based on scoring thresholds, ignoring the `priority_config` from the database.
+
+**Solution:** Pass `priority_config` through the LP engine to the rationale generator:
+
+**Files Modified:**
+- `src/services/optimization/types.ts` - Added `priority_config` field to `LPConfiguration`
+- `src/services/optimization/preprocessing/dataLoader.ts` - Load `priority_config` from DB
+- `src/services/optimization/postprocessing/rationaleGenerator.ts`:
+  - Added `LOCK_TYPE_TO_PRIORITY_ID` mapping
+  - Added `DEFAULT_PRIORITY_POSITIONS` fallback
+  - Added `getPositionLabel()` helper that looks up position from config
+  - Updated all hardcoded P-codes to use dynamic labels
+- `src/services/optimization/pureOptimizationEngine.ts` - Pass config to rationale generator
+- `src/hooks/useAssignmentEngine.ts` - Updated regex to support P0-P99
+
+**Before (hardcoded):**
+| User Config Position | What Engine Showed |
+|----------------------|-------------------|
+| P6 = Geography | "P3: Geography Match" |
+| P5 = Continuity | "P4: Account Continuity" |
+
+**After (dynamic):**
+| User Config Position | What Engine Shows |
+|----------------------|-------------------|
+| P6 = Geography | "P6: Geography Match" |
+| P5 = Continuity | "P5: Account Continuity" |
+
+---
+
+## [2025-12-15] - Fix: Rule Applied column shows priority code in LP Optimization
+
+Fixed mismatch where "Rule Applied" column showed generic "LP Optimization" while "Reason" column showed specific priority codes like "P3: Geography Match".
+
+**Issue:** The LP optimization mode was defaulting `ruleApplied` to "LP Optimization" for all assignments, even though the rationale already contained specific priority codes (P0-P4, RO) from the rationale generator.
+
+**Fix:**
+- Added `extractPriorityCode()` helper function in `useAssignmentEngine.ts`
+- Parses priority code (P0, P1, P2, P3, P4, RO) from rationale string
+- Updated both `proposals.map()` and `conflicts.map()` transformations
+
+**Before:**
+| Rule Applied | Reason |
+|--------------|--------|
+| LP Optimization | P3: Geography Match → Rep Name (details) |
+
+**After:**
+| Rule Applied | Reason |
+|--------------|--------|
+| P3 | P3: Geography Match → Rep Name (details) |
+
+---
+
+## [2025-12-15] - Fix: HiGHS LP format and memory issues
+
+Fixed multiple issues causing HiGHS to crash with `RuntimeError: Aborted()` and `memory access out of bounds` errors.
+
+**Root Causes:**
+1. Big-M penalty slack variables were referenced in constraints but never declared in Bounds section
+2. Long Salesforce IDs in variable names caused LP format lines to exceed ~255 char limit
+3. Single-line objective function with thousands of terms caused memory issues
+
+**Fixes:**
+- `types.ts`: Added `SlackBound` interface and `slackBounds` field to `LPProblem` type
+- `lpProblemBuilder.ts`: Now exports `penaltySlackBounds` array containing all Big-M penalty slack bounds
+- `highsWrapper.ts`: Complete rewrite of LP format generation:
+  - **Compact variable naming**: Assignment vars use `x{accountIdx}_{repIdx}` instead of full Salesforce IDs
+  - **Line breaking**: Objective and constraint lines broken at 200 chars to avoid LP parser limits
+  - **Proper slack bounds**: All Big-M penalty slacks properly declared with bounds
+  - **Coefficient validation**: Catches NaN/Infinity values before they crash HiGHS
+  - Variable mapping preserved for solution extraction back to original IDs
+
+---
+
+## [2025-12-15] - Fix: HiGHS WASM loading in browser
+
+Fixed HiGHS WebAssembly failing to load with error "expected magic word 00 61 73 6d, found 3c 21 44 4f".
+
+**Issue:** The HiGHS npm package was trying to load `highs.wasm` from a relative path to its JS file location, but Vite doesn't serve `node_modules` files directly. The browser received a 404 HTML page instead of the WASM binary.
+
+**Fix:** Added `locateFile` callback to the HiGHS loader in `highsWrapper.ts` to explicitly load the WASM from `/highs.wasm` (served from the `public/` folder).
+
+```typescript
+highsInstance = await highsLoader({
+  locateFile: (path: string) => {
+    if (path.endsWith('.wasm')) {
+      return '/highs.wasm';
+    }
+    return path;
+  }
+});
+```
+
+---
+
+## [2025-12-15] - Fix: Complete N/A handling in analytics layer
+
+Fixed bugs where missing tier data was still being counted as matches/mismatches in the analytics UI, even though the LP solver correctly treated them as N/A.
+
+**Bugs Fixed:**
+- `buildDataService.ts`: `calculateTierAlignmentBreakdown()` now returns `unknown` field and correctly classifies missing tier data as N/A (not as ENT mismatches)
+- `buildDataService.ts`: `calculateTeamAlignmentScore()` now returns `null` when no accounts have valid tier data
+- `buildDataService.ts`: Delta calculation for teamAlignmentScore now handles nullable values
+- `TeamFitPieChart.tsx`: Added "N/A (Missing Data)" category with zinc color
+- `BuildDetail.tsx`: Updated total calculation to include unknown count
+
+---
+
+## [2025-12-15] - Feature: Team Tier N/A handling for missing data
+
+When account tier (from employee count) or rep tier (from team field) is missing, team alignment is now treated as **N/A** instead of penalizing as a mismatch.
+
+**Changes:**
+- `MASTER_LOGIC.mdc` §5.1.1: Documented N/A handling rule
+- `teamAlignmentScore.ts`: Returns `null` instead of `unknown_tier_score` (0.5)
+- `lpProblemBuilder.ts`: Redistributes team weight to continuity + geography when N/A
+- `pureOptimizationEngine.ts`: Handles null teamAlignment in score calculations
+- `rationaleGenerator.ts`: Shows "N/A" in score breakdown
+- `metricsCalculator.ts`: Excludes N/A from tier match rate calculations
+- `types/analytics.ts`: Added `unknown` field to `TierAlignmentBreakdown`, made `teamAlignmentScore` nullable
+
+**Why?** Missing data ≠ bad match. Penalizing unknown tiers biased assignments toward reps with complete data. Now users see "N/A" in analytics, prompting data cleanup.
+
+---
+
+## [2025-12-15] - Refactor: Remove dead solver code (~2,800 lines)
+
+Deleted deprecated optimization solver files that were never called by the UI:
+
+**Files Deleted:**
+- `optimizationSolver.ts` (1,525 lines) - Old HiGHS solver, replaced by `pureOptimizationEngine.ts`
+- `priorityExecutor.ts` (949 lines) - Priority waterfall executor, never called
+- `sandboxMetricsCalculator.ts` (364 lines) - Never imported anywhere
+
+**Changes:**
+- Moved `Account` and `SalesRep` interfaces to `optimization/types.ts`
+- Updated imports in `parentalAlignmentService.ts` and `commercialPriorityHandlers.ts`
+
+Net reduction: ~2,788 lines of dead code.
+
+---
+
+## [2025-12-15] - Fix: Replace GLPK with HiGHS in solver wrapper
+
+The `highsWrapper.ts` was incorrectly using GLPK.js instead of HiGHS, causing solver failures (status 1 / GLP_UNDEF) on large problems. Updated to:
+- Use actual HiGHS WebAssembly for LP/MIP solving
+- Fall back to GLPK only if HiGHS fails to load
+- Convert LPProblem to LP format string for HiGHS (not GLPK object format)
+- Properly map HiGHS solution status codes
+
+This fixes the "Customer optimization failed: Solver error" issue when running assignments on large datasets (2000+ accounts).
+
+---
+
 ## Release v1.3.4 (2025-12-14)
 
 ### Unified Scoring & Complete Documentation

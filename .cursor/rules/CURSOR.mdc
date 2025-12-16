@@ -48,17 +48,44 @@ It does NOT answer "HOW should the app render/fetch/store things?"
 
 ### 🔒 MANDATORY RULES
 
+#### ⚠️ THE SSOT FLOW (Single Source of Truth)
+
+**When adding or editing ANY reusable business logic, ALWAYS follow this order:**
+
+\`\`\`
+1. MASTER_LOGIC.mdc   →   Document the rule/formula first
+2. _domain/*.ts       →   Implement in the appropriate .ts file  
+3. Consumer files     →   Import from @/_domain and use
+\`\`\`
+
+**This flow is NON-NEGOTIABLE.** Never skip steps or go out of order.
+
+| Step | Action | Example |
+|------|--------|---------|
+| **1. Document** | Add/update in `MASTER_LOGIC.mdc` | "§12.1.1 Balance Max = MAX(avg × 1.5, largest × 1.2)" |
+| **2. Implement** | Add function/constant to `_domain/*.ts` | `export function calculateBalanceMax(...)` in `constants.ts` |
+| **3. Export** | Ensure exported from `_domain/index.ts` | Already auto-exports via `export * from './constants'` |
+| **4. Import** | Use in components/services/hooks | `import { calculateBalanceMax } from '@/_domain'` |
+
+**Why this order?**
+- Documentation-first prevents logic drift
+- Single implementation prevents duplicates  
+- Centralized exports enable easy refactoring
+- Consumers stay clean and focused on their purpose
+
+---
+
 1. **Always import from `@/_domain`** - Never hardcode business logic elsewhere
-   ```typescript
+   \`\`\`typescript
    // ✅ CORRECT
    import { getAccountARR, classifyTeamTier, REGION_HIERARCHY } from '@/_domain';
    
    // ❌ WRONG - inline logic
    const arr = account.calculated_arr || account.arr || 0;
-   ```
+   \`\`\`
 
 2. **Paired updates required** - When changing business logic:
-   - Update `MASTER_LOGIC.mdc` (documentation)
+   - Update `MASTER_LOGIC.mdc` (documentation) **FIRST**
    - Update the corresponding `.ts` file (implementation)
    - Both must stay in sync
 
@@ -188,13 +215,13 @@ When the user says "release", "push to GitHub", or "create a version", follow th
 2. **Update CHANGELOG.md** with all changes since last release
 
 3. **Run these commands** (requires git_write permission):
-   ```bash
+   \`\`\`bash
    cd "/Users/sean.muse/code/book building v1.0 QA"
    git add -A
    git commit -m "Release vX.X.X - <summary>"
    git tag vX.X.X
    git push origin master --tags
-   ```
+   \`\`\`
 
 4. **Deploy to Vercel** (if not already done)
 
@@ -271,12 +298,12 @@ All errors include: stack trace, URL, user agent, app version, timestamp.
 
 ### Key Calculation Rules
 
-```
+\`\`\`
 ARR Priority:  hierarchy_bookings_arr_converted → calculated_arr → arr → 0
                (hierarchy_bookings first to prevent double-counting from children)
 ATR Source:    SUM(available_to_renew) WHERE opportunity_type = 'Renewals'
 Team Tier:     SMB (<100 emp) | Growth (100-499) | MM (500-1499) | ENT (1500+) | null (unknown)
-```
+\`\`\`
 
 ## 11. Learning Log
 Maintain a learning log so as we build this app I continue to understand what we are doing, and why

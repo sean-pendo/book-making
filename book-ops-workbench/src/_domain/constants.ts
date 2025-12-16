@@ -78,6 +78,17 @@ export const DEFAULT_ENTERPRISE_THRESHOLD = 1500;
  */
 export const HIGH_VALUE_ARR_THRESHOLD = 100_000;
 
+/**
+ * TIER 1 PRIORITY EMPLOYEE THRESHOLD
+ * -----------------------------------
+ * Employee count threshold for considering an account as "Tier 1 priority"
+ * in assignment logic (distinct from team tier classification).
+ * 
+ * Accounts with > 1000 employees are considered high-priority for
+ * assignment purposes, even if they're technically Mid-Market tier.
+ */
+export const TIER_1_PRIORITY_EMPLOYEE_THRESHOLD = 1000;
+
 // =============================================================================
 // BALANCE VARIANCE DEFAULTS
 // =============================================================================
@@ -276,6 +287,20 @@ export const DEFAULT_OPTIMIZATION_WEIGHTS = {
  */
 export const SALES_TOOLS_ARR_THRESHOLD = 25_000;
 
+/**
+ * SALES TOOLS PSEUDO-REP
+ * ----------------------
+ * Identifier used for the Sales Tools pseudo-rep in analytics.
+ * Sales Tools is not a real rep - it's a bucket for low-ARR customers.
+ *
+ * This appears in analytics dashboards as a distinct category
+ * with no FLM/SLM hierarchy (reports directly under itself).
+ *
+ * @see MASTER_LOGIC.mdc Section 10.4 (Sales Tools Routing)
+ */
+export const SALES_TOOLS_REP_ID = '__SALES_TOOLS__';
+export const SALES_TOOLS_REP_NAME = 'Sales Tools';
+
 // =============================================================================
 // WORKLOAD BALANCING
 // =============================================================================
@@ -349,3 +374,136 @@ export function getCRERiskLevel(creCount: number): 'none' | 'low' | 'medium' | '
   if (creCount <= CRE_RISK_THRESHOLDS.MEDIUM_MAX) return 'medium';
   return 'high';
 }
+
+// =============================================================================
+// PRIORITY WEIGHTING
+// =============================================================================
+
+/**
+ * PRIORITY WEIGHT CALCULATION
+ * ---------------------------
+ * Calculates the weight for a priority based on its position.
+ * Higher position (lower number) = higher weight.
+ * 
+ * Formula: weight = 1.0 / position
+ * 
+ * | Position | Weight |
+ * |----------|--------|
+ * | 1        | 1.00   |
+ * | 2        | 0.50   |
+ * | 3        | 0.33   |
+ * | 4        | 0.25   |
+ * | 5        | 0.20   |
+ * | 6        | 0.17   |
+ * 
+ * Used in the LP solver to weight factors based on priority configuration.
+ * Higher priorities have more influence on the optimization objective.
+ * 
+ * @see MASTER_LOGIC.mdc §10.2.1
+ */
+export function calculatePriorityWeight(position: number): number {
+  if (position <= 0) return 0;
+  return 1.0 / position;
+}
+
+/**
+ * DEFAULT PRIORITY WEIGHTS
+ * ------------------------
+ * Default weights for each scoring factor when no priority config is set.
+ * These represent a balanced weighting across all factors.
+ * 
+ * Used as fallbacks when:
+ * - Priority is disabled in config
+ * - Priority config is not loaded
+ * - Running in legacy mode without priority customization
+ */
+export const DEFAULT_PRIORITY_WEIGHTS = {
+  /** Geography matching (default weight if not customized) */
+  GEOGRAPHY: 0.30,
+  
+  /** Continuity - keeping accounts with current owner */
+  CONTINUITY: 0.25,
+  
+  /** Team alignment - matching account tier to rep tier */
+  TEAM_ALIGNMENT: 0.20,
+  
+  /** Balance - even workload distribution */
+  BALANCE: 0.25,
+} as const;
+
+/**
+ * LP SCORING FACTORS
+ * ------------------
+ * Base scores for each factor before weighting.
+ * These are multiplied by priority weights to get final contribution.
+ * 
+ * All scores are normalized to 0-100 range for consistency.
+ */
+export const LP_SCORING_FACTORS = {
+  /** Max bonus for continuity (current owner match) */
+  CONTINUITY_MATCH_BONUS: 100,
+  
+  /** Max score for perfect geography match */
+  GEOGRAPHY_MAX_SCORE: 100,
+  
+  /** Max score for perfect team tier match */
+  TEAM_ALIGNMENT_MAX_SCORE: 100,
+  
+  /** Max balance bonus for underloaded rep */
+  BALANCE_MAX_BONUS: 100,
+  
+  /** Base coefficient to ensure positive values */
+  BASE_COEFFICIENT: 10,
+} as const;
+
+/**
+ * LP PENALTY CONSTANTS (Big-M System)
+ * ------------------------------------
+ * Three-tier penalty system for balance constraints.
+ * @see MASTER_LOGIC.mdc §11.3 Three-Tier Penalty System
+ * 
+ * Values are normalized for HiGHS WASM numerical stability.
+ * Original conceptual values (0.01, 1.0, 1000.0) caused coefficient
+ * magnitude mismatch with assignment scores (0.1-1.0 range).
+ * The relative ratios (1:10:100) are preserved.
+ * 
+ * Used by: lpProblemBuilder.ts, simplifiedAssignmentEngine.ts
+ */
+export const LP_PENALTY = {
+  /** Alpha: Small penalty for deviation within variance band */
+  ALPHA: 0.001,
+  
+  /** Beta: Medium penalty for deviation in buffer zone (between variance and hard cap) */
+  BETA: 0.01,
+  
+  /** BigM: Large penalty for deviation beyond absolute limits */
+  BIG_M: 0.1,
+} as const;
+
+/**
+ * LP SCALE LIMITS
+ * ---------------
+ * Maximum problem sizes for HiGHS WASM in browser.
+ * @see MASTER_LOGIC.mdc §11.5 Scale Limits
+ * 
+ * HiGHS WASM can hang on very large problems due to:
+ * - Dense constraint matrices (each balance constraint references all accounts)
+ * - MIP branching explosion
+ * - WASM memory limitations
+ * 
+ * When account count exceeds these limits, the engine should fall back to
+ * waterfall mode which processes smaller batches per priority level.
+ * 
+ * Used by: pureOptimizationEngine.ts
+ */
+export const LP_SCALE_LIMITS = {
+  /** 
+   * Maximum accounts for global LP optimization (above this, use waterfall)
+   * Testing showed HiGHS can handle 8000+ accounts (~85s solve time)
+   * but production LP structure may differ. Set conservatively.
+   */
+  MAX_ACCOUNTS_FOR_GLOBAL_LP: 8000,
+  
+  /** Warning threshold - log performance warning above this */
+  WARN_ACCOUNTS_THRESHOLD: 3000,
+} as const;

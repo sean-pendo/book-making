@@ -52,6 +52,23 @@ interface AssignmentReason {
   reason: string;
 }
 
+/**
+ * Extract priority code from LP rationale string
+ * Rationales are formatted as "P0:", "P1:", ... "P7:", or "RO:" at the start
+ * Priority positions are now dynamic based on user's priority_config
+ *
+ * @example extractPriorityCode("P6: Geography Match → Rep Name (details)") => "P6"
+ * @example extractPriorityCode("RO: Balance Optimization → ...") => "RO"
+ */
+function extractPriorityCode(rationale: string): string {
+  // Match P followed by any digits (P0, P1, ... P99) or RO at start of rationale
+  const match = rationale.match(/^(P\d+|RO):/);
+  if (match) {
+    return match[1];
+  }
+  return 'LP Optimization';
+}
+
 interface Owner {
   rep_id: string;
   name: string;
@@ -717,7 +734,21 @@ export const useAssignmentEngine = (buildId?: string) => {
       
       setAssignmentResult(result);
       
-      // Clear progress after completion
+      // Set progress to 100% before clearing
+      setAssignmentProgress({
+        stage: 'finalizing',
+        status: 'Assignment generation complete!',
+        progress: 100,
+        rulesCompleted: 4,
+        totalRules: 4,
+        accountsProcessed: proposals.length,
+        totalAccounts: filteredAccounts.length,
+        assignmentsMade: proposals.length,
+        conflicts: proposals.filter(p => p.warnings.length > 0).length
+      });
+      
+      // Small delay before clearing so user sees 100%
+      await new Promise(resolve => setTimeout(resolve, 500));
       setAssignmentProgress(null);
       
       return result;
@@ -728,16 +759,18 @@ export const useAssignmentEngine = (buildId?: string) => {
       setAssignmentResult(null);
       
       // Set error state in progress for visibility
+      // Keep the current progress value to avoid backwards jump
+      const currentProgress = assignmentProgress?.progress || 0;
       setAssignmentProgress({
         stage: 'error',
         status: `Assignment generation failed: ${error.message || 'Unknown error'}`,
-        progress: 0,
-        rulesCompleted: 0,
-        totalRules: 0,
-        accountsProcessed: 0,
-        totalAccounts: 0,
-        assignmentsMade: 0,
-        conflicts: 0,
+        progress: currentProgress, // Preserve current progress to avoid flash to 0
+        rulesCompleted: assignmentProgress?.rulesCompleted || 0,
+        totalRules: assignmentProgress?.totalRules || 0,
+        accountsProcessed: assignmentProgress?.accountsProcessed || 0,
+        totalAccounts: assignmentProgress?.totalAccounts || 0,
+        assignmentsMade: assignmentProgress?.assignmentsMade || 0,
+        conflicts: assignmentProgress?.conflicts || 0,
         error: error.message || 'Unknown error occurred during assignment generation'
       });
       
@@ -773,6 +806,9 @@ export const useAssignmentEngine = (buildId?: string) => {
       console.warn('[Assignment Execute] ❌ Missing buildId or assignmentResult');
       return false;
     }
+
+    // Set executing state IMMEDIATELY for responsive UI feedback
+    setIsExecuting(true);
 
     // Phase 3: Balance Verification Pre-flight Check - show warning toast but proceed anyway
     if (!skipImbalanceCheck) {
@@ -821,7 +857,6 @@ export const useAssignmentEngine = (buildId?: string) => {
       }
     }
 
-    setIsExecuting(true);
     try {
       const proposalCount = assignmentResult.proposals.length;
       console.log('[Assignment Execute] 🚀 Starting execution for', proposalCount, 'proposals');
@@ -1007,22 +1042,22 @@ export const useAssignmentEngine = (buildId?: string) => {
     };
   };
 
-  // Handle Pure Optimization LP Engine
+  // Handle Pure Optimization LP Engine with waterfall fallback
   const handlePureOptimization = async (
     buildId: string,
     accountType: 'customers' | 'prospects' | 'all',
     filteredAccounts: Account[]
   ): Promise<AssignmentResult> => {
     console.log(`[PureOptimization] Starting LP optimization for ${accountType}...`);
-    
+
     // Map accountType to LP engine format
     const lpAccountType = accountType === 'customers' ? 'customer' : 'prospect';
-    
+
     // Progress callback to update UI
     const onLPProgress = (progress: LPProgress) => {
       setAssignmentProgress({
-        stage: progress.stage === 'solving' ? 'analyzing' : 
-               progress.stage === 'postprocessing' ? 'finalizing' : 
+        stage: progress.stage === 'solving' ? 'analyzing' :
+               progress.stage === 'postprocessing' ? 'finalizing' :
                progress.stage as any,
         status: progress.status,
         progress: progress.progress,
@@ -1034,46 +1069,139 @@ export const useAssignmentEngine = (buildId?: string) => {
         conflicts: 0
       });
     };
-    
+
     let allProposals: LPSolveResult['proposals'] = [];
     let allWarnings: string[] = [];
     let combinedMetrics: LPSolveResult['metrics'] | null = null;
-    
-    if (accountType === 'all') {
-      // Run both customer and prospect solves
-      console.log(`[PureOptimization] Running customer solve...`);
-      const customerResult = await runPureOptimization(buildId, 'customer', onLPProgress);
-      
-      if (!customerResult.success && customerResult.error) {
-        throw new Error(`Customer optimization failed: ${customerResult.error}`);
+    let usedFallback = false;
+
+    // Helper to run LP with waterfall fallback
+    const runLPWithFallback = async (
+      type: 'customer' | 'prospect',
+      accountsForType: Account[]
+    ): Promise<{ proposals: LPSolveResult['proposals']; warnings: string[]; metrics: LPSolveResult['metrics'] | null; usedFallback: boolean }> => {
+      try {
+        const result = await runPureOptimization(buildId, type, onLPProgress);
+
+        if (result.success) {
+          return { proposals: result.proposals, warnings: result.warnings, metrics: result.metrics, usedFallback: false };
+        }
+
+        // LP failed or returned error - fall back to waterfall
+        console.warn(`[PureOptimization] LP ${type} failed: ${result.error}, falling back to waterfall`);
+      } catch (lpError: any) {
+        console.warn(`[PureOptimization] LP ${type} threw exception: ${lpError.message}, falling back to waterfall`);
       }
-      
+
+      // Waterfall fallback
+      console.log(`[PureOptimization] Running waterfall fallback for ${type}...`);
+      setAssignmentProgress({
+        stage: 'analyzing',
+        status: `LP solver failed, using waterfall fallback for ${type}s...`,
+        progress: 50,
+        rulesCompleted: 0,
+        totalRules: 4,
+        accountsProcessed: 0,
+        totalAccounts: accountsForType.length,
+        assignmentsMade: 0,
+        conflicts: 0
+      });
+
+      // Fetch config for waterfall
+      const { data: configData } = await supabase
+        .from('assignment_configuration')
+        .select('*')
+        .eq('build_id', buildId)
+        .eq('account_scope', 'all')
+        .maybeSingle();
+
+      if (!configData) {
+        throw new Error('Assignment configuration not found for waterfall fallback');
+      }
+
+      // Transform owners for waterfall engine
+      const repsForEngine = owners.map(owner => {
+        const repAccounts = accountsForType.filter(
+          acc => acc.owner_id === owner.rep_id || acc.new_owner_id === owner.rep_id
+        );
+        const currentARR = repAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
+        return {
+          id: owner.rep_id,
+          rep_id: owner.rep_id,
+          name: owner.name,
+          region: owner.region || null,
+          is_active: owner.is_active ?? true,
+          is_strategic_rep: (owner as any).is_strategic_rep ?? false,
+          include_in_assignments: owner.include_in_assignments ?? true,
+          team_tier: (owner as any).team_tier || null,
+          current_arr: currentARR,
+          current_accounts: repAccounts.length,
+          current_cre_count: repAccounts.reduce((sum, acc) => sum + (acc.cre_count || 0), 0)
+        };
+      });
+
+      // Run waterfall engine
+      const waterfallResult = await generateSimplifiedAssignments(
+        buildId,
+        type,
+        accountsForType as any,
+        repsForEngine,
+        { ...configData, territory_mappings: configData.territory_mappings as Record<string, string> | null }
+      );
+
+      // Transform waterfall proposals to LP format
+      const lpStyleProposals: LPSolveResult['proposals'] = waterfallResult.proposals.map(p => ({
+        accountId: p.account.sfdc_account_id,
+        accountName: p.account.account_name,
+        repId: p.proposedRep.rep_id,
+        repName: p.proposedRep.name,
+        repRegion: p.proposedRep.region || '',
+        scores: { continuity: 0, geography: 0, teamAlignment: null, tieBreaker: 0 },
+        totalScore: 0.5,
+        lockResult: null,
+        rationale: `${p.ruleApplied} (Waterfall Fallback)`,
+        isStrategicPreAssignment: false,
+        childIds: []
+      }));
+
+      return {
+        proposals: lpStyleProposals,
+        warnings: [`Used waterfall fallback for ${type} optimization (LP solver unavailable)`],
+        metrics: null,
+        usedFallback: true
+      };
+    };
+
+    if (accountType === 'all') {
+      // Run both customer and prospect solves with fallback
+      const customerAccounts = filteredAccounts.filter(a => a.is_customer);
+      const prospectAccounts = filteredAccounts.filter(a => !a.is_customer);
+
+      console.log(`[PureOptimization] Running customer solve...`);
+      const customerResult = await runLPWithFallback('customer', customerAccounts);
       allProposals.push(...customerResult.proposals);
       allWarnings.push(...customerResult.warnings);
       combinedMetrics = customerResult.metrics;
-      
+      if (customerResult.usedFallback) usedFallback = true;
+
       console.log(`[PureOptimization] Running prospect solve...`);
-      const prospectResult = await runPureOptimization(buildId, 'prospect', onLPProgress);
-      
-      if (!prospectResult.success && prospectResult.error) {
-        throw new Error(`Prospect optimization failed: ${prospectResult.error}`);
-      }
-      
+      const prospectResult = await runLPWithFallback('prospect', prospectAccounts);
       allProposals.push(...prospectResult.proposals);
       allWarnings.push(...prospectResult.warnings);
-      
+      if (prospectResult.usedFallback) usedFallback = true;
+
       console.log(`[PureOptimization] Combined: ${allProposals.length} proposals`);
     } else {
-      // Single type
-      const result = await runPureOptimization(buildId, lpAccountType, onLPProgress);
-      
-      if (!result.success && result.error) {
-        throw new Error(`LP optimization failed: ${result.error}`);
-      }
-      
+      // Single type with fallback
+      const accountsForType = accountType === 'customers'
+        ? filteredAccounts.filter(a => a.is_customer)
+        : filteredAccounts.filter(a => !a.is_customer);
+
+      const result = await runLPWithFallback(lpAccountType, accountsForType);
       allProposals = result.proposals;
       allWarnings = result.warnings;
       combinedMetrics = result.metrics;
+      usedFallback = result.usedFallback;
     }
     
     // Transform LP proposals to AssignmentResult format
@@ -1092,7 +1220,7 @@ export const useAssignmentEngine = (buildId?: string) => {
         proposedOwnerName: p.repName,
         proposedOwnerRegion: p.repRegion || undefined,
         assignmentReason: p.rationale,
-        ruleApplied: p.lockResult?.lockType || 'LP Optimization',
+        ruleApplied: extractPriorityCode(p.rationale),
         conflictRisk: p.totalScore < 0.3 ? 'MEDIUM' : 'LOW'
       })),
       conflicts: allProposals
@@ -1106,7 +1234,7 @@ export const useAssignmentEngine = (buildId?: string) => {
           proposedOwnerName: p.repName,
           proposedOwnerRegion: p.repRegion || undefined,
           assignmentReason: p.rationale,
-          ruleApplied: 'LP Optimization',
+          ruleApplied: extractPriorityCode(p.rationale),
           conflictRisk: 'MEDIUM' as const
         })),
       statistics: {
@@ -1121,18 +1249,27 @@ export const useAssignmentEngine = (buildId?: string) => {
       }
     };
     
-    // Show LP-specific toast
-    toast({
-      title: "LP Optimization Complete",
-      description: `Generated ${allProposals.length} assignments (${combinedMetrics?.continuity_rate.toFixed(0)}% continuity, ${combinedMetrics?.arr_variance_percent.toFixed(1)}% variance)`,
-    });
-    
-    // Show warnings if any
-    if (allWarnings.length > 0) {
-      console.warn(`[PureOptimization] Warnings:`, allWarnings);
+    // Show appropriate toast based on method used
+    if (usedFallback) {
+      toast({
+        title: "Assignments Generated (Waterfall Fallback)",
+        description: `Generated ${allProposals.length} assignments using waterfall logic (LP solver was unavailable)`,
+        variant: "default",
+      });
+    } else {
+      toast({
+        title: "LP Optimization Complete",
+        description: `Generated ${allProposals.length} assignments (${combinedMetrics?.continuity_rate.toFixed(0)}% continuity, ${combinedMetrics?.arr_variance_percent.toFixed(1)}% variance)`,
+      });
+    }
+
+    // Show warnings if any (excluding fallback warning which is already shown in toast)
+    const nonFallbackWarnings = allWarnings.filter(w => !w.includes('waterfall fallback'));
+    if (nonFallbackWarnings.length > 0) {
+      console.warn(`[PureOptimization] Warnings:`, nonFallbackWarnings);
       toast({
         title: "Optimization Warnings",
-        description: allWarnings.slice(0, 2).join('; '),
+        description: nonFallbackWarnings.slice(0, 2).join('; '),
         variant: "default",
       });
     }

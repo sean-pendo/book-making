@@ -10,6 +10,8 @@
  */
 
 import type { AggregatedAccount, EligibleRep, LPAssignmentProposal, AssignmentScores } from '../types';
+import type { PriorityConfig } from '@/config/priorityRegistry';
+import { getPositionLabel } from '../postprocessing/rationaleGenerator';
 
 export interface StrategicPoolResult {
   fixedAssignments: LPAssignmentProposal[];
@@ -23,7 +25,8 @@ export interface StrategicPoolResult {
  */
 export function assignStrategicPool(
   accounts: AggregatedAccount[],
-  strategicReps: EligibleRep[]
+  strategicReps: EligibleRep[],
+  priorityConfig?: PriorityConfig[]
 ): StrategicPoolResult {
   // Identify strategic accounts
   const strategicRepIds = new Set(strategicReps.map(r => r.rep_id));
@@ -95,7 +98,7 @@ export function assignStrategicPool(
       scores,
       totalScore: 1.0,
       lockResult: null,
-      rationale: `P0: Strategic Account → ${minRep.name} (strategic rep, ARR-balanced distribution)`,
+      rationale: `${getPositionLabel('manual_holdover', priorityConfig)}: Strategic Account → ${minRep.name} (strategic rep, ARR-balanced distribution)`,
       isStrategicPreAssignment: true,
       childIds: account.child_ids
     });

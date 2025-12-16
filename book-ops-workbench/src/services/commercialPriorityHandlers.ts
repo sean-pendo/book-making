@@ -7,7 +7,7 @@
  * - PE Firm protection
  */
 
-import { Account, SalesRep } from './priorityExecutor';
+import { Account, SalesRep } from './optimization/types';
 import { getAccountARR } from '@/_domain';
 
 /**

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HiGHS Options Threshold Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #00d9ff; }
+    .test-row {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin: 8px 0;
+      background: #16213e;
+      border-radius: 8px;
+      border-left: 4px solid #666;
+    }
+    .test-row.running { border-left-color: #ffc107; }
+    .test-row.passed { border-left-color: #4caf50; }
+    .test-row.failed { border-left-color: #f44336; }
+    .test-name { flex: 1; font-weight: 500; }
+    .test-vars { width: 120px; color: #888; font-size: 13px; }
+    .test-time { width: 100px; text-align: right; }
+    .test-status { width: 120px; text-align: right; font-weight: bold; }
+    .passed .test-status { color: #4caf50; }
+    .failed .test-status { color: #f44336; }
+    .running .test-status { color: #ffc107; }
+    button {
+      background: #00d9ff;
+      color: #1a1a2e;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 20px 0;
+    }
+    button:hover { background: #00b8d9; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    #log {
+      background: #0f0f1a;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .summary {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    .summary h2 { margin-top: 0; color: #00d9ff; }
+  </style>
+</head>
+<body>
+  <h1>🔬 HiGHS Options Threshold Test</h1>
+  <p>Finding the exact variable count where options start breaking.</p>
+  <p>Using same LP structure that worked in test-bigm-structure.html</p>
+  
+  <button id="runBtn" onclick="runTests()">Find Threshold</button>
+  
+  <div id="tests"></div>
+  
+  <div id="summary" class="summary" style="display:none;">
+    <h2>📊 Results Summary</h2>
+    <div id="summaryContent"></div>
+  </div>
+  
+  <h3>Console Log</h3>
+  <div id="log"></div>
+
+  <script src="https://lovasoa.github.io/highs-js/highs.js"></script>
+  
+  <script>
+    const log = (msg) => {
+      const el = document.getElementById('log');
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
+      console.log(msg);
+    };
+
+    // EXACT same LP builder from test-bigm-structure.html (which worked)
+    function buildBigMLP(numAccounts, numReps) {
+      const lines = [];
+      const binaries = [];
+      const slacks = [];
+      
+      const totalARR = numAccounts * 30000;
+      const targetARR = totalARR / numReps;
+      const variance = 0.10;
+      
+      lines.push('Maximize');
+      lines.push(' obj:');
+      
+      const objTerms = [];
+      
+      for (let a = 0; a < numAccounts; a++) {
+        for (let r = 0; r < numReps; r++) {
+          const varName = `x${a}_${r}`;
+          const score = (0.1 + ((a * 7 + r * 13) % 90) / 100).toFixed(4);
+          objTerms.push(`+ ${score} ${varName}`);
+          binaries.push(varName);
+        }
+      }
+      
+      const alphaPenalty = 0.001 * 0.5;
+      const betaPenalty = 0.01 * 0.5;
+      const bigMPenalty = 0.1 * 0.5;
+      
+      for (let r = 0; r < numReps; r++) {
+        const ao = `ao${r}`, au = `au${r}`;
+        const bo = `bo${r}`, bu = `bu${r}`;
+        const mo = `mo${r}`, mu = `mu${r}`;
+        
+        slacks.push(ao, au, bo, bu, mo, mu);
+        
+        objTerms.push(`- ${alphaPenalty.toFixed(6)} ${ao}`);
+        objTerms.push(`- ${alphaPenalty.toFixed(6)} ${au}`);
+        objTerms.push(`- ${betaPenalty.toFixed(6)} ${bo}`);
+        objTerms.push(`- ${betaPenalty.toFixed(6)} ${bu}`);
+        objTerms.push(`- ${bigMPenalty.toFixed(6)} ${mo}`);
+        objTerms.push(`- ${bigMPenalty.toFixed(6)} ${mu}`);
+      }
+      
+      let currentLine = '';
+      for (const term of objTerms) {
+        if (currentLine.length + term.length > 200) {
+          lines.push(' ' + currentLine);
+          currentLine = term;
+        } else {
+          currentLine += ' ' + term;
+        }
+      }
+      if (currentLine) lines.push(' ' + currentLine);
+      
+      lines.push('Subject To');
+      let cIdx = 0;
+      
+      // Assignment constraints
+      for (let a = 0; a < numAccounts; a++) {
+        const terms = [];
+        for (let r = 0; r < numReps; r++) {
+          terms.push(`+ 1 x${a}_${r}`);
+        }
+        lines.push(` c${cIdx++}: ${terms.join(' ')} = 1`);
+      }
+      
+      // Balance decomposition constraints (NORMALIZED)
+      for (let r = 0; r < numReps; r++) {
+        const terms = [];
+        for (let a = 0; a < numAccounts; a++) {
+          const arr = 10000 + (a * 1234) % 50000;
+          const normalizedCoef = (arr / targetARR).toFixed(6);
+          terms.push(`+ ${normalizedCoef} x${a}_${r}`);
+        }
+        
+        const ao = `ao${r}`, au = `au${r}`;
+        const bo = `bo${r}`, bu = `bu${r}`;
+        const mo = `mo${r}`, mu = `mu${r}`;
+        
+        lines.push(` c${cIdx++}: ${terms.join(' ')} - 1 ${ao} + 1 ${au} - 1 ${bo} + 1 ${bu} - 1 ${mo} + 1 ${mu} = 1`);
+      }
+      
+      // Bounds
+      lines.push('Bounds');
+      
+      for (let r = 0; r < numReps; r++) {
+        lines.push(` 0 <= ao${r} <= ${variance}`);
+        lines.push(` 0 <= au${r} <= ${variance}`);
+        lines.push(` 0 <= bo${r} <= 0.5`);
+        lines.push(` 0 <= bu${r} <= 0.5`);
+        lines.push(` mo${r} >= 0`);
+        lines.push(` mu${r} >= 0`);
+      }
+      
+      for (const v of binaries) {
+        lines.push(` 0 <= ${v} <= 1`);
+      }
+      
+      lines.push('Binary');
+      for (let i = 0; i < binaries.length; i += 50) {
+        lines.push(' ' + binaries.slice(i, i + 50).join(' '));
+      }
+      
+      lines.push('End');
+      
+      return lines.join('\n');
+    }
+
+    // Test configurations - find where options break
+    const testCases = [
+      { name: '5K vars + options', accounts: 100, reps: 50, withOptions: true },
+      { name: '10K vars + options', accounts: 200, reps: 50, withOptions: true },
+      { name: '15K vars + options', accounts: 300, reps: 50, withOptions: true },
+      { name: '18K vars + options', accounts: 360, reps: 50, withOptions: true },
+      { name: '20K vars + options', accounts: 400, reps: 50, withOptions: true },
+      { name: '20K vars NO opts', accounts: 400, reps: 50, withOptions: false },
+      { name: '21K vars + options', accounts: 432, reps: 48, withOptions: true },
+      { name: '21K vars NO opts', accounts: 432, reps: 48, withOptions: false },
+      { name: '25K vars + options', accounts: 500, reps: 50, withOptions: true },
+      { name: '25K vars NO opts', accounts: 500, reps: 50, withOptions: false },
+    ];
+
+    let results = [];
+    let highs = null;
+
+    function renderTests() {
+      const container = document.getElementById('tests');
+      container.innerHTML = testCases.map((tc, i) => {
+        const vars = tc.accounts * tc.reps;
+        const result = results[i];
+        const statusClass = result ? (result.passed ? 'passed' : 'failed') : '';
+        const status = result ? (result.passed ? '✓ PASS' : '✗ FAIL') : 'pending';
+        const time = result ? (result.time ? `${result.time}ms` : result.error?.substring(0, 15) || 'error') : '-';
+        
+        return `
+          <div class="test-row ${statusClass}" id="test-${i}">
+            <span class="test-name">${tc.name}</span>
+            <span class="test-vars">${vars.toLocaleString()} vars</span>
+            <span class="test-time">${time}</span>
+            <span class="test-status">${status}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function updateTest(index, status, time = null, error = null) {
+      results[index] = { passed: status === 'passed', time, error };
+      renderTests();
+    }
+
+    async function runTests() {
+      const btn = document.getElementById('runBtn');
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      
+      results = [];
+      renderTests();
+      document.getElementById('summary').style.display = 'none';
+      document.getElementById('log').textContent = '';
+      
+      log('='.repeat(60));
+      log('HiGHS Options Threshold Test');
+      log('Finding where options start breaking');
+      log('='.repeat(60));
+      log('');
+      
+      log('Loading HiGHS WASM...');
+      try {
+        highs = await Module();
+        log('✓ HiGHS loaded successfully');
+      } catch (err) {
+        log('✗ Failed to load HiGHS: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Find Threshold';
+        return;
+      }
+      
+      for (let i = 0; i < testCases.length; i++) {
+        const tc = testCases[i];
+        const vars = tc.accounts * tc.reps;
+        
+        log(`\n[${tc.name}] ${vars.toLocaleString()} vars`);
+        updateTest(i, 'running');
+        
+        await new Promise(r => setTimeout(r, 50));
+        
+        try {
+          const lp = buildBigMLP(tc.accounts, tc.reps);
+          log(`  LP size: ${(lp.length / 1024).toFixed(1)} KB`);
+          
+          const startTime = performance.now();
+          let solution;
+          
+          if (tc.withOptions) {
+            solution = highs.solve(lp, {
+              presolve: 'on',
+              time_limit: 60,
+              mip_rel_gap: 0.01,
+              output_flag: false,
+            });
+          } else {
+            solution = highs.solve(lp);
+          }
+          
+          const solveTime = Math.round(performance.now() - startTime);
+          
+          if (solution.Status === 'Optimal' || solution.Status === 'Feasible') {
+            log(`  ✓ ${solution.Status} in ${solveTime}ms`);
+            updateTest(i, 'passed', solveTime);
+          } else {
+            log(`  ✗ Status: ${solution.Status}`);
+            updateTest(i, 'failed', null, solution.Status);
+          }
+        } catch (err) {
+          const errMsg = err.message || err.toString();
+          log(`  ✗ CRASHED: ${errMsg.substring(0, 80)}`);
+          updateTest(i, 'failed', null, errMsg.substring(0, 30));
+          
+          try {
+            log('  Reloading HiGHS...');
+            highs = await Module();
+            log('  ✓ HiGHS reloaded');
+          } catch (reloadErr) {
+            log('  ✗ Failed to reload HiGHS');
+          }
+        }
+      }
+      
+      // Summary
+      log('\n' + '='.repeat(60));
+      log('SUMMARY');
+      log('='.repeat(60));
+      
+      // Find threshold
+      let lastPassedWithOpts = 0;
+      let firstFailedWithOpts = 0;
+      
+      for (let i = 0; i < testCases.length; i++) {
+        const tc = testCases[i];
+        if (tc.withOptions && results[i]?.passed) {
+          lastPassedWithOpts = tc.accounts * tc.reps;
+        }
+        if (tc.withOptions && !results[i]?.passed && firstFailedWithOpts === 0) {
+          firstFailedWithOpts = tc.accounts * tc.reps;
+        }
+      }
+      
+      log(`\nLast PASSED with options: ${lastPassedWithOpts.toLocaleString()} vars`);
+      log(`First FAILED with options: ${firstFailedWithOpts.toLocaleString()} vars`);
+      log(`\nThreshold is between ${lastPassedWithOpts.toLocaleString()} and ${firstFailedWithOpts.toLocaleString()} vars`);
+      
+      const summaryEl = document.getElementById('summaryContent');
+      summaryEl.innerHTML = `
+        <p><strong>Last PASSED with options:</strong> ${lastPassedWithOpts.toLocaleString()} vars</p>
+        <p><strong>First FAILED with options:</strong> ${firstFailedWithOpts.toLocaleString()} vars</p>
+        <p><br><strong>Threshold:</strong> Between ${lastPassedWithOpts.toLocaleString()} and ${firstFailedWithOpts.toLocaleString()} vars</p>
+        <p><br><strong>Recommendation:</strong> Use options for problems < ${lastPassedWithOpts.toLocaleString()} vars, no options for larger.</p>
+      `;
+      document.getElementById('summary').style.display = 'block';
+      
+      btn.disabled = false;
+      btn.textContent = 'Find Threshold Again';
+    }
+
+    renderTests();
+  </script>
+</body>
+</html>
+

@@ -771,33 +771,47 @@ export class BatchImportService {
   }
 
   /**
-   * Sync is_customer field based on hierarchy_bookings_arr_converted
-   * Customer = parent account with hierarchy_bookings_arr_converted > 0
-   * Prospect = parent account with hierarchy_bookings_arr_converted <= 0 or NULL
+   * Sync is_customer field for parent accounts.
+   * 
+   * SSOT: A parent account is a customer if:
+   * 1. hierarchy_bookings_arr_converted > 0 (has direct ARR), OR
+   * 2. has_customer_hierarchy = true (has customer children)
+   * 
+   * @see _domain/calculations.ts isParentCustomer()
+   * @see _domain/MASTER_LOGIC.mdc §3.1.1
    */
   static async syncIsCustomerField(buildId: string): Promise<void> {
     console.log(`🔄 Syncing is_customer field for build ${buildId}...`);
 
     try {
-      // Set is_customer = true for accounts with hierarchy ARR > 0
-      const { error: updateError } = await supabase
+      // Step 1: Set ALL parent accounts to is_customer = false first (clean slate)
+      const { error: resetError } = await supabase
+        .from('accounts')
+        .update({ is_customer: false })
+        .eq('build_id', buildId)
+        .eq('is_parent', true);
+
+      if (resetError) throw resetError;
+
+      // Step 2: Set is_customer = true for accounts with hierarchy ARR > 0
+      const { error: arrError } = await supabase
         .from('accounts')
         .update({ is_customer: true })
         .eq('build_id', buildId)
         .eq('is_parent', true)
         .gt('hierarchy_bookings_arr_converted', 0);
 
-      if (updateError) throw updateError;
+      if (arrError) throw arrError;
 
-      // Set is_customer = false for accounts without hierarchy ARR (NULL or <= 0)
-      const { error: updateError2 } = await supabase
+      // Step 3: Set is_customer = true for accounts with customer children (even if no direct ARR)
+      const { error: hierarchyError } = await supabase
         .from('accounts')
-        .update({ is_customer: false })
+        .update({ is_customer: true })
         .eq('build_id', buildId)
         .eq('is_parent', true)
-        .or('hierarchy_bookings_arr_converted.is.null,hierarchy_bookings_arr_converted.lte.0');
+        .eq('has_customer_hierarchy', true);
 
-      if (updateError2) throw updateError2;
+      if (hierarchyError) throw hierarchyError;
 
       // Log results
       const { count: customerCount } = await supabase
@@ -822,12 +836,16 @@ export class BatchImportService {
   }
 
   /**
-   * Sync renewal_quarter on PARENT accounts from the earliest renewal_event_date 
-   * across the parent AND all its children (rollup behavior).
-   * Format: "Q4-FY27" (fiscal year starts Feb 1)
+   * Sync renewal fields from opportunities to accounts.
+   * 
+   * - renewal_quarter: Set on PARENT accounts using rolled-up earliest date from hierarchy
+   *   Format: "Q4-FY27" (fiscal year starts Feb 1)
+   * - renewal_date: Set on ALL accounts (parent and child) with their individual earliest date
+   * 
+   * Opportunity data always overwrites any CSV-imported values for renewal_date.
    */
   static async syncRenewalQuarterFromOpportunities(buildId: string): Promise<void> {
-    console.log(`🔄 Syncing renewal_quarter from opportunities for build ${buildId} (with hierarchy rollup)...`);
+    console.log(`🔄 Syncing renewal fields from opportunities for build ${buildId}...`);
 
     try {
       // Import fiscal year calculation function
@@ -843,7 +861,7 @@ export class BatchImportService {
       if (oppsError) throw oppsError;
 
       if (!opportunities || opportunities.length === 0) {
-        console.log('ℹ️ No opportunities with renewal_event_date found, skipping renewal_quarter sync');
+        console.log('ℹ️ No opportunities with renewal_event_date found, skipping renewal sync');
         return;
       }
 
@@ -856,7 +874,7 @@ export class BatchImportService {
       if (accountsError) throw accountsError;
 
       if (!accounts || accounts.length === 0) {
-        console.log('ℹ️ No accounts found, skipping renewal_quarter sync');
+        console.log('ℹ️ No accounts found, skipping renewal sync');
         return;
       }
 
@@ -872,8 +890,11 @@ export class BatchImportService {
         accountToParentMap.set(accountId, parentId);
       }
 
-      // Roll up: Find the earliest renewal_event_date per PARENT account
+      // Build BOTH maps in a single loop over opportunities:
+      // 1. earliestRenewalByParent - for renewal_quarter (rolled up to parent)
+      // 2. earliestRenewalByAccount - for renewal_date (individual per account)
       const earliestRenewalByParent = new Map<string, string>();
+      const earliestRenewalByAccount = new Map<string, string>();
       
       for (const opp of opportunities) {
         const accountId = opp.sfdc_account_id;
@@ -881,19 +902,26 @@ export class BatchImportService {
         
         if (!renewalDate) continue;
         
-        // Find the parent this opportunity rolls up to
-        const parentId = accountToParentMap.get(accountId) || accountId;
+        // 1. Individual account renewal_date (for stability check)
+        const currentAccountEarliest = earliestRenewalByAccount.get(accountId);
+        if (!currentAccountEarliest || new Date(renewalDate) < new Date(currentAccountEarliest)) {
+          earliestRenewalByAccount.set(accountId, renewalDate);
+        }
         
-        const currentEarliest = earliestRenewalByParent.get(parentId);
-        if (!currentEarliest || new Date(renewalDate) < new Date(currentEarliest)) {
+        // 2. Parent rollup for renewal_quarter (for reporting)
+        const parentId = accountToParentMap.get(accountId) || accountId;
+        const currentParentEarliest = earliestRenewalByParent.get(parentId);
+        if (!currentParentEarliest || new Date(renewalDate) < new Date(currentParentEarliest)) {
           earliestRenewalByParent.set(parentId, renewalDate);
         }
       }
 
-      console.log(`📊 Found renewal dates for ${earliestRenewalByParent.size} parent accounts (rolled up from hierarchy)`);
+      console.log(`📊 Found renewal dates for ${earliestRenewalByParent.size} parent accounts (rollup) and ${earliestRenewalByAccount.size} individual accounts`);
 
       // Update PARENT accounts with their rolled-up renewal_quarter
-      let updatedCount = 0;
+      let quarterUpdatedCount = 0;
+      const quarterFailures: string[] = [];
+      
       for (const [parentId, renewalDate] of earliestRenewalByParent.entries()) {
         const quarterLabel = getFiscalQuarterLabel(renewalDate);
         
@@ -905,28 +933,55 @@ export class BatchImportService {
             .eq('sfdc_account_id', parentId);
 
           if (updateError) {
+            quarterFailures.push(parentId);
             console.warn(`⚠️ Failed to update renewal_quarter for parent ${parentId}:`, updateError);
           } else {
-            updatedCount++;
-          }
-
-          // Also sync renewal_date if account doesn't have one (rollup from opportunities)
-          const { error: dateUpdateError } = await supabase
-            .from('accounts')
-            .update({ renewal_date: renewalDate.toISOString().split('T')[0] })
-            .eq('build_id', buildId)
-            .eq('sfdc_account_id', parentId)
-            .is('renewal_date', null);  // Only if not already set from CSV
-
-          if (dateUpdateError) {
-            console.warn(`⚠️ Failed to update renewal_date for ${parentId}:`, dateUpdateError);
+            quarterUpdatedCount++;
           }
         }
       }
 
-      console.log(`✅ renewal_quarter sync completed: Updated ${updatedCount} parent accounts (with renewal_date rollup)`);
+      if (quarterFailures.length > 0) {
+        console.error(`❌ Failed to update renewal_quarter for ${quarterFailures.length} accounts`);
+      }
+      console.log(`✅ renewal_quarter sync completed: Updated ${quarterUpdatedCount} parent accounts`);
+
+      // Batch update renewal_date for ALL accounts (parent and child)
+      // Opportunity data always overwrites any CSV-imported values
+      const BATCH_SIZE = 500;
+      const entries = Array.from(earliestRenewalByAccount.entries());
+      let renewalDateUpdates = 0;
+      const dateFailures: string[] = [];
+
+      for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+        const batch = entries.slice(i, i + BATCH_SIZE);
+        
+        const results = await Promise.all(batch.map(([accountId, renewalDate]) =>
+          supabase
+            .from('accounts')
+            .update({ renewal_date: renewalDate })  // renewalDate is already a string
+            .eq('build_id', buildId)
+            .eq('sfdc_account_id', accountId)
+            .then(({ error }) => ({ accountId, error }))
+        ));
+        
+        for (const { accountId, error } of results) {
+          if (error) {
+            dateFailures.push(accountId);
+            console.warn(`⚠️ Failed to update renewal_date for ${accountId}:`, error);
+          } else {
+            renewalDateUpdates++;
+          }
+        }
+      }
+
+      if (dateFailures.length > 0) {
+        console.error(`❌ Failed to update renewal_date for ${dateFailures.length} accounts`);
+      }
+      console.log(`✅ renewal_date sync completed: Updated ${renewalDateUpdates} accounts`);
+
     } catch (error) {
-      console.error('❌ renewal_quarter sync failed:', error);
+      console.error('❌ renewal sync failed:', error);
       throw error;
     }
   }

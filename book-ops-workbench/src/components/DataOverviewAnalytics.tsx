@@ -36,7 +36,9 @@ const AnalyticsSkeleton: React.FC = () => (
 );
 
 export const DataOverviewAnalytics: React.FC<DataOverviewAnalyticsProps> = ({ buildId }) => {
-  const { data: metrics, isLoading, error } = useAnalyticsMetrics(buildId);
+  // Pass useProposed=false to show original imported data (not proposed assignments)
+  // This excludes Sales Tools bucket which is a balancing concept, not import data
+  const { data: metrics, isLoading, error } = useAnalyticsMetrics(buildId, false);
 
   if (isLoading) {
     return <AnalyticsSkeleton />;
@@ -73,7 +75,7 @@ export const DataOverviewAnalytics: React.FC<DataOverviewAnalyticsProps> = ({ bu
           Balance Analytics
         </h3>
         <p className="text-sm text-muted-foreground">
-          Current state analysis based on original owner assignments
+          Current state analysis based on imported data (original owner assignments)
         </p>
       </div>
 

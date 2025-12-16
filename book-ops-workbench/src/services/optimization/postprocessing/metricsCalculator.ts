@@ -177,20 +177,27 @@ export function calculateMetrics(
   const sibling_geo_match_rate = proposals.length > 0 ? ((exactGeoCount + siblingGeoCount) / proposals.length) * 100 : 0;
   const cross_region_rate = proposals.length > 0 ? (crossRegionCount / proposals.length) * 100 : 0;
   
-  // Team alignment metrics
+  // Team alignment metrics (exclude N/A from calculations)
   let exactTierCount = 0;
   let oneLevelCount = 0;
-  
+  let tierDataCount = 0;  // Only count proposals with tier data
+
   for (const proposal of proposals) {
+    // Skip N/A (null) team alignment - missing data shouldn't affect metrics
+    if (proposal.scores.teamAlignment === null) {
+      continue;
+    }
+    tierDataCount++;
     if (proposal.scores.teamAlignment >= 1.0) {
       exactTierCount++;
     } else if (proposal.scores.teamAlignment >= 0.6) {
       oneLevelCount++;
     }
   }
-  
-  const exact_tier_match_rate = proposals.length > 0 ? (exactTierCount / proposals.length) * 100 : 0;
-  const one_level_mismatch_rate = proposals.length > 0 ? (oneLevelCount / proposals.length) * 100 : 0;
+
+  // Calculate rates only from proposals with tier data
+  const exact_tier_match_rate = tierDataCount > 0 ? (exactTierCount / tierDataCount) * 100 : 0;
+  const one_level_mismatch_rate = tierDataCount > 0 ? (oneLevelCount / tierDataCount) * 100 : 0;
   
   // Feasibility metrics
   const feasibility_slack_total = repLoads.reduce((sum, r) => sum + r.feasibilitySlack, 0);

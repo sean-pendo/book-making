@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exact Production LP Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1200px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #00d9ff; }
+    .test-row {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin: 8px 0;
+      background: #16213e;
+      border-radius: 8px;
+      border-left: 4px solid #666;
+    }
+    .test-row.passed { border-left-color: #4caf50; }
+    .test-row.failed { border-left-color: #f44336; }
+    .test-name { flex: 1; font-weight: 500; }
+    .test-time { width: 100px; text-align: right; }
+    .test-status { width: 120px; text-align: right; font-weight: bold; }
+    .passed .test-status { color: #4caf50; }
+    .failed .test-status { color: #f44336; }
+    button {
+      background: #00d9ff;
+      color: #1a1a2e;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 20px 0;
+    }
+    button:hover { background: #00b8d9; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    #log {
+      background: #0f0f1a;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 11px;
+      max-height: 500px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .lp-preview {
+      background: #0f0f1a;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre;
+      margin: 10px 0;
+    }
+    .summary {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    .summary h2 { margin-top: 0; color: #00d9ff; }
+  </style>
+</head>
+<body>
+  <h1>🔬 Exact Production LP Format Test</h1>
+  <p>Replicating the EXACT format from <code>problemToLPFormat()</code> in highsWrapper.ts</p>
+  
+  <button id="runBtn" onclick="runTests()">Run Test</button>
+  
+  <div id="tests"></div>
+  
+  <h3>LP Preview (first 100 lines)</h3>
+  <div id="lpPreview" class="lp-preview"></div>
+  
+  <h3>Console Log</h3>
+  <div id="log"></div>
+
+  <script src="https://lovasoa.github.io/highs-js/highs.js"></script>
+  
+  <script>
+    const log = (msg) => {
+      const el = document.getElementById('log');
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
+      console.log(msg);
+    };
+
+    /**
+     * EXACT replication of problemToLPFormat from highsWrapper.ts
+     * Using toFixed(6) for all coefficients, compact variable names, etc.
+     */
+    function buildProductionStyleLP(numAccounts, numReps) {
+      const MAX_LINE_LENGTH = 200;
+      const lines = [];
+      
+      // Simulate production data
+      const totalARR = numAccounts * 30000;
+      const targetARR = totalARR / numReps;
+      const variance = 0.10;
+      
+      // Build account and rep index maps (like production)
+      const accountIdxMap = new Map();
+      const repIdxMap = new Map();
+      for (let a = 0; a < numAccounts; a++) {
+        accountIdxMap.set(`acc${a}`, a);
+      }
+      for (let r = 0; r < numReps; r++) {
+        repIdxMap.set(`rep${r}`, r);
+      }
+      
+      // Compact variable naming (like production: x0_0, x0_1, etc.)
+      const getAssignmentVarName = (aIdx, rIdx) => `x${aIdx}_${rIdx}`;
+      
+      // Objective function
+      lines.push('Maximize');
+      lines.push(' obj:');
+      
+      let currentLine = '';
+      const binaries = [];
+      
+      // Assignment variables with toFixed(6) coefficients
+      for (let a = 0; a < numAccounts; a++) {
+        for (let r = 0; r < numReps; r++) {
+          const varName = getAssignmentVarName(a, r);
+          binaries.push(varName);
+          
+          // Simulate production coefficient (0.1-1.0 range)
+          const coef = 0.1 + ((a * 7 + r * 13) % 90) / 100;
+          
+          if (Math.abs(coef) > 1e-10) {
+            const term = `${coef >= 0 ? '+' : '-'} ${Math.abs(coef).toFixed(6)} ${varName}`;
+            if (currentLine.length + term.length > MAX_LINE_LENGTH) {
+              lines.push(' ' + currentLine);
+              currentLine = term;
+            } else {
+              currentLine += ' ' + term;
+            }
+          }
+        }
+      }
+      
+      // Slack variable naming (like production: so0, su0, sb0, etc.)
+      let slackIdx = 0;
+      const slackNameMap = new Map();
+      const slackBounds = [];
+      
+      // Add Big-M penalty slacks for each rep (6 slacks per rep: alpha over/under, beta over/under, bigM over/under)
+      const alphaPenalty = 0.001 * 0.5;  // ~0.0005
+      const betaPenalty = 0.01 * 0.5;    // ~0.005
+      const bigMPenalty = 0.1 * 0.5;     // ~0.05
+      
+      for (let r = 0; r < numReps; r++) {
+        // Alpha slacks (so/su for over/under)
+        const alphaOver = `so${slackIdx}`;
+        const alphaUnder = `su${slackIdx}`;
+        slackNameMap.set(`arr_alpha_over_rep${r}`, alphaOver);
+        slackNameMap.set(`arr_alpha_under_rep${r}`, alphaUnder);
+        slackBounds.push({ varName: alphaOver, lower: 0, upper: variance });
+        slackBounds.push({ varName: alphaUnder, lower: 0, upper: variance });
+        slackIdx++;
+        
+        // Beta slacks
+        const betaOver = `sb${slackIdx}`;
+        const betaUnder = `sb${slackIdx + 1}`;
+        slackNameMap.set(`arr_beta_over_rep${r}`, betaOver);
+        slackNameMap.set(`arr_beta_under_rep${r}`, betaUnder);
+        slackBounds.push({ varName: betaOver, lower: 0, upper: 0.5 });
+        slackBounds.push({ varName: betaUnder, lower: 0, upper: 0.5 });
+        slackIdx += 2;
+        
+        // BigM slacks
+        const bigMOver = `sb${slackIdx}`;
+        const bigMUnder = `sb${slackIdx + 1}`;
+        slackNameMap.set(`arr_bigM_over_rep${r}`, bigMOver);
+        slackNameMap.set(`arr_bigM_under_rep${r}`, bigMUnder);
+        slackBounds.push({ varName: bigMOver, lower: 0, upper: null });
+        slackBounds.push({ varName: bigMUnder, lower: 0, upper: null });
+        slackIdx += 2;
+        
+        // Add penalty terms to objective (negative because we maximize)
+        const penalties = [
+          { name: alphaOver, coef: -alphaPenalty },
+          { name: alphaUnder, coef: -alphaPenalty },
+          { name: betaOver, coef: -betaPenalty },
+          { name: betaUnder, coef: -betaPenalty },
+          { name: bigMOver, coef: -bigMPenalty },
+          { name: bigMUnder, coef: -bigMPenalty },
+        ];
+        
+        for (const p of penalties) {
+          if (Math.abs(p.coef) > 1e-10) {
+            const term = `${p.coef >= 0 ? '+' : '-'} ${Math.abs(p.coef).toFixed(6)} ${p.name}`;
+            if (currentLine.length + term.length > MAX_LINE_LENGTH) {
+              lines.push(' ' + currentLine);
+              currentLine = term;
+            } else {
+              currentLine += ' ' + term;
+            }
+          }
+        }
+      }
+      
+      // Flush remaining objective terms
+      if (currentLine.trim()) {
+        lines.push(' ' + currentLine);
+      }
+      
+      // Constraints
+      lines.push('Subject To');
+      let constraintCount = 0;
+      
+      // Assignment constraints (each account to exactly one rep)
+      for (let a = 0; a < numAccounts; a++) {
+        let constraintLine = ` c${constraintCount++}:`;
+        let lineLength = constraintLine.length;
+        
+        for (let r = 0; r < numReps; r++) {
+          const varName = getAssignmentVarName(a, r);
+          const term = ` + ${(1).toFixed(6)} ${varName}`;
+          
+          if (lineLength + term.length > MAX_LINE_LENGTH) {
+            lines.push(constraintLine);
+            constraintLine = ' ' + term;
+            lineLength = constraintLine.length;
+          } else {
+            constraintLine += term;
+            lineLength += term.length;
+          }
+        }
+        
+        constraintLine += ` = ${(1).toFixed(6)}`;
+        lines.push(constraintLine);
+      }
+      
+      // Balance decomposition constraints with Big-M slacks
+      for (let r = 0; r < numReps; r++) {
+        let constraintLine = ` c${constraintCount++}:`;
+        let lineLength = constraintLine.length;
+        
+        // Add assignment variable terms (normalized by target)
+        for (let a = 0; a < numAccounts; a++) {
+          const varName = getAssignmentVarName(a, r);
+          const arr = 10000 + (a * 1234) % 50000;
+          const normalizedCoef = arr / targetARR;
+          
+          if (Math.abs(normalizedCoef) > 1e-10) {
+            const term = ` + ${normalizedCoef.toFixed(6)} ${varName}`;
+            
+            if (lineLength + term.length > MAX_LINE_LENGTH) {
+              lines.push(constraintLine);
+              constraintLine = ' ' + term;
+              lineLength = constraintLine.length;
+            } else {
+              constraintLine += term;
+              lineLength += term.length;
+            }
+          }
+        }
+        
+        // Add slack terms: -alphaOver +alphaUnder -betaOver +betaUnder -bigMOver +bigMUnder
+        const slackTerms = [
+          { name: slackNameMap.get(`arr_alpha_over_rep${r}`), coef: -1 },
+          { name: slackNameMap.get(`arr_alpha_under_rep${r}`), coef: 1 },
+          { name: slackNameMap.get(`arr_beta_over_rep${r}`), coef: -1 },
+          { name: slackNameMap.get(`arr_beta_under_rep${r}`), coef: 1 },
+          { name: slackNameMap.get(`arr_bigM_over_rep${r}`), coef: -1 },
+          { name: slackNameMap.get(`arr_bigM_under_rep${r}`), coef: 1 },
+        ];
+        
+        for (const s of slackTerms) {
+          const term = ` ${s.coef >= 0 ? '+' : '-'} ${Math.abs(s.coef).toFixed(6)} ${s.name}`;
+          if (lineLength + term.length > MAX_LINE_LENGTH) {
+            lines.push(constraintLine);
+            constraintLine = ' ' + term;
+            lineLength = constraintLine.length;
+          } else {
+            constraintLine += term;
+            lineLength += term.length;
+          }
+        }
+        
+        constraintLine += ` = ${(1).toFixed(6)}`;
+        lines.push(constraintLine);
+      }
+      
+      // Bounds
+      lines.push('Bounds');
+      
+      // Slack bounds
+      for (const bound of slackBounds) {
+        if (bound.upper !== null) {
+          lines.push(` ${bound.lower} <= ${bound.varName} <= ${bound.upper}`);
+        } else {
+          lines.push(` ${bound.varName} >= ${bound.lower}`);
+        }
+      }
+      
+      // Binary variable bounds
+      for (const v of binaries) {
+        lines.push(` 0 <= ${v} <= 1`);
+      }
+      
+      // Binary section
+      lines.push('Binary');
+      // Production splits binaries across multiple lines
+      for (let i = 0; i < binaries.length; i += 50) {
+        lines.push(' ' + binaries.slice(i, i + 50).join(' '));
+      }
+      
+      lines.push('End');
+      
+      return {
+        lp: lines.join('\n'),
+        numBinaryVars: binaries.length,
+        numSlackVars: slackBounds.length,
+        numConstraints: constraintCount
+      };
+    }
+
+    const testCases = [
+      { name: 'Production-style LP + options (20K)', accounts: 432, reps: 48, withOptions: true },
+      { name: 'Production-style LP NO options (20K)', accounts: 432, reps: 48, withOptions: false },
+    ];
+
+    let results = [];
+    let highs = null;
+    let lastLP = '';
+
+    function renderTests() {
+      const container = document.getElementById('tests');
+      container.innerHTML = testCases.map((tc, i) => {
+        const vars = tc.accounts * tc.reps;
+        const result = results[i];
+        const statusClass = result ? (result.passed ? 'passed' : 'failed') : '';
+        const status = result ? (result.passed ? '✓ PASS' : '✗ FAIL') : 'pending';
+        const time = result ? (result.time ? `${result.time}ms` : result.error?.substring(0, 20) || 'error') : '-';
+        
+        return `
+          <div class="test-row ${statusClass}" id="test-${i}">
+            <span class="test-name">${tc.name}</span>
+            <span class="test-time">${time}</span>
+            <span class="test-status">${status}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function runTests() {
+      const btn = document.getElementById('runBtn');
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      
+      results = [];
+      renderTests();
+      document.getElementById('log').textContent = '';
+      
+      log('Loading HiGHS...');
+      highs = await Module();
+      log('✓ HiGHS loaded\n');
+      
+      for (let i = 0; i < testCases.length; i++) {
+        const tc = testCases[i];
+        log(`[${tc.name}]`);
+        
+        await new Promise(r => setTimeout(r, 50));
+        
+        try {
+          const { lp, numBinaryVars, numSlackVars, numConstraints } = buildProductionStyleLP(tc.accounts, tc.reps);
+          lastLP = lp;
+          
+          log(`  Binary vars: ${numBinaryVars}, Slack vars: ${numSlackVars}, Constraints: ${numConstraints}`);
+          log(`  LP size: ${(lp.length / 1024).toFixed(1)} KB, ${lp.split('\n').length} lines`);
+          
+          // Show LP preview
+          document.getElementById('lpPreview').textContent = lp.split('\n').slice(0, 100).join('\n') + '\n... (truncated)';
+          
+          const startTime = performance.now();
+          let solution;
+          
+          if (tc.withOptions) {
+            log(`  Solving WITH options: {presolve:'on', time_limit:60, mip_rel_gap:0.01}`);
+            solution = highs.solve(lp, {
+              presolve: 'on',
+              time_limit: 60,
+              mip_rel_gap: 0.01,
+            });
+          } else {
+            log(`  Solving WITHOUT options`);
+            solution = highs.solve(lp);
+          }
+          
+          const solveTime = Math.round(performance.now() - startTime);
+          
+          if (solution.Status === 'Optimal' || solution.Status === 'Feasible') {
+            log(`  ✓ ${solution.Status} in ${solveTime}ms (obj: ${solution.ObjectiveValue?.toFixed(2)})\n`);
+            results[i] = { passed: true, time: solveTime };
+          } else {
+            log(`  ✗ Status: ${solution.Status}\n`);
+            results[i] = { passed: false, error: solution.Status };
+          }
+        } catch (err) {
+          const errMsg = err.message || err.toString();
+          log(`  ✗ CRASHED: ${errMsg}\n`);
+          results[i] = { passed: false, error: errMsg.substring(0, 30) };
+          
+          highs = await Module();
+          log('  (HiGHS reloaded)\n');
+        }
+        
+        renderTests();
+      }
+      
+      btn.disabled = false;
+      btn.textContent = 'Run Test Again';
+    }
+
+    renderTests();
+  </script>
+</body>
+</html>
+

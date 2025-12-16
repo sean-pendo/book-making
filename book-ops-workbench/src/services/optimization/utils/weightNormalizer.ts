@@ -1,11 +1,16 @@
 /**
  * Weight Normalizer
- * 
+ *
  * Ensures objective weights sum to 1.0 (100%).
  * Handles disabled objectives by redistributing their weight.
+ *
+ * NEW: Derives weights from user's priority configuration positions.
+ * @see MASTER_LOGIC.mdc §10.2.1
  */
 
 import type { LPObjectivesConfig, NormalizedWeights } from '../types';
+import type { PriorityConfig } from '@/config/priorityRegistry';
+import { calculatePriorityWeight } from '@/_domain';
 
 /**
  * Normalize objective weights to sum to 1.0
@@ -131,4 +136,70 @@ export function areWeightsNormalized(weights: NormalizedWeights, tolerance = 0.0
  */
 export function formatWeights(weights: NormalizedWeights): string {
   return `C: ${(weights.wC * 100).toFixed(0)}%, G: ${(weights.wG * 100).toFixed(0)}%, T: ${(weights.wT * 100).toFixed(0)}%`;
+}
+
+/**
+ * Derive LP objective weights from user's priority configuration positions.
+ *
+ * This bridges the user's priority order (P0, P1, P2...) to the LP solver's
+ * objective weights. Lower position numbers = higher priority = higher weight.
+ *
+ * **Formula:**
+ * - `raw_weight = 1 / (position + 1)` — positions are 0-indexed
+ * - `geo_and_continuity` contributes 50% of its weight to both geography and continuity
+ * - Normalize: `final_weight = raw_weight / sum(all_raw_weights)`
+ *
+ * @param priorityConfig - User's priority configuration from assignment_configuration
+ * @returns Normalized weights (wC, wG, wT) that sum to 1.0
+ * @see MASTER_LOGIC.mdc §10.2.1
+ */
+export function deriveWeightsFromPriorityConfig(
+  priorityConfig: PriorityConfig[]
+): NormalizedWeights {
+  const getPositionWeight = (id: string): number => {
+    const p = priorityConfig.find(c => c.id === id && c.enabled);
+    // calculatePriorityWeight expects 1-indexed, positions are 0-indexed
+    // Position 0 (P0) → 1/1 = 1.0, Position 5 (P5) → 1/6 = 0.17
+    return p !== undefined && p.position !== undefined
+      ? calculatePriorityWeight(p.position + 1)
+      : 0;
+  };
+
+  // geo_and_continuity contributes 50% to both geo and continuity
+  // This allows a single priority to boost both factors proportionally
+  const geoAndCont = getPositionWeight('geo_and_continuity');
+  const rawG = getPositionWeight('geography') + geoAndCont * 0.5;
+  const rawC = getPositionWeight('continuity') + geoAndCont * 0.5;
+  const rawT = getPositionWeight('team_alignment');
+
+  const total = rawG + rawC + rawT;
+  if (total === 0) {
+    // Fallback to defaults if no LP-relevant priorities are enabled
+    console.log('[WeightNormalizer] No LP priorities enabled, using defaults');
+    return { wC: 0.35, wG: 0.35, wT: 0.30 };
+  }
+
+  // Ensure minimum weights to prevent degenerate LP problems
+  // When only one factor is enabled, give small weights to others
+  const MIN_WEIGHT = 0.05;
+  let wC = rawC / total;
+  let wG = rawG / total;
+  let wT = rawT / total;
+
+  // If any weight is 0, set it to minimum and re-normalize
+  const needsMinimum = wC === 0 || wG === 0 || wT === 0;
+  if (needsMinimum) {
+    wC = Math.max(wC, MIN_WEIGHT);
+    wG = Math.max(wG, MIN_WEIGHT);
+    wT = Math.max(wT, MIN_WEIGHT);
+    const newTotal = wC + wG + wT;
+    wC /= newTotal;
+    wG /= newTotal;
+    wT /= newTotal;
+    console.log(`[WeightNormalizer] Applied minimum weights to prevent degenerate LP`);
+  }
+
+  console.log(`[WeightNormalizer] Derived weights: C=${wC.toFixed(3)}, G=${wG.toFixed(3)}, T=${wT.toFixed(3)}`);
+
+  return { wG, wC, wT };
 }

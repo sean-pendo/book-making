@@ -37,6 +37,7 @@ import { buildLPProblem, ProblemBuildResult } from './constraints/lpProblemBuild
 import { solveProblem, extractAssignments } from './solver/highsWrapper';
 import { generateRationale } from './postprocessing/rationaleGenerator';
 import { calculateRepLoads, calculateMetrics } from './postprocessing/metricsCalculator';
+import { LP_SCALE_LIMITS } from '@/_domain';
 
 export class PureOptimizationEngine {
   private buildId: string;
@@ -137,6 +138,22 @@ export class PureOptimizationEngine {
     
     const warnings: string[] = [];
     
+    // Scale guard: Check if problem is large
+    // HiGHS WASM can hang on very large problems due to dense constraint matrices
+    // For large problems, the solver wrapper will automatically use Cloud Run native HiGHS
+    // @see _domain/constants.ts LP_SCALE_LIMITS
+    if (accounts.length > LP_SCALE_LIMITS.MAX_ACCOUNTS_FOR_GLOBAL_LP) {
+      console.log(`[PureOptimization] ${accounts.length} accounts exceeds WASM limit (${LP_SCALE_LIMITS.MAX_ACCOUNTS_FOR_GLOBAL_LP})`);
+      console.log(`[PureOptimization] Will use Cloud Run native HiGHS solver for this large problem`);
+      warnings.push(`Large problem (${accounts.length} accounts) - using Cloud Run native solver`);
+    }
+    
+    // Performance warning for medium-sized problems
+    if (accounts.length > LP_SCALE_LIMITS.WARN_ACCOUNTS_THRESHOLD) {
+      console.warn(`[PureOptimization] ${accounts.length} accounts - solve may take 30+ seconds`);
+      warnings.push(`Large problem size (${accounts.length} accounts) - optimization may take longer`);
+    }
+    
     // Phase 2a: Handle strategic pool
     this.reportProgress({
       stage: 'preprocessing',
@@ -145,7 +162,7 @@ export class PureOptimizationEngine {
     });
     
     const strategicResult = data.lpConfig.lp_constraints.strategic_pool_enabled
-      ? assignStrategicPool(accounts, data.strategicReps)
+      ? assignStrategicPool(accounts, data.strategicReps, data.lpConfig.priority_config)
       : { fixedAssignments: [], remainingAccounts: accounts, strategicAccountCount: 0, strategicRepCount: 0 };
     
     if (strategicResult.strategicAccountCount > 0 && strategicResult.strategicRepCount === 0) {
@@ -217,6 +234,11 @@ export class PureOptimizationEngine {
     }
     
     if (solution.status === 'error') {
+      // Check if this was a memory-related error
+      const isMemoryError = solution.error?.includes('memory') ||
+                            solution.error?.includes('Aborted') ||
+                            solution.error?.includes('RuntimeError');
+
       return {
         success: false,
         proposals: [],
@@ -224,8 +246,12 @@ export class PureOptimizationEngine {
         metrics: this.emptyMetrics(solution.solveTimeMs),
         solverStatus: 'error',
         objectiveValue: 0,
-        warnings: [],
-        error: solution.error || 'Solver error'
+        warnings: isMemoryError
+          ? ['Problem may be too large for the primary optimizer. Fallback solver was attempted.']
+          : [],
+        error: isMemoryError
+          ? 'Optimization exceeded memory limits. Try reducing the number of accounts or splitting into batches.'
+          : (solution.error || 'Solver error')
       };
     }
     
@@ -244,7 +270,8 @@ export class PureOptimizationEngine {
       assignmentMap,
       accountScores,
       weights,
-      data.lpConfig.lp_stability_config
+      data.lpConfig.lp_stability_config,
+      data.lpConfig.priority_config
     );
     
     // Add strategic pre-assignments
@@ -258,7 +285,7 @@ export class PureOptimizationEngine {
     });
     
     const finalProposals = data.lpConfig.lp_constraints.parent_child_linking_enabled
-      ? cascadeToChildren(allProposals, data.accounts)
+      ? cascadeToChildren(allProposals, data.accounts, data.lpConfig.priority_config)
       : allProposals;
     
     // Phase 7: Calculate metrics
@@ -323,7 +350,8 @@ export class PureOptimizationEngine {
     assignmentMap: Map<string, string>,
     accountScores: Map<string, Map<string, AssignmentScores>>,
     weights: NormalizedWeights,
-    stabilityConfig: any
+    stabilityConfig: any,
+    priorityConfig?: import('@/config/priorityRegistry').PriorityConfig[]
   ): LPAssignmentProposal[] {
     const proposals: LPAssignmentProposal[] = [];
     const repMap = new Map(reps.map(r => [r.rep_id, r]));
@@ -345,13 +373,23 @@ export class PureOptimizationEngine {
       const scores = accountScores.get(account.sfdc_account_id)?.get(repId) || {
         continuity: 0,
         geography: 0,
-        teamAlignment: 0,
+        teamAlignment: null,  // N/A if not found
         tieBreaker: 0
       };
-      
-      const totalScore = weights.wC * scores.continuity + 
-                         weights.wG * scores.geography + 
-                         weights.wT * scores.teamAlignment;
+
+      // Calculate total score with weight redistribution for N/A team alignment
+      let totalScore: number;
+      if (scores.teamAlignment === null) {
+        // N/A: redistribute wT proportionally to wC and wG
+        const totalCG = weights.wC + weights.wG;
+        const adjustedWC = totalCG > 0 ? (weights.wC + weights.wT * (weights.wC / totalCG)) : weights.wC;
+        const adjustedWG = totalCG > 0 ? (weights.wG + weights.wT * (weights.wG / totalCG)) : weights.wG;
+        totalScore = adjustedWC * scores.continuity + adjustedWG * scores.geography;
+      } else {
+        totalScore = weights.wC * scores.continuity +
+                     weights.wG * scores.geography +
+                     weights.wT * scores.teamAlignment;
+      }
       
       proposals.push({
         accountId: account.sfdc_account_id,
@@ -362,7 +400,7 @@ export class PureOptimizationEngine {
         scores,
         totalScore,
         lockResult: null,
-        rationale: generateRationale(account, rep, scores, weights, null),
+        rationale: generateRationale(account, rep, scores, weights, null, priorityConfig),
         isStrategicPreAssignment: false,
         childIds: account.child_ids
       });
@@ -379,7 +417,7 @@ export class PureOptimizationEngine {
       const scores = accountScores.get(account.sfdc_account_id)?.get(rep.rep_id) || {
         continuity: 1.0, // Locked = full continuity
         geography: 0.5,
-        teamAlignment: 0.5,
+        teamAlignment: null,  // N/A for locked accounts without score data
         tieBreaker: 0
       };
       
@@ -392,12 +430,12 @@ export class PureOptimizationEngine {
         scores,
         totalScore: 1.0, // Locked accounts have max score
         lockResult: lock,
-        rationale: generateRationale(account, rep, scores, weights, lock),
+        rationale: generateRationale(account, rep, scores, weights, lock, priorityConfig),
         isStrategicPreAssignment: false,
         childIds: account.child_ids
       });
     }
-    
+
     return proposals;
   }
   

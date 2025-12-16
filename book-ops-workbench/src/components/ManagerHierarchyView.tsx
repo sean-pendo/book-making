@@ -1,26 +1,23 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Check } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Check, Loader2, Search, User, Split, Download, AlertTriangle, AlertCircle, ChevronDown, ChevronRight, MessageSquare, Edit2, Undo2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { getAccountARR, getAccountATR, isParentAccount } from '@/_domain';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Search, User, Split, Download, AlertTriangle, AlertCircle } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, ChevronRight, MessageSquare, Edit2, Undo2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import ManagerNotesDialog from './ManagerNotesDialog';
 import AccountsLeavingView from './AccountsLeavingView';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { getAccountARR, getAccountATR } from '@/_domain';
 import { downloadFile } from '@/utils/exportUtils';
 import { notifyProposalRejected } from '@/services/slackNotificationService';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
@@ -189,7 +186,7 @@ export default function ManagerHierarchyView({
           return a.is_customer ? -1 : 1;
         }
         // Then sort by ARR descending
-        return (b.calculated_arr || 0) - (a.calculated_arr || 0);
+        return getAccountARR(b) - getAccountARR(a);
       });
 
       if (accountsResults.some(r => r.error)) throw accountsResults.find(r => r.error)?.error;
@@ -457,17 +454,8 @@ export default function ManagerHierarchyView({
     if (!repAccounts.length) return [];
 
     // Separate parent accounts (no ultimate_parent_id) and child accounts
-    const parentAccounts = repAccounts.filter(a => 
-      !a.ultimate_parent_id || 
-      a.ultimate_parent_id === '' || 
-      a.ultimate_parent_id.trim() === ''
-    );
-    
-    const childAccounts = repAccounts.filter(a => 
-      a.ultimate_parent_id && 
-      a.ultimate_parent_id !== '' && 
-      a.ultimate_parent_id.trim() !== ''
-    );
+    const parentAccounts = repAccounts.filter(isParentAccount);
+    const childAccounts = repAccounts.filter(a => !isParentAccount(a));
 
     const hierarchicalAccounts: AccountWithHierarchy[] = [];
 

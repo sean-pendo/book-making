@@ -13,8 +13,9 @@ import {
   Cell,
   ReferenceArea,
 } from 'recharts';
-import { ChevronLeft, ChevronRight, Info, DollarSign, TrendingUp, Building2, Users } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Info, DollarSign, TrendingUp, Building2, Users, Briefcase } from 'lucide-react';
 import type { RepDistributionData, RepDistributionMetric } from '@/types/analytics';
+import { SALES_TOOLS_REP_ID, SALES_TOOLS_REP_NAME } from '@/_domain';
 
 /**
  * Threshold configuration for distribution charts
@@ -91,8 +92,21 @@ const METRIC_CONFIG: Record<RepDistributionMetric, {
 
 const DEFAULT_METRICS_ORDER: RepDistributionMetric[] = ['arr', 'atr', 'pipeline', 'accounts'];
 
+// Sales Tools distinct color - orange to stand out
+const SALES_TOOLS_COLOR = '#f97316'; // Orange-500
+
+// Check if a rep is Sales Tools pseudo-rep
+const isSalesToolsRep = (repId: string, repName: string): boolean => {
+  return repId === SALES_TOOLS_REP_ID || repName === SALES_TOOLS_REP_NAME;
+};
+
 // Format rep name to initials (e.g., "John Doe" -> "JD")
-const formatRepName = (fullName: string) => {
+// Sales Tools gets a special "ST" label with briefcase styling
+const formatRepName = (fullName: string, repId?: string) => {
+  // Sales Tools gets special treatment
+  if (isSalesToolsRep(repId || '', fullName)) {
+    return '📦'; // Package emoji to stand out
+  }
   const parts = fullName.trim().split(' ').filter(p => p.length > 0);
   if (parts.length === 0) return '';
   if (parts.length === 1) return parts[0][0].toUpperCase();
@@ -214,8 +228,9 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
 
     return sorted.map(rep => ({
       ...rep,
-      name: formatRepName(rep.repName),
+      name: formatRepName(rep.repName, rep.repId),
       fullName: rep.repName,
+      isSalesTools: isSalesToolsRep(rep.repId, rep.repName),
     }));
   }, [data, currentMetric]);
 
@@ -234,18 +249,28 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const repData = payload[0].payload;
-      
+      const isSalesTools = repData.isSalesTools;
+
+      // Sales Tools gets a special styled tooltip
+      const headerBgClass = isSalesTools ? 'bg-orange-50 dark:bg-orange-950 border-orange-200 dark:border-orange-800' : '';
+      const nameClass = isSalesTools ? 'text-orange-600 dark:text-orange-400' : '';
+
       if (currentMetric === 'accounts') {
         // Check if parent/child data exists
         const hasParentChildData = 'parentCustomers' in repData;
-        
+
         return (
-          <div className="bg-background border rounded-lg px-3 py-2 shadow-lg text-sm">
-            <p className="font-medium">{repData.fullName}</p>
-            <p className="text-muted-foreground text-xs">{repData.region}</p>
+          <div className={`bg-background border rounded-lg px-3 py-2 shadow-lg text-sm ${headerBgClass}`}>
+            <div className="flex items-center gap-2">
+              {isSalesTools && <Briefcase className="h-4 w-4 text-orange-500" />}
+              <p className={`font-medium ${nameClass}`}>{repData.fullName}</p>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              {isSalesTools ? 'Low-ARR Customer Bucket (No FLM/SLM)' : repData.region}
+            </p>
             <div className="mt-2 space-y-1">
               <p className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded bg-emerald-500" />
+                <span className={`w-2 h-2 rounded ${isSalesTools ? 'bg-orange-500' : 'bg-emerald-500'}`} />
                 Customers: <span className="font-medium">{repData.customerAccounts}</span>
               </p>
               <p className="flex items-center gap-2">
@@ -269,13 +294,18 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
 
       const value = repData[currentMetric] as number;
       const status = getThresholdStatus(value, thresholds);
-      
+
       return (
-        <div className="bg-background border rounded-lg px-3 py-2 shadow-lg text-sm">
-          <p className="font-medium">{repData.fullName}</p>
-          <p className="text-muted-foreground text-xs">{repData.region}</p>
+        <div className={`bg-background border rounded-lg px-3 py-2 shadow-lg text-sm ${headerBgClass}`}>
+          <div className="flex items-center gap-2">
+            {isSalesTools && <Briefcase className="h-4 w-4 text-orange-500" />}
+            <p className={`font-medium ${nameClass}`}>{repData.fullName}</p>
+          </div>
+          <p className="text-muted-foreground text-xs">
+            {isSalesTools ? 'Low-ARR Customer Bucket (No FLM/SLM)' : repData.region}
+          </p>
           <p className="mt-1">
-            {config.label.replace(' Distribution', '')}: 
+            {config.label.replace(' Distribution', '')}:
             <span className="font-medium ml-1">{config.format(value)}</span>
           </p>
           {thresholds && status.text && (
@@ -415,6 +445,16 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
           </div>
         )}
         
+        {/* Minimal legend when no thresholds but showStats is enabled - just shows average line */}
+        {showStats && !thresholds && currentMetric !== 'accounts' && stats.average > 0 && (
+          <div className="flex items-center gap-2 text-xs mt-2">
+            <div className="flex items-center gap-1">
+              <div className="w-4 h-0.5 border-t-2 border-dashed border-gray-500" />
+              <span className="text-muted-foreground">Avg: {config.format(stats.average)}</span>
+            </div>
+          </div>
+        )}
+        
         {/* Threshold legend - shows bar color meanings, lines, and target zone */}
         {showThresholdLegend && thresholds && currentMetric !== 'accounts' && (
           <div className="flex flex-wrap items-center gap-3 text-xs mt-2 py-2 px-3 bg-muted/20 rounded-md border border-muted">
@@ -434,6 +474,16 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
               </div>
             </div>
             <div className="h-4 w-px bg-border" />
+            {/* Average line indicator */}
+            {showStats && stats.average > 0 && (
+              <>
+                <div className="flex items-center gap-1">
+                  <div className="w-4 h-0.5 border-t-2 border-dashed border-gray-500" />
+                  <span className="text-gray-500 font-medium">Avg: {config.format(stats.average)}</span>
+                </div>
+                <div className="h-4 w-px bg-border" />
+              </>
+            )}
             {/* Target and Target Zone together */}
             <div className="flex items-center gap-3">
               {thresholds.target != null && (
@@ -468,6 +518,7 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
             </div>
           </div>
         )}
+
       </CardHeader>
       <CardContent className="pt-0">
         {chartData.length > 0 ? (
@@ -512,38 +563,60 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                 )}
                 
                 {currentMetric === 'accounts' ? (
-                  // Stacked bar for accounts - no legend needed since header shows counts
+                  // Stacked bar for accounts - customers green, prospects blue
+                  // Sales Tools gets orange color to stand out
                   <>
-                    <Bar 
-                      dataKey="customerAccounts" 
+                    <Bar
+                      dataKey="customerAccounts"
                       name="Customers"
                       stackId="accounts"
-                      fill="#22c55e" 
-                      radius={[0, 0, 0, 0]} 
+                      radius={[0, 0, 0, 0]}
                       barSize={16}
-                    />
-                    <Bar 
+                    >
+                      {chartData.map((entry, index) => (
+                        <Cell
+                          key={`customer-${index}`}
+                          fill={entry.isSalesTools ? SALES_TOOLS_COLOR : '#22c55e'}
+                        />
+                      ))}
+                    </Bar>
+                    <Bar
                       dataKey="prospectAccounts"
-                      name="Prospects" 
+                      name="Prospects"
                       stackId="accounts"
-                      fill="#3b82f6" 
-                      radius={[0, 4, 4, 0]} 
+                      radius={[0, 4, 4, 0]}
                       barSize={16}
-                    />
+                    >
+                      {chartData.map((entry, index) => (
+                        <Cell
+                          key={`prospect-${index}`}
+                          fill={entry.isSalesTools ? SALES_TOOLS_COLOR : '#3b82f6'}
+                        />
+                      ))}
+                    </Bar>
                   </>
                 ) : (
-                  // Single bar for monetary metrics - dynamic coloring based on thresholds
-                  <Bar 
-                    dataKey={config.dataKey} 
-                    radius={[0, 4, 4, 0]} 
+                  // Single bar for monetary metrics
+                  // With thresholds: color by threshold status (red/green/blue)
+                  // Without thresholds: uniform slate color
+                  <Bar
+                    dataKey={config.dataKey}
+                    radius={[0, 4, 4, 0]}
                     barSize={16}
                   >
                     {chartData.map((entry, index) => {
-                      const value = entry[currentMetric] as number;
-                      const color = thresholds 
-                        ? getBarColorByThreshold(value, thresholds)
-                        : config.color;
-                      return <Cell key={`cell-${index}`} fill={color} />;
+                      // Sales Tools always orange
+                      if (entry.isSalesTools) {
+                        return <Cell key={`cell-${index}`} fill={SALES_TOOLS_COLOR} />;
+                      }
+                      // If thresholds are set, use threshold-based coloring
+                      if (thresholds) {
+                        const value = entry[currentMetric] as number;
+                        const color = getBarColorByThreshold(value, thresholds);
+                        return <Cell key={`cell-${index}`} fill={color} />;
+                      }
+                      // Default: uniform blue color
+                      return <Cell key={`cell-${index}`} fill="#3b82f6" />;
                     })}
                   </Bar>
                 )}
@@ -558,13 +631,6 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                     strokeDasharray="4 4"
                     strokeWidth={2}
                     ifOverflow="extendDomain"
-                    label={{
-                      value: `Average: ${config.format(stats.average)}`,
-                      position: 'top',
-                      fontSize: 11,
-                      fontWeight: 'bold',
-                      fill: '#6b7280',
-                    }}
                   />
                 )}
                 
@@ -597,13 +663,6 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                     stroke="#22c55e"
                     strokeWidth={2.5}
                     ifOverflow="extendDomain"
-                    label={{
-                      value: `Target: ${config.format(thresholds.target)}`,
-                      position: 'top',
-                      fontSize: 10,
-                      fontWeight: 'bold',
-                      fill: '#22c55e',
-                    }}
                   />
                 )}
               </BarChart>

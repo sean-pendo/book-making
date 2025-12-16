@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { getAccountARR, getAccountATR, formatCurrency } from '@/_domain';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -8,9 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
-import { Building2, TrendingUp, AlertTriangle, Users, Eye, Send, ChevronDown, ChevronRight, Search, UserCheck, UserX, LogOut } from 'lucide-react';
+import { Building2, TrendingUp, AlertTriangle, Users, Eye, Send, ChevronDown, ChevronRight, Search, UserCheck, UserX, LogOut, BarChart3 } from 'lucide-react';
+import ManagerBeforeAfterComparison from './ManagerBeforeAfterComparison';
 import { SalesRepDetailDialog } from '@/components/data-tables/SalesRepDetailDialog';
-import { formatCurrency, getAccountARR } from '@/_domain';
 import { AccountDetailDialog } from '@/components/AccountDetailDialog';
 import SendToManagerDialog from './SendToManagerDialog';
 import AccountsLeavingView from './AccountsLeavingView';
@@ -161,7 +162,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
           // Calculate ATR from opportunities (more accurate than calculated_atr field)
           const totalATR = parentAccounts.reduce((sum, acc) => {
             const atrFromOpps = atrByAccount?.get(acc.sfdc_account_id) || 0;
-            const atrFromAccount = acc.calculated_atr || acc.atr || 0;
+            const atrFromAccount = getAccountATR(acc);
             return sum + (atrFromOpps || atrFromAccount);
           }, 0);
           const riskCount = parentAccounts.filter(acc => acc.cre_status !== null || (acc.cre_count && acc.cre_count > 0)).length;
@@ -372,7 +373,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
     let totalATR = 0;
     flmAccountsData.accounts.forEach(a => {
       const atrFromOpps = atrByAccount?.get(a.sfdc_account_id) || 0;
-      const atrFromAccount = a.calculated_atr || a.atr || 0;
+      const atrFromAccount = getAccountATR(a);
       totalATR += atrFromOpps || atrFromAccount;
     });
 
@@ -441,7 +442,7 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
           </DialogHeader>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="reps" className="flex items-center gap-2">
                 <Users className="h-4 w-4" />
                 Sales Reps ({flmRepsData?.length ?? (flmData?.data.activeReps instanceof Set 
@@ -451,6 +452,10 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
               <TabsTrigger value="accounts" className="flex items-center gap-2">
                 <Building2 className="h-4 w-4" />
                 Parent Accounts ({flmAccountsData?.accounts?.length || '...'})
+              </TabsTrigger>
+              <TabsTrigger value="analytics" className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                Before/After
               </TabsTrigger>
               <TabsTrigger value="leaving" className="flex items-center gap-2">
                 <LogOut className="h-4 w-4" />
@@ -892,6 +897,15 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* BEFORE/AFTER ANALYTICS TAB */}
+            <TabsContent value="analytics" className="space-y-4">
+              <ManagerBeforeAfterComparison
+                buildId={buildId}
+                managerLevel="FLM"
+                managerName={flmData.flm}
+              />
             </TabsContent>
 
             {/* ACCOUNTS LEAVING TAB */}

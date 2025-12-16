@@ -3,9 +3,16 @@ import {
   REGION_ANCESTRY, 
   REGION_SIBLINGS,
   classifyTeamTier,
-  getAccountARR
+  getAccountARR,
+  getAccountATR,
+  SALES_TOOLS_ARR_THRESHOLD,
+  calculatePriorityWeight,
+  DEFAULT_PRIORITY_WEIGHTS,
+  LP_SCORING_FACTORS,
+  LP_PENALTY
 } from '@/_domain';
 import { getDefaultPriorityConfig, PriorityConfig, SubConditionConfig } from '@/config/priorityRegistry';
+import { getPositionLabel } from '@/services/optimization';
 
 /**
  * Priority-Level Batch Assignment Engine
@@ -51,27 +58,38 @@ let highsLoadPromise: Promise<any> | null = null;
 async function getHiGHS(): Promise<any> {
   if (highsInstance) return highsInstance;
   if (highsLoadPromise) return highsLoadPromise;
-  
+
   highsLoadPromise = (async () => {
     try {
-      const highsLoader = (await import('highs')).default;
+      const highsModule = await import('highs') as any;
+
+      // Resolve the loader function from various module patterns
+      const highsLoader =
+        typeof highsModule.default === 'function' ? highsModule.default :
+        typeof highsModule['module.exports'] === 'function' ? highsModule['module.exports'] :
+        highsModule.default?.default && typeof highsModule.default.default === 'function' ? highsModule.default.default :
+        typeof highsModule.highs === 'function' ? highsModule.highs :
+        typeof highsModule === 'function' ? highsModule : null;
+
+      if (typeof highsLoader !== 'function') {
+        throw new Error('HiGHS module import failed - could not resolve loader function');
+      }
+
       const highs = await highsLoader({
-        locateFile: (file: string) => {
-          if (typeof window !== 'undefined') {
-            return `https://lovasoa.github.io/highs-js/${file}`;
-          }
-          return file;
-        }
+        locateFile: (file: string) =>
+          typeof window !== 'undefined'
+            ? `https://lovasoa.github.io/highs-js/${file}`
+            : file
       });
       highsInstance = highs;
-      console.log('[WaterfallEngine] HiGHS solver loaded');
+      console.log('[WaterfallEngine] HiGHS solver loaded successfully');
       return highs;
     } catch (error) {
       console.error('[WaterfallEngine] Failed to load HiGHS:', error);
       throw error;
     }
   })();
-  
+
   return highsLoadPromise;
 }
 
@@ -121,15 +139,8 @@ const PRIORITY_NAMES: Record<string, string> = {
  */
 // REGION_ANCESTRY and REGION_SIBLINGS imported from @/_domain
 
-/**
- * Format priority label for display
- * P0 = holdovers/strategic, P1-P4 = optimization priorities, RO = residual
- */
-function formatPriorityLabel(priorityId: string, priorityLevel: number): string {
-  const friendlyName = PRIORITY_NAMES[priorityId] || priorityId;
-  if (priorityId === 'arr_balance') return `RO: ${friendlyName}`;
-  return `P${priorityLevel}: ${friendlyName}`;
-}
+// formatPriorityLabel removed - now using this.formatPriorityLabel() class method
+// which uses getPositionLabel() from optimization module for config-driven position labels
 
 // classifyTeamTier imported from @/_domain
 
@@ -175,6 +186,11 @@ interface Account {
   ultimate_parent_id?: string | null;
   renewal_quarter?: string | null;
   employees?: number | null;  // For team alignment classification
+  // Stability fields for stability_accounts priority
+  cre_risk?: boolean | null;
+  renewal_date?: string | null;
+  pe_firm?: string | null;
+  owner_change_date?: string | null;
 }
 
 interface SalesRep {
@@ -308,6 +324,16 @@ export class WaterfallAssignmentEngine {
       : this.config.prospect_max_arr;
   }
 
+  /**
+   * Format priority label for display using config-driven position
+   * Uses priority_config from database to determine P# label
+   */
+  private formatPriorityLabel(priorityId: string): string {
+    const posLabel = getPositionLabel(priorityId, this.priorityConfig);
+    const friendlyName = PRIORITY_NAMES[priorityId] || priorityId;
+    return `${posLabel}: ${friendlyName}`;
+  }
+
   private getMinimumThreshold(): number {
     // Calculate minimum threshold based on target and variance
     const target = this.getTargetARR();
@@ -329,9 +355,9 @@ export class WaterfallAssignmentEngine {
       .single();
 
     const territoryMappings = configData?.territory_mappings || {};
-    
+
     // Load priority configuration - use saved config or fall back to default
-    this.priorityConfig = (configData?.priority_config as PriorityConfig[]) 
+    this.priorityConfig = (configData?.priority_config as unknown as PriorityConfig[]) 
       || getDefaultPriorityConfig('COMMERCIAL');
     
     console.log(`[Engine] ✅ Loaded priority config with ${this.priorityConfig.length} priorities`);
@@ -583,10 +609,8 @@ export class WaterfallAssignmentEngine {
       case 'arr_balance':
         return this.batchAssignPriority4(accounts, reps);
       
-      // Phase 2 stubs - not yet implemented
       case 'stability_accounts':
-        console.warn(`[Engine] stability_accounts not yet implemented, skipping`);
-        return { assigned: [], remaining: accounts };
+        return this.handleStabilityAccounts(accounts, reps, priority);
       
       case 'team_alignment':
         // Team alignment is applied via HiGHS penalties in solveWithHiGHS(), not a discrete step
@@ -634,6 +658,120 @@ export class WaterfallAssignmentEngine {
   }
 
   /**
+   * Handle Stability Accounts - Lock at-risk accounts to current owner
+   * Checks enabled sub-conditions: CRE risk, renewal soon, PE firm, recent change
+   */
+  private async handleStabilityAccounts(
+    accounts: Account[],
+    reps: SalesRep[],
+    priority: PriorityConfig
+  ): Promise<{ assigned: AssignmentProposal[], remaining: Account[] }> {
+    const assigned: AssignmentProposal[] = [];
+    const remaining: Account[] = [];
+    
+    // Get enabled sub-conditions
+    const enabledConditions = new Set(
+      (priority.subConditions || [])
+        .filter(sc => sc.enabled)
+        .map(sc => sc.id)
+    );
+    
+    console.log(`[Engine] Stability Accounts: checking ${accounts.length} accounts with conditions: ${Array.from(enabledConditions).join(', ') || 'none'}`);
+    
+    if (enabledConditions.size === 0) {
+      // No sub-conditions enabled, skip this priority
+      return { assigned: [], remaining: accounts };
+    }
+    
+    // Build lock stats
+    const lockStats: Record<string, number> = {
+      cre_risk: 0,
+      renewal_soon: 0,
+      pe_firm: 0,
+      recent_owner_change: 0
+    };
+    
+    for (const account of accounts) {
+      const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) : null;
+      
+      // Must have current owner to lock
+      if (!currentOwner) {
+        remaining.push(account);
+        continue;
+      }
+      
+      let lockReason: string | null = null;
+      let lockType: string | null = null;
+      
+      // Check CRE Risk
+      if (enabledConditions.has('cre_risk') && account.cre_risk) {
+        lockReason = 'CRE at-risk account - relationship stability';
+        lockType = 'cre_risk';
+        lockStats.cre_risk++;
+      }
+      
+      // Check Renewal Soon (within 90 days)
+      if (!lockReason && enabledConditions.has('renewal_soon') && account.renewal_date) {
+        const renewalDate = new Date(account.renewal_date);
+        const now = new Date();
+        const daysUntilRenewal = Math.floor(
+          (renewalDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+        );
+        
+        if (daysUntilRenewal >= 0 && daysUntilRenewal <= 90) {
+          lockReason = `Renewal in ${daysUntilRenewal} days`;
+          lockType = 'renewal_soon';
+          lockStats.renewal_soon++;
+        }
+      }
+      
+      // Check PE Firm
+      if (!lockReason && enabledConditions.has('pe_firm') && account.pe_firm) {
+        lockReason = `PE firm: ${account.pe_firm}`;
+        lockType = 'pe_firm';
+        lockStats.pe_firm++;
+      }
+      
+      // Check Recent Owner Change (within 90 days)
+      if (!lockReason && enabledConditions.has('recent_owner_change') && account.owner_change_date) {
+        const changeDate = new Date(account.owner_change_date);
+        const now = new Date();
+        const daysSinceChange = Math.floor(
+          (now.getTime() - changeDate.getTime()) / (1000 * 60 * 60 * 24)
+        );
+        
+        if (daysSinceChange >= 0 && daysSinceChange <= 90) {
+          lockReason = `Owner changed ${daysSinceChange} days ago`;
+          lockType = 'recent_owner_change';
+          lockStats.recent_owner_change++;
+        }
+      }
+      
+      if (lockReason && lockType) {
+        const accountARR = getAccountARR(account);
+        assigned.push({
+          account,
+          proposedRep: currentOwner,
+          currentOwner,
+          rationale: `${lockType}: ${lockReason}`,
+          warnings: [],
+          ruleApplied: this.formatPriorityLabel('stability_accounts'),
+          arr: accountARR,
+          priorityLevel: 1  // Stability is high priority
+        });
+        this.updateWorkload(currentOwner.rep_id, account);
+      } else {
+        remaining.push(account);
+      }
+    }
+    
+    console.log(`[Engine] Stability Accounts: locked ${assigned.length}, remaining ${remaining.length}`);
+    console.log(`[Engine] Lock stats:`, lockStats);
+    
+    return { assigned, remaining };
+  }
+
+  /**
    * Handle Sales Tools Bucket - Route low-ARR customers to Sales Tools
    * Only applies to customer assignments, not prospects
    */
@@ -646,7 +784,7 @@ export class WaterfallAssignmentEngine {
       return { assigned: [], remaining: accounts };
     }
     
-    const salesToolsThreshold = this.config.rs_arr_threshold || 25000;
+    const salesToolsThreshold = this.config.rs_arr_threshold || SALES_TOOLS_ARR_THRESHOLD;
     const assigned: AssignmentProposal[] = [];
     const remaining: Account[] = [];
     
@@ -671,7 +809,7 @@ export class WaterfallAssignmentEngine {
           currentOwner: account.owner_id ? this.repMap.get(account.owner_id) || null : null,
           rationale: `Routed to Sales Tools (ARR $${accountARR.toLocaleString()} < $${salesToolsThreshold.toLocaleString()})`,
           warnings: [],
-          ruleApplied: formatPriorityLabel('sales_tools_bucket', 0),
+          ruleApplied: this.formatPriorityLabel('sales_tools_bucket'),
           arr: accountARR,
           priorityLevel: 1  // Report as P1 for analytics
         });
@@ -731,6 +869,26 @@ export class WaterfallAssignmentEngine {
       lines.push('Maximize');
       lines.push(' obj:');
       
+      // Calculate priority-based weights from position using SSOT
+      // Higher position (lower number) = higher weight
+      // @see _domain/constants.ts calculatePriorityWeight()
+      const getPriorityWeightFromConfig = (priorityId: string): number => {
+        const priority = this.priorityConfig.find(p => p.id === priorityId && p.enabled);
+        if (!priority) return 0.1; // Disabled or not found = minimal weight
+        return calculatePriorityWeight(priority.position);
+      };
+      
+      // Weights derived from priority positions (SSOT: _domain/constants.ts)
+      // geo_and_continuity contributes 50% to both geo and continuity
+      const geoWeight = getPriorityWeightFromConfig('geography') + getPriorityWeightFromConfig('geo_and_continuity') * 0.5 
+        || DEFAULT_PRIORITY_WEIGHTS.GEOGRAPHY;
+      const continuityWeight = getPriorityWeightFromConfig('continuity') + getPriorityWeightFromConfig('geo_and_continuity') * 0.5
+        || DEFAULT_PRIORITY_WEIGHTS.CONTINUITY;
+      const teamWeight = getPriorityWeightFromConfig('team_alignment') || DEFAULT_PRIORITY_WEIGHTS.TEAM_ALIGNMENT;
+      const balanceWeight = getPriorityWeightFromConfig('arr_balance') || DEFAULT_PRIORITY_WEIGHTS.BALANCE;
+      
+      console.log(`[LP Weights from Priority Config] geo=${geoWeight.toFixed(2)}, continuity=${continuityWeight.toFixed(2)}, team=${teamWeight.toFixed(2)}, balance=${balanceWeight.toFixed(2)}`);
+      
       for (const account of accounts) {
         const eligibleReps = eligibleRepsPerAccount.get(account.sfdc_account_id) || [];
         const accountARR = getAccountARR(account);
@@ -741,31 +899,36 @@ export class WaterfallAssignmentEngine {
         for (const rep of eligibleReps) {
           const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(rep.rep_id)}`;
           
-          // Objective: prefer lower-loaded reps (balance)
+          // Balance score: prefer lower-loaded reps (0-100)
+          // @see _domain/constants.ts LP_SCORING_FACTORS.BALANCE_MAX_BONUS
           const currentLoad = this.workloadMap.get(rep.rep_id)?.arr || 0;
           const loadRatio = currentLoad / targetARR;
-          const balanceBonus = Math.max(0, 100 - loadRatio * 50); // Higher bonus for less-loaded reps
+          const balanceScore = Math.max(0, LP_SCORING_FACTORS.BALANCE_MAX_BONUS - loadRatio * 50);
           
-          // Continuity bonus
-          const continuityBonus = account.owner_id === rep.rep_id ? 30 : 0;
+          // Continuity score: bonus for keeping with current owner
+          // @see _domain/constants.ts LP_SCORING_FACTORS.CONTINUITY_MATCH_BONUS
+          const continuityScore = account.owner_id === rep.rep_id ? LP_SCORING_FACTORS.CONTINUITY_MATCH_BONUS : 0;
           
-          // Geography score (0-100) weighted by geo_weight config (0-1)
-          // Higher scores for exact geo match, lower for fallback regions
+          // Geography score (0-100)
+          // @see _domain/constants.ts LP_SCORING_FACTORS.GEOGRAPHY_MAX_SCORE
           const geoScore = this.getGeographyScore(account, rep);
-          const geoWeight = (this.config as any).geo_weight ?? 0.3; // Default 30% weight
-          const geoBonus = geoScore * geoWeight; // 0-100 * 0-1 = 0-100 contribution
           
-          // Team alignment penalty (reduces coefficient for mismatched tiers)
+          // Team alignment score (reduces for mismatched tiers)
           // 1-level mismatch: GAMMA (100) - discouraged but acceptable
           // 2+ level mismatch: EPSILON (1000) - almost never
+          // @see _domain/constants.ts LP_SCORING_FACTORS.TEAM_ALIGNMENT_MAX_SCORE
           const teamAlignmentPenalty = calculateTeamAlignmentPenalty(accountTier, rep.team_tier);
+          const teamScore = Math.max(0, LP_SCORING_FACTORS.TEAM_ALIGNMENT_MAX_SCORE - teamAlignmentPenalty / 10);
           
-          // Final coefficient: positive bonuses minus penalty
-          // balanceBonus: 0-100 (prefer less loaded reps)
-          // continuityBonus: 0 or 30 (prefer keeping with current owner)
-          // geoBonus: 0-100 (prefer geographic match, scaled by weight)
-          // teamAlignmentPenalty: scaled down by /10 to keep proportional
-          const coefficient = Math.max(1, balanceBonus + continuityBonus + geoBonus + 10 - (teamAlignmentPenalty / 10));
+          // Final coefficient: weighted sum based on priority positions (SSOT)
+          // @see _domain/constants.ts calculatePriorityWeight(), LP_SCORING_FACTORS.BASE_COEFFICIENT
+          const coefficient = Math.max(1, 
+            balanceScore * balanceWeight +
+            continuityScore * continuityWeight +
+            geoScore * geoWeight +
+            teamScore * teamWeight +
+            LP_SCORING_FACTORS.BASE_COEFFICIENT
+          );
           objectiveTerms.push(`${coefficient.toFixed(2)} ${varName}`);
           binaries.push(varName);
         }
@@ -792,7 +955,15 @@ export class WaterfallAssignmentEngine {
         }
       }
       
-      // Rep capacity constraints
+      // Rep ARR balance constraints with Big-M penalty slacks
+      // @see _domain/MASTER_LOGIC.mdc §11.3 Three-Tier Penalty System
+      // This allows reps to go over preferredMax but penalizes it, and strongly penalizes going over absoluteMax
+      // Use SSOT penalty constants for Big-M system
+      // @see _domain/constants.ts LP_PENALTY
+      // @see _domain/MASTER_LOGIC.mdc §11.3 Three-Tier Penalty System
+      const absoluteMaxARR = this.config.max_arr_per_rep || 2500000;
+      const slackBounds: string[] = [];
+      
       for (const [repId, rep] of allEligibleReps) {
         const currentLoad = this.workloadMap.get(repId)?.arr || 0;
         const arrTerms: string[] = [];
@@ -803,14 +974,43 @@ export class WaterfallAssignmentEngine {
             const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(repId)}`;
             const arr = getAccountARR(account);
             if (arr > 0) {
-              arrTerms.push(`${arr} ${varName}`);
+              // Normalize by targetARR to keep coefficients in stable range
+              const normalizedArr = arr / targetARR;
+              arrTerms.push(`${normalizedArr.toFixed(6)} ${varName}`);
             }
           }
         }
         
         if (arrTerms.length > 0) {
-          const remainingCapacity = preferredMaxARR - currentLoad;
-          constraints.push(` cap_${sanitizeVarName(repId)}: ${arrTerms.join(' + ')} <= ${Math.max(0, remainingCapacity)}`);
+          const repIdx = sanitizeVarName(repId);
+          
+          // Slack variables for this rep (6 total: alpha over/under, beta over/under, bigM over/under)
+          const ao = `ao_${repIdx}`, au = `au_${repIdx}`;
+          const bo = `bo_${repIdx}`, bu = `bu_${repIdx}`;
+          const mo = `mo_${repIdx}`, mu = `mu_${repIdx}`;
+          
+          // Add penalty terms to objective (negative because we maximize)
+          objectiveTerms.push(`- ${LP_PENALTY.ALPHA.toFixed(6)} ${ao}`);
+          objectiveTerms.push(`- ${LP_PENALTY.ALPHA.toFixed(6)} ${au}`);
+          objectiveTerms.push(`- ${LP_PENALTY.BETA.toFixed(6)} ${bo}`);
+          objectiveTerms.push(`- ${LP_PENALTY.BETA.toFixed(6)} ${bu}`);
+          objectiveTerms.push(`- ${LP_PENALTY.BIG_M.toFixed(6)} ${mo}`);
+          objectiveTerms.push(`- ${LP_PENALTY.BIG_M.toFixed(6)} ${mu}`);
+          
+          // Decomposition constraint: sum(arr/target * x) - ao + au - bo + bu - mo + mu = 1 - currentLoad/target
+          // This allows deviation from target with graduated penalties
+          const normalizedTarget = 1 - currentLoad / targetARR; // How much more they can take (normalized)
+          constraints.push(` bal_${repIdx}: ${arrTerms.join(' + ')} - 1 ${ao} + 1 ${au} - 1 ${bo} + 1 ${bu} - 1 ${mo} + 1 ${mu} = ${normalizedTarget.toFixed(6)}`);
+          
+          // Slack bounds (normalized)
+          const alphaRange = variance; // e.g., 0.10 for 10%
+          const betaRange = (absoluteMaxARR - preferredMaxARR) / targetARR; // Buffer zone
+          slackBounds.push(` 0 <= ${ao} <= ${alphaRange.toFixed(6)}`);
+          slackBounds.push(` 0 <= ${au} <= ${alphaRange.toFixed(6)}`);
+          slackBounds.push(` 0 <= ${bo} <= ${betaRange.toFixed(6)}`);
+          slackBounds.push(` 0 <= ${bu} <= ${betaRange.toFixed(6)}`);
+          slackBounds.push(` ${mo} >= 0`);
+          slackBounds.push(` ${mu} >= 0`);
         }
       }
       
@@ -862,8 +1062,13 @@ export class WaterfallAssignmentEngine {
       
       lines.push(...constraints);
       
-      // Bounds (all binary 0-1)
+      // Bounds section
       lines.push('Bounds');
+      
+      // Slack variable bounds (Big-M penalty slacks)
+      lines.push(...slackBounds);
+      
+      // Binary variable bounds (0-1)
       for (const varName of binaries) {
         lines.push(` 0 <= ${varName} <= 1`);
       }
@@ -873,13 +1078,13 @@ export class WaterfallAssignmentEngine {
       lines.push('End');
       
       const lpProblem = lines.join('\n');
-      console.log(`[HiGHS P${priorityLevel}] Solving ${accounts.length} accounts, ${allEligibleReps.size} reps...`);
+      const numSlacks = slackBounds.length;
+      console.log(`[HiGHS P${priorityLevel}] Solving ${accounts.length} accounts, ${allEligibleReps.size} reps, ${numSlacks} slack vars...`);
       
-      // Solve
+      // Solve with mip_rel_gap - required for complex LPs with Big-M slacks
+      // @see solver-tests/test-presolve-only.html and HIGHS_SOLVER_NOTES.md
       const solution = highs.solve(lpProblem, {
-        presolve: 'on',
-        time_limit: 10.0,
-        mip_rel_gap: 0.05,
+        mip_rel_gap: 0.05,  // 5% gap for waterfall (faster, good enough for per-priority batches)
       });
       
       if (solution.Status !== 'Optimal') {
@@ -1051,7 +1256,7 @@ export class WaterfallAssignmentEngine {
       accountsWithOptions,
       eligibleRepsPerAccount,
       1,
-      formatPriorityLabel('geo_and_continuity', 1),
+      this.formatPriorityLabel('geo_and_continuity'),
       'Account Continuity + Geography Match'
     );
     
@@ -1083,7 +1288,7 @@ export class WaterfallAssignmentEngine {
     const eligibleRepsPerAccount = new Map<string, SalesRep[]>();
     const accountsWithOptions: Account[] = [];
     const accountsWithoutOptions: Account[] = [];
-    
+
     for (const account of accounts) {
       const accountARR = getAccountARR(account);
       
@@ -1103,7 +1308,7 @@ export class WaterfallAssignmentEngine {
         accountsWithoutOptions.push(account);
       }
     }
-    
+
     if (accountsWithOptions.length === 0) {
       return { assigned: [], remaining: accounts };
     }
@@ -1114,7 +1319,7 @@ export class WaterfallAssignmentEngine {
       accountsWithOptions,
       eligibleRepsPerAccount,
       2,
-      formatPriorityLabel('geography', 2),
+      this.formatPriorityLabel('geography'),
       'Geography Match - Balanced Distribution'
     );
     
@@ -1168,7 +1373,7 @@ export class WaterfallAssignmentEngine {
       accountsWithOptions,
       eligibleRepsPerAccount,
       3,
-      formatPriorityLabel('continuity', 3),
+      this.formatPriorityLabel('continuity'),
       'Current/Past Owner - Any Geography'
     );
     
@@ -1232,7 +1437,7 @@ export class WaterfallAssignmentEngine {
       accountsWithOptions,
       eligibleRepsPerAccount,
       4,
-      formatPriorityLabel('arr_balance', 4),
+      this.formatPriorityLabel('arr_balance'),
       'Residual Optimization - Best Available Rep'
     );
     
@@ -1289,7 +1494,7 @@ export class WaterfallAssignmentEngine {
         currentOwner,
         rationale: 'Strategic Account Continuity',
         warnings: [],
-        ruleApplied: formatPriorityLabel('manual_holdover', 0),
+        ruleApplied: this.formatPriorityLabel('manual_holdover'),
         arr: accountARR,
         priorityLevel: 1 as const  // Strategic continuity is Priority 1
       };
@@ -1309,7 +1514,7 @@ export class WaterfallAssignmentEngine {
         reason: `Strategic account reassigned from ${currentOwner.name} to ${bestStrategicRep.name}`,
         details: 'Maintaining even distribution across strategic rep pool'
       }] : [],
-      ruleApplied: formatPriorityLabel('manual_holdover', 0),
+      ruleApplied: this.formatPriorityLabel('manual_holdover'),
       arr: accountARR,
       priorityLevel: 1 as const  // Strategic accounts are always Priority 1
     };
@@ -1342,7 +1547,7 @@ export class WaterfallAssignmentEngine {
           currentOwner,
           rationale: 'Strategic Account Continuity',
           warnings: [],
-          ruleApplied: formatPriorityLabel('strategic_continuity', 0),
+          ruleApplied: this.formatPriorityLabel('manual_holdover'),
           arr: accountARR,
           priorityLevel: 1
         };
@@ -1362,7 +1567,7 @@ export class WaterfallAssignmentEngine {
           reason: `Strategic account reassigned from ${currentOwner.name} to ${bestStrategicRep.name}`,
           details: 'Maintaining even distribution across strategic rep pool'
         }] : [],
-        ruleApplied: formatPriorityLabel('strategic_distribution', 0),
+        ruleApplied: this.formatPriorityLabel('manual_holdover'),
         arr: accountARR,
         priorityLevel: 1  // Strategic accounts all track as P1
       };
@@ -1386,7 +1591,7 @@ export class WaterfallAssignmentEngine {
           currentOwner,
           rationale: 'Account Continuity + Geography Match',
           warnings: [],
-          ruleApplied: formatPriorityLabel('geo_and_continuity', 1),
+          ruleApplied: this.formatPriorityLabel('geo_and_continuity'),
           arr: accountARR,
           priorityLevel: 1
         };
@@ -1463,7 +1668,7 @@ export class WaterfallAssignmentEngine {
         currentOwner,
         rationale: isUnderMin ? 'Geography Match + Balancing' : 'Geography Match',
         warnings: accountWarnings,
-        ruleApplied: formatPriorityLabel('geography', 2),
+        ruleApplied: this.formatPriorityLabel('geography'),
         arr: accountARR,
         priorityLevel: 2
       };
@@ -1495,7 +1700,7 @@ export class WaterfallAssignmentEngine {
           currentOwner,
           rationale: 'Current/Past Owner - Any Geography',
           warnings: accountWarnings,
-          ruleApplied: formatPriorityLabel('continuity', 3),
+          ruleApplied: this.formatPriorityLabel('continuity'),
           arr: accountARR,
           priorityLevel: 3
         };
@@ -1577,7 +1782,7 @@ export class WaterfallAssignmentEngine {
         currentOwner,
         rationale: isUnderMin ? 'Best Available + Balancing' : 'Best Available',
         warnings: accountWarnings,
-        ruleApplied: formatPriorityLabel('arr_balance', 4),
+        ruleApplied: this.formatPriorityLabel('arr_balance'),
         arr: accountARR,
         priorityLevel: 4
       };
@@ -1682,11 +1887,7 @@ export class WaterfallAssignmentEngine {
     // SECOND: Use auto-mapping utility (standardized territory to region mapping)
     const mappedRegion = autoMapTerritoryToRegion(accountTerritory);
     if (mappedRegion) {
-      const isMatch = mappedRegion.toLowerCase() === repRegion.toLowerCase();
-      if (isMatch) {
-        console.log(`🗺️ Territory Mapping: "${accountTerritory}" → "${mappedRegion}" (matches ${rep.name})`);
-      }
-      return isMatch;
+      return mappedRegion.toLowerCase() === repRegion.toLowerCase();
     }
     
     // FALLBACK: Direct string comparison (for unmapped territories)
@@ -2006,7 +2207,7 @@ export class WaterfallAssignmentEngine {
       workload.cre += account.cre_count || 0;
     }
     
-    workload.atr += account.calculated_atr || 0;
+    workload.atr += getAccountATR(account);
     
     if (account.expansion_tier === 'Tier 1') {
       workload.tier1 += 1;

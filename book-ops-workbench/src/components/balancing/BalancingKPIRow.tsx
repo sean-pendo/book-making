@@ -150,7 +150,7 @@ export const BalancingKPIRow: React.FC<BalancingKPIRowProps> = ({
             </div>
             <div>
               <h3 className="font-semibold text-foreground">Coverage</h3>
-              <p className="text-xs text-muted-foreground">Assigned accounts</p>
+              <p className="text-xs text-muted-foreground">Account assignment</p>
             </div>
           </div>
           <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">

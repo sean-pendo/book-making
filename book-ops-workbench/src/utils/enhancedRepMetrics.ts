@@ -1,6 +1,6 @@
 // Enhanced Sales Rep metrics calculations for Territory Balancing
 import { getFiscalQuarter, isCurrentFiscalYear, getFiscalYear, getCurrentFiscalYear } from './fiscalYearCalculations';
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, isRenewalOpportunity, isParentAccount } from '@/_domain';
 
 interface Account {
   sfdc_account_id: string;
@@ -90,13 +90,9 @@ export function calculateEnhancedRepMetrics(
       (o.new_owner_id || o.owner_id) === rep.rep_id
     );
 
-    // Parent vs Child accounts - fix null handling
-    const parentAccounts = repAccounts.filter(a => 
-      a.ultimate_parent_id == null || a.ultimate_parent_id === ''
-    );
-    const childAccounts = repAccounts.filter(a => 
-      a.ultimate_parent_id != null && a.ultimate_parent_id !== ''
-    );
+    // Parent vs Child accounts - use isParentAccount from _domain
+    const parentAccounts = repAccounts.filter(isParentAccount);
+    const childAccounts = repAccounts.filter(a => !isParentAccount(a));
 
     // Account filtering for metrics calculation (debug logs removed for performance)
 
@@ -119,11 +115,10 @@ export function calculateEnhancedRepMetrics(
     // Step 3: Add ARR from child accounts with split ownership
     const splitOwnershipChildrenARR = repAccounts
       .filter(acc => {
-        if (acc.is_parent) return false; // Already counted
-        if (!acc.ultimate_parent_id || acc.ultimate_parent_id === '') return false; // Not a child
+        if (isParentAccount(acc)) return false; // Already counted as parent
 
         const childOwnerId = acc.new_owner_id || acc.owner_id;
-        const parentOwnerId = parentOwnerMap.get(acc.ultimate_parent_id);
+        const parentOwnerId = parentOwnerMap.get(acc.ultimate_parent_id!);
 
         // Only count if child has different owner than parent (split ownership)
         return childOwnerId !== parentOwnerId;
@@ -135,7 +130,7 @@ export function calculateEnhancedRepMetrics(
 
     // ATR calculation from opportunities - only include 'Renewals' opportunity type
     const totalATR = repOpportunities
-      .filter(opp => opp.opportunity_type?.toLowerCase().trim() === 'renewals')
+      .filter(isRenewalOpportunity)
       .reduce((sum, opp) => {
         const atrValue = opp.available_to_renew || 0;
         return sum + (typeof atrValue === 'number' ? atrValue : 0);

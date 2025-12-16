@@ -1,6 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { AssignmentServiceHelpers } from './assignmentServiceHelpers';
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, HIGH_VALUE_ARR_THRESHOLD, TIER_1_PRIORITY_EMPLOYEE_THRESHOLD } from '@/_domain';
 
 export interface Account {
   sfdc_account_id: string;
@@ -166,7 +166,7 @@ class AssignmentService {
       const maxAccountsPerRep = targetAccountsPerRep + varianceAllowance; // Realistic max based on variance
       
       // Enhanced workload balancing - calculate ARR distribution targets with multi-factor tracking
-      const totalARR = accounts.reduce((sum, acc) => sum + (acc.calculated_arr || acc.arr || 0), 0);
+      const totalARR = accounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
       const targetARRPerRep = totalARR / totalReps;
       const maxARRPerRep = targetARRPerRep * 1.25; // 25% variance for ARR (more restrictive)
       const maxAccountsPerRepStrict = targetAccountsPerRep + Math.floor(targetAccountsPerRep * 0.10); // 10% variance for accounts (stricter)
@@ -1641,7 +1641,7 @@ class AssignmentService {
       const primaryARR = getAccountARR(account);
       const isEnterprise = account.enterprise_vs_commercial === 'Enterprise';
       const hasLargeEmployeeCount = account.employees && account.employees > config.enterprise_threshold;
-      const isHighValue = primaryARR > 100000; // Use hierarchy ARR for tier 1 classification
+      const isHighValue = primaryARR > HIGH_VALUE_ARR_THRESHOLD; // Use hierarchy ARR for tier 1 classification
       
       if (isEnterprise || hasLargeEmployeeCount || isHighValue) {
         tier1Accounts.push(account);
@@ -1880,8 +1880,8 @@ class AssignmentService {
     }
     
     // Medium risk if high ARR account
-    const arr = account.arr || account.calculated_arr || 0;
-    if (arr > 100000) {
+    const arr = getAccountARR(account);
+    if (arr > HIGH_VALUE_ARR_THRESHOLD) {
       return 'MEDIUM';
     }
     
@@ -1964,12 +1964,12 @@ class AssignmentService {
       // Count existing assignments
       const existingAccounts = accounts.filter(acc => acc.owner_id === rep.rep_id);
       const tier1Count = existingAccounts.filter(acc => {
-        const arr = acc.arr || acc.calculated_arr || 0;
-        return arr > 100000 || acc.enterprise_vs_commercial === 'Enterprise';
+        const arr = getAccountARR(acc);
+        return arr > HIGH_VALUE_ARR_THRESHOLD || acc.enterprise_vs_commercial === 'Enterprise';
       }).length;
 
       const totalARR = existingAccounts.reduce((sum, acc) => {
-        return sum + (acc.arr || acc.calculated_arr || 0);
+        return sum + getAccountARR(acc);
       }, 0);
 
       const renewals = renewalResults[index];
@@ -2003,10 +2003,10 @@ class AssignmentService {
     salesReps.forEach((rep, index) => {
       // Initialize with current account counts and ARR for baseline
       const currentAccounts = accounts.filter(acc => acc.owner_id === rep.rep_id);
-      const totalARR = currentAccounts.reduce((sum, acc) => sum + (acc.calculated_arr || acc.arr || 0), 0);
+      const totalARR = currentAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
       const tier1Count = currentAccounts.filter(acc => {
-        const arr = acc.calculated_arr || acc.arr || 0;
-        return arr > 100000 || acc.enterprise_vs_commercial === 'Enterprise';
+        const arr = getAccountARR(acc);
+        return arr > HIGH_VALUE_ARR_THRESHOLD || acc.enterprise_vs_commercial === 'Enterprise';
       }).length;
 
       const renewals = renewalResults[index];
@@ -2045,8 +2045,8 @@ class AssignmentService {
     const account = accounts.find(acc => acc.sfdc_account_id === accountId);
     
     if (account) {
-      const arr = account.calculated_arr || account.arr || 0;
-      const isTier1 = arr > 100000 || account.enterprise_vs_commercial === 'Enterprise';
+      const arr = getAccountARR(account);
+      const isTier1 = arr > HIGH_VALUE_ARR_THRESHOLD || account.enterprise_vs_commercial === 'Enterprise';
       
       // Update assignment tracking
       current.accountCount += 1;
@@ -2099,8 +2099,8 @@ class AssignmentService {
     const account = accounts.find(acc => acc.sfdc_account_id === accountId);
     
     if (account) {
-      const arr = account.arr || account.calculated_arr || 0;
-      const isTier1 = arr > 100000 || account.enterprise_vs_commercial === 'Enterprise';
+      const arr = getAccountARR(account);
+      const isTier1 = arr > HIGH_VALUE_ARR_THRESHOLD || account.enterprise_vs_commercial === 'Enterprise';
       
       tracker.set(repId, {
         ...current,
@@ -2475,12 +2475,12 @@ class AssignmentService {
    * Helper to determine if account is Tier 1
    */
   private isTier1Account(account: Account): boolean {
+    const arr = getAccountARR(account);
     return account.expansion_tier === 'Tier 1' || 
            account.initial_sale_tier === 'Tier 1' ||
            account.enterprise_vs_commercial === 'Enterprise' ||
-           (account.employees && account.employees > 1000) ||
-           (account.arr && account.arr > 100000) ||
-           (account.calculated_arr && account.calculated_arr > 100000);
+           (account.employees && account.employees > TIER_1_PRIORITY_EMPLOYEE_THRESHOLD) ||
+           arr > HIGH_VALUE_ARR_THRESHOLD;
   }
 }
 

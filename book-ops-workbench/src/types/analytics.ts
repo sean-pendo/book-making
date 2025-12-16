@@ -34,14 +34,15 @@ export type ArrBucketLabel = typeof ARR_BUCKETS[number]['label'];
  * @see @/_domain/constants.ts for authoritative values
  * @see @/_domain/MASTER_LOGIC.mdc Section 4.3 for documentation
  */
+import { GEO_MATCH_SCORES as _GEO_MATCH_SCORES } from '@/_domain/constants';
 export { GEO_MATCH_SCORES } from '@/_domain/constants';
 
-// Alias for backwards compatibility
+// Alias for backwards compatibility - derives from _domain constants
 export const GEO_SCORE_WEIGHTS = {
-  exact: 1.0,           // Exact match (same as GEO_MATCH_SCORES.EXACT_MATCH)
-  sibling: 0.85,        // Same sub-region (SAME_SUB_REGION)
-  parent: 0.65,         // Same parent region (SAME_PARENT)
-  global: 0.40,         // Global fallback (GLOBAL_FALLBACK)
+  exact: _GEO_MATCH_SCORES.EXACT_MATCH,
+  sibling: _GEO_MATCH_SCORES.SAME_SUB_REGION,
+  parent: _GEO_MATCH_SCORES.SAME_PARENT,
+  global: _GEO_MATCH_SCORES.GLOBAL_FALLBACK,
 } as const;
 
 /**
@@ -135,19 +136,23 @@ export interface RepLoadDistribution {
 export interface LPSuccessMetrics {
   /** How evenly ARR/ATR is distributed across reps (0-1, higher = more balanced) */
   balanceScore: number;
-  
+
   /** Detailed balance breakdown (optional for drill-down) */
   balanceDetail?: BalanceMetricsDetail;
-  
+
   /** Account stability with current owner (0-1, % accounts with same owner) */
   continuityScore: number;
-  
+
   /** Weighted geo alignment score (0-1, based on GEO_SCORE_WEIGHTS) */
   geographyScore: number;
-  
-  /** Account tier matching rep tier (0-1, based on TEAM_ALIGNMENT_WEIGHTS) */
-  teamAlignmentScore: number;
-  
+
+  /**
+   * Account tier matching rep tier (0-1, based on TEAM_ALIGNMENT_WEIGHTS)
+   * null = N/A (no accounts have tier data)
+   * @see MASTER_LOGIC.mdc §5.1.1 - Team Alignment Scoring with Missing Data
+   */
+  teamAlignmentScore: number | null;
+
   /** Average % of target load across all reps (can be null if no target set) */
   capacityUtilization: number | null;
 }
@@ -155,6 +160,15 @@ export interface LPSuccessMetrics {
 // ============================================
 // GEO ALIGNMENT METRICS
 // ============================================
+
+/** Breakdown of geo alignment for a single rep region */
+export interface RegionGeoBreakdown {
+  region: string;
+  aligned: number;
+  misaligned: number;
+  unassigned: number;
+  total: number;
+}
 
 export interface GeoAlignmentMetrics {
   /** Number of accounts where geo matches rep region */
@@ -168,6 +182,9 @@ export interface GeoAlignmentMetrics {
   
   /** Alignment rate as percentage (aligned / (aligned + misaligned) * 100) */
   alignmentRate: number;
+  
+  /** Breakdown by rep region */
+  byRegion?: RegionGeoBreakdown[];
 }
 
 // ============================================
@@ -185,6 +202,8 @@ export interface TierAlignmentBreakdown {
   oneLevelMismatch: number;
   twoPlusLevelMismatch: number;
   unassigned: number;
+  /** Accounts where tier data is missing (N/A) - not a mismatch, just unknown */
+  unknown: number;
 }
 
 export interface ArrBucket {

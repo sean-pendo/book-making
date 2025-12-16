@@ -1,0 +1,163 @@
+this contains my raw notes on the business logic
+
+
+
+
+i want to make a plan
+
+1. to edit the business logic doc
+2. make a next steps plan.md
+    1. ensure pairty. create the for refacroting all the stuff
+    2. about new feauters to imoplenet that I mentioned this should likley come after refacoriyng.
+    3. also create a question for team doc all within docs
+
+### Order of SSOT - Trickledown Flow Concept
+
+Doc → Matched with _domain .ts files → app codebase
+
+### ARR formula
+
+how am i sure this isnt double summing in the case of childnre?
+
+### ATR
+
+make sure it uses the ATR value on the account as a secondary option
+
+### Advanced GEO Mapping
+
+concept of geo may need a bit more clarty with examples
+
+of good vs bad
+
+### Thresholds
+
+where did these come from? should proboably keep the second
+
+| High Value ARR | $100,000 | Small company treated as Enterprise |
+| --- | --- | --- |
+| High Value Continuity | $500,000 | Threshold for high-value metrics |
+
+where does this come from?
+
+### Set Thresholds
+
+| Max ARR per Rep | $2,500,000 | Default capacity cap |
+| --- | --- | --- |
+| Overload Threshold | 130% | Rep considered overloaded |
+
+these should be set based on what makes senes between total arr , atr and pipelinve sum respeocitvely
+
+overload threshold is once you reach the set varaince which shuld be default to 20% 
+
+leave this. good implicit rule
+
+| Strategic Variance | 20% | Balance variance for strategic accounts |
+| --- | --- | --- |
+
+![aren’t we missing a file for the models?](attachment:797d5ee6-2186-4ca5-a553-dde5d351c5f5:Screenshot_2025-12-14_at_8.16.03_PM.png)
+
+aren’t we missing a file for the models?
+
+# **1. Glossary & Terminology**
+
+missing strat rep and rule that accounts and reps must only get eachother
+
+### important distinctions
+
+add that ATR is a subset of ARR for customers that come from renewalopportunityies
+
+## 2.2 / 2.3 atr calculation
+
+shouldnt we use net arr on expansion accounts toward pipeline value?
+
+techincally these customer accounts with piepleinvalue right we should include this!
+
+### 4.1-3
+
+make sure its stated that we give this to the ai model so the model can identyify these relationshsips
+
+note there will be a HITL so the idea of the level of account matching and teh tranpsarentcy of how NYC is better than global if it matches should be in there likely this feature will need to be addded
+
+### 8.1
+
+a backfill target can be a different rep already imported so be careful tecincally they should be given some prioty for account continuquity but beaucase its a diefenrt rep it should be decreased from if it were the backfill source. make sure its claer that backfill will remove all acccounst/proscpecst form the source
+
+### 10.1
+
+priorites deafault based on what tpe of book is derected ent, comm, emea, apac
+
+### 10.4 renewal specialist is not a concept anymore we just move under 25k for commerical books to sales tools
+
+where is the implicity parent child relationshpi
+
+### 10.8 see notes form eaileir
+
+100k treated like enterisprise shouldnnot override the empoyye rule its pretty irerelvnt
+
+## 11
+
+make sure that the optimziation logic for non priotiey etc maketcehs between when waterfall optimizes at each step compared to the global opt in the relaxed LP
+
+model should also consider the balacning of arr,atr and tiers and piplein recall tthe weights. gave you for these?
+
+for the optimization using HIGHS package.
+
+- ARR: 50%
+- ATR: 25%
+- Tiers: 25%
+    - remove grouping treat each tier as individual.
+
+Prospects: 
+
+- Pipeline Amount: 50%
+- Tiers: 50%
+    - remove grouping treat each tier as individual.
+
+## 11.2
+
+should depend on the order of your piroitesr in the orderb asbedon your configured book type
+
+and thesre should be the proper values and bigM etc for max arr and mind arr
+
+**Why Three Tiers?**
+
+- **Alpha**: Allows the solver flexibility within ±25% variance (soft constraint)
+
+this is wrong its wahtever it is set so
+
+it shoudl pealnize furhter you are form the target linear
+
+then beta goes hard but still linear then BigM is huger
+
+### 11.4
+
+days witth onwer field will lamsot always be empty
+
+### 11.8
+
+varainaces should be set in teh configureation not be hard coded
+
+### more on 11
+
+i dont see the impolcit parent child prioty that is encoded to keep them toehgethe 
+
+### 12
+
+again make sure the variacnes and relvante maxes come from those set int eh config steep
+
+### 13.1
+
+| **Capacity Utilization** | 0-1+ | Average % of target load per rep |
+| --- | --- | --- |
+
+doesn’y apper on sanalyitcs screens perahps you should add it
+
+also i dont the Coverage metrics for % account with reps
+
+### 13.2
+
+this is deprcated we are using Coeff. Var on each chart for ARR, ATR , Piepeline Value
+
+### 13.5
+
+we sholud try and balacne  Quarter renawals make srue you have the naming convertion in the doc aslso

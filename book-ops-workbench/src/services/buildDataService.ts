@@ -1,21 +1,37 @@
 import { supabase } from "@/integrations/supabase/client";
-import { getAccountARR, classifyTeamTier } from '@/_domain';
+import { getAccountARR, getAccountATR, classifyTeamTier, isRenewalOpportunity, getOpportunityPipelineValue, isParentAccount, calculateGeoMatchScore, SALES_TOOLS_REP_ID, SALES_TOOLS_REP_NAME } from '@/_domain';
 import { getFiscalQuarter, isCurrentFiscalYear } from '@/utils/fiscalYearCalculations';
 import { calculateEnhancedRepMetrics, type EnhancedRepMetrics } from '@/utils/enhancedRepMetrics';
-import type { 
-  LPSuccessMetrics, 
-  GeoAlignmentMetrics, 
-  TierDistribution, 
+import type {
+  LPSuccessMetrics,
+  GeoAlignmentMetrics,
+  TierDistribution,
   TierAlignmentBreakdown,
-  ArrBucket, 
+  ArrBucket,
   RegionMetrics,
   OwnerCoverage,
-  MetricsSnapshot, 
+  MetricsSnapshot,
   MetricsComparison,
   BalanceMetricsDetail,
   RepLoadDistribution
 } from '@/types/analytics';
 import { ARR_BUCKETS, GEO_SCORE_WEIGHTS, TEAM_ALIGNMENT_WEIGHTS } from '@/types/analytics';
+
+// Progress tracking for large data loads
+export type LoadProgress = { current: number; total: number; stage: string };
+type ProgressCallback = (progress: LoadProgress) => void;
+let progressCallbacks: ProgressCallback[] = [];
+
+export const subscribeToLoadProgress = (callback: ProgressCallback) => {
+  progressCallbacks.push(callback);
+  return () => {
+    progressCallbacks = progressCallbacks.filter(cb => cb !== callback);
+  };
+};
+
+const emitProgress = (progress: LoadProgress) => {
+  progressCallbacks.forEach(cb => cb(progress));
+};
 
 export interface BuildDataSummary {
   accounts: {
@@ -32,11 +48,7 @@ export interface BuildDataSummary {
     parents: number;
     children: number;
     creRisk: number;
-    byRegion: {
-      AMER: number;
-      EMEA: number;
-      APAC: number;
-    };
+    byRegion: Record<string, number>;
   };
   opportunities: {
     total: number;
@@ -57,11 +69,7 @@ export interface BuildDataSummary {
     withOpportunities: number;
     activeReps: number;
     inactiveReps: number;
-    byRegion: {
-      AMER: number;
-      EMEA: number;
-      APAC: number;
-    };
+    byRegion: Record<string, number>;
   };
   assignments: {
     total: number;
@@ -176,39 +184,56 @@ class BuildDataService {
       }
       
       // Supabase has a hard server-side limit of 1000 rows per request
-      // Use 1000-row batches but run all in parallel for speed
+      // Use 1000-row batches with limited concurrency to avoid overwhelming the server
       const pageSize = 1000;
       const totalPages = Math.ceil((totalCount || 0) / pageSize);
-      console.log(`[BuildDataService] 📊 Total accounts: ${totalCount}, fetching in ${totalPages} parallel batches of ${pageSize}`);
-      
-      // Create all page fetch promises - all run in parallel
-      const pagePromises = Array.from({ length: totalPages }, (_, pageIndex) => 
-        supabase
-          .from('accounts')
-          .select('*')
-          .eq('build_id', buildId)
-          .order('account_name')
-          .range(pageIndex * pageSize, (pageIndex + 1) * pageSize - 1)
-      );
-      
-      // Execute all fetches in parallel
-      const pageResults = await Promise.all(pagePromises);
-      
-      // Combine results
+      const maxConcurrent = 10; // Limit concurrent requests to avoid 500 errors
+      console.log(`[BuildDataService] 📊 Total accounts: ${totalCount}, fetching in ${totalPages} batches (max ${maxConcurrent} concurrent)`);
+
       const allAccounts: any[] = [];
-      for (let i = 0; i < pageResults.length; i++) {
-        const { data: pageData, error } = pageResults[i];
-        if (error) {
-          console.error(`[BuildDataService] ❌ Error loading accounts batch ${i + 1}:`, error);
-          throw error;
+
+      // Emit initial progress
+      emitProgress({ current: 0, total: totalCount || 0, stage: 'Loading accounts' });
+
+      // Process in chunks of maxConcurrent
+      for (let chunkStart = 0; chunkStart < totalPages; chunkStart += maxConcurrent) {
+        const chunkEnd = Math.min(chunkStart + maxConcurrent, totalPages);
+        const chunkPromises = [];
+
+        for (let pageIndex = chunkStart; pageIndex < chunkEnd; pageIndex++) {
+          chunkPromises.push(
+            supabase
+              .from('accounts')
+              .select('*')
+              .eq('build_id', buildId)
+              .order('account_name')
+              .range(pageIndex * pageSize, (pageIndex + 1) * pageSize - 1)
+          );
         }
-        if (pageData) {
-          allAccounts.push(...pageData);
+
+        const chunkResults = await Promise.all(chunkPromises);
+
+        for (let i = 0; i < chunkResults.length; i++) {
+          const { data: pageData, error } = chunkResults[i];
+          if (error) {
+            console.error(`[BuildDataService] ❌ Error loading accounts batch ${chunkStart + i + 1}:`, error);
+            throw error;
+          }
+          if (pageData) {
+            allAccounts.push(...pageData);
+          }
+        }
+
+        // Emit progress update
+        emitProgress({ current: allAccounts.length, total: totalCount || 0, stage: 'Loading accounts' });
+
+        if (chunkEnd < totalPages) {
+          console.log(`[BuildDataService] 📦 Loaded ${allAccounts.length}/${totalCount} accounts...`);
         }
       }
-      
+
       const fetchTime = performance.now() - startTime;
-      console.log(`[BuildDataService] ⚡ Loaded ${allAccounts.length} accounts in ${fetchTime.toFixed(0)}ms (${totalPages} parallel batches)`)
+      console.log(`[BuildDataService] ⚡ Loaded ${allAccounts.length} accounts in ${fetchTime.toFixed(0)}ms`)
 
       // Fetch opportunities with pagination (Supabase has 1000 row limit)
       const { count: oppCount, error: oppCountError } = await supabase
@@ -221,93 +246,108 @@ class BuildDataService {
         throw oppCountError;
       }
       
+      // Fetch opportunities with limited concurrency
       const oppPageSize = 1000;
       const oppTotalPages = Math.ceil((oppCount || 0) / oppPageSize);
-      console.log(`[BuildDataService] 📊 Total opportunities: ${oppCount}, fetching in ${oppTotalPages} parallel batches of ${oppPageSize}`);
-      
-      const oppPagePromises = Array.from({ length: oppTotalPages }, (_, pageIndex) => 
-        supabase
-          .from('opportunities')
-          .select('*')
-          .eq('build_id', buildId)
-          .range(pageIndex * oppPageSize, (pageIndex + 1) * oppPageSize - 1)
-      );
-      
-      // Fetch sales reps and assignments (usually under 1000, but use pagination to be safe)
+      const oppMaxConcurrent = 10;
+      console.log(`[BuildDataService] 📊 Total opportunities: ${oppCount}, fetching in ${oppTotalPages} batches`);
+
+      // Emit progress for opportunities stage
+      emitProgress({ current: 0, total: oppCount || 0, stage: 'Loading opportunities' });
+
+      const allOpportunities: any[] = [];
+      for (let chunkStart = 0; chunkStart < oppTotalPages; chunkStart += oppMaxConcurrent) {
+        const chunkEnd = Math.min(chunkStart + oppMaxConcurrent, oppTotalPages);
+        const chunkPromises = [];
+        for (let pageIndex = chunkStart; pageIndex < chunkEnd; pageIndex++) {
+          chunkPromises.push(
+            supabase
+              .from('opportunities')
+              .select('*')
+              .eq('build_id', buildId)
+              .range(pageIndex * oppPageSize, (pageIndex + 1) * oppPageSize - 1)
+          );
+        }
+        const chunkResults = await Promise.all(chunkPromises);
+        for (const { data, error } of chunkResults) {
+          if (error) throw error;
+          if (data) allOpportunities.push(...data);
+        }
+
+        // Emit progress update for opportunities
+        emitProgress({ current: allOpportunities.length, total: oppCount || 0, stage: 'Loading opportunities' });
+      }
+
+      // Fetch sales reps (usually small, but use same pattern)
       const { count: repCount } = await supabase
         .from('sales_reps')
         .select('*', { count: 'exact', head: true })
         .eq('build_id', buildId);
-      
+
       const repPageSize = 1000;
       const repTotalPages = Math.ceil((repCount || 0) / repPageSize);
-      const repPagePromises = Array.from({ length: repTotalPages }, (_, pageIndex) => 
-        supabase
-          .from('sales_reps')
-          .select('*')
-          .eq('build_id', buildId)
-          .range(pageIndex * repPageSize, (pageIndex + 1) * repPageSize - 1)
-      );
-      
+      console.log(`[BuildDataService] 📊 Total sales reps: ${repCount}`);
+
+      // Emit progress for sales reps stage
+      emitProgress({ current: 0, total: repCount || 0, stage: 'Loading sales reps' });
+
+      const allSalesReps: any[] = [];
+      for (let chunkStart = 0; chunkStart < repTotalPages; chunkStart += 10) {
+        const chunkEnd = Math.min(chunkStart + 10, repTotalPages);
+        const chunkPromises = [];
+        for (let pageIndex = chunkStart; pageIndex < chunkEnd; pageIndex++) {
+          chunkPromises.push(
+            supabase
+              .from('sales_reps')
+              .select('*')
+              .eq('build_id', buildId)
+              .range(pageIndex * repPageSize, (pageIndex + 1) * repPageSize - 1)
+          );
+        }
+        const chunkResults = await Promise.all(chunkPromises);
+        for (const { data, error } of chunkResults) {
+          if (error) throw error;
+          if (data) allSalesReps.push(...data);
+        }
+
+        // Emit progress update for sales reps
+        emitProgress({ current: allSalesReps.length, total: repCount || 0, stage: 'Loading sales reps' });
+      }
+
+      // Fetch assignments with limited concurrency
       const { count: assignCount } = await supabase
         .from('assignments')
         .select('*', { count: 'exact', head: true })
         .eq('build_id', buildId);
-      
+
       const assignPageSize = 1000;
       const assignTotalPages = Math.ceil((assignCount || 0) / assignPageSize);
-      const assignPagePromises = Array.from({ length: assignTotalPages }, (_, pageIndex) => 
-        supabase
-          .from('assignments')
-          .select('*')
-          .eq('build_id', buildId)
-          .range(pageIndex * assignPageSize, (pageIndex + 1) * assignPageSize - 1)
-      );
-      
-      // Execute all fetches in parallel
-      const [oppPageResults, repPageResults, assignPageResults] = await Promise.all([
-        Promise.all(oppPagePromises),
-        Promise.all(repPagePromises),
-        Promise.all(assignPagePromises)
-      ]);
-      
-      // Combine opportunity results
-      const allOpportunities: any[] = [];
-      for (let i = 0; i < oppPageResults.length; i++) {
-        const { data: pageData, error } = oppPageResults[i];
-        if (error) {
-          console.error(`[BuildDataService] ❌ Error loading opportunities batch ${i + 1}:`, error);
-          throw error;
-        }
-        if (pageData) {
-          allOpportunities.push(...pageData);
-        }
-      }
-      
-      // Combine sales rep results
-      const allSalesReps: any[] = [];
-      for (let i = 0; i < repPageResults.length; i++) {
-        const { data: pageData, error } = repPageResults[i];
-        if (error) {
-          console.error(`[BuildDataService] ❌ Error loading sales reps batch ${i + 1}:`, error);
-          throw error;
-        }
-        if (pageData) {
-          allSalesReps.push(...pageData);
-        }
-      }
-      
-      // Combine assignment results
+      console.log(`[BuildDataService] 📊 Total assignments: ${assignCount}`);
+
+      // Emit progress for assignments stage
+      emitProgress({ current: 0, total: assignCount || 0, stage: 'Loading assignments' });
+
       const allAssignments: any[] = [];
-      for (let i = 0; i < assignPageResults.length; i++) {
-        const { data: pageData, error } = assignPageResults[i];
-        if (error) {
-          console.error(`[BuildDataService] ❌ Error loading assignments batch ${i + 1}:`, error);
-          throw error;
+      for (let chunkStart = 0; chunkStart < assignTotalPages; chunkStart += 10) {
+        const chunkEnd = Math.min(chunkStart + 10, assignTotalPages);
+        const chunkPromises = [];
+        for (let pageIndex = chunkStart; pageIndex < chunkEnd; pageIndex++) {
+          chunkPromises.push(
+            supabase
+              .from('assignments')
+              .select('*')
+              .eq('build_id', buildId)
+              .range(pageIndex * assignPageSize, (pageIndex + 1) * assignPageSize - 1)
+          );
         }
-        if (pageData) {
-          allAssignments.push(...pageData);
+        const chunkResults = await Promise.all(chunkPromises);
+        for (const { data, error } of chunkResults) {
+          if (error) throw error;
+          if (data) allAssignments.push(...data);
         }
+
+        // Emit progress update for assignments
+        emitProgress({ current: allAssignments.length, total: assignCount || 0, stage: 'Loading assignments' });
       }
 
       const accounts = allAccounts;
@@ -348,12 +388,12 @@ class BuildDataService {
       return opp.cre_status && opp.cre_status.trim() !== '';
     }).length;
 
-        // Calculate regional breakdown for team capacity
-        const repsByRegion = {
-          AMER: salesReps.filter(rep => rep.region === 'AMER').length,
-          EMEA: salesReps.filter(rep => rep.region === 'EMEA').length,
-          APAC: salesReps.filter(rep => rep.region === 'APAC').length,
-        };
+        // Calculate regional breakdown for team capacity - DYNAMIC based on actual data
+        const repsByRegion: Record<string, number> = {};
+        salesReps.forEach(rep => {
+          const region = rep.region || 'Unassigned';
+          repsByRegion[region] = (repsByRegion[region] || 0) + 1;
+        });
 
       // Create sales rep lookup for validation
       const validRepIds = new Set(salesReps.map(rep => rep.rep_id));
@@ -386,16 +426,20 @@ class BuildDataService {
           parents: accounts.filter(a => a.is_parent).length,
           children: accounts.filter(a => !a.is_parent).length,
           creRisk: accounts.filter(a => a.cre_risk).length,
-          byRegion: {
-            AMER: accounts.filter(a => a.is_parent && a.geo === 'AMER').length,
-            EMEA: accounts.filter(a => a.is_parent && a.geo === 'EMEA').length,
-            APAC: accounts.filter(a => a.is_parent && a.geo === 'APAC').length,
-          }
+          byRegion: (() => {
+            // DYNAMIC: count accounts by actual geo/territory values
+            const byRegion: Record<string, number> = {};
+            accounts.filter(a => a.is_parent).forEach(a => {
+              const region = a.geo || a.sales_territory || 'Unassigned';
+              byRegion[region] = (byRegion[region] || 0) + 1;
+            });
+            return byRegion;
+          })()
         },
         opportunities: {
           total: opportunities.length,
           withOwners: opportunities.filter(o => o.owner_id).length,
-          totalAmount: accounts.reduce((sum, a) => sum + (a.calculated_atr || a.atr || 0), 0),
+          totalAmount: accounts.reduce((sum, a) => sum + getAccountATR(a), 0),
           // Total ARR: Only sum parent customer accounts using single source of truth
           totalARR: customerAccounts.reduce((sum, a) => sum + getAccountARR(a), 0),
           withCRE: opportunitiesWithCRE,
@@ -586,7 +630,7 @@ class BuildDataService {
         const totalATR = repOpportunities.reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0);
         
         // Separate parent and child accounts for accurate workload calculation
-        const parentAccounts = repAccounts.filter(a => !a.ultimate_parent_id || a.ultimate_parent_id === '');
+        const parentAccounts = repAccounts.filter(isParentAccount);
         const customerAccounts = parentAccounts.filter(a => (a.hierarchy_bookings_arr_converted || 0) > 0);
         const prospectAccounts = parentAccounts.filter(a => (a.hierarchy_bookings_arr_converted || 0) === 0);
 
@@ -811,70 +855,104 @@ class BuildDataService {
 
   /**
    * Calculate Geography Score - weighted geo alignment
-   * Uses exact/sibling/parent/global weights from GEO_SCORE_WEIGHTS
+   *
+   * Uses territory mappings from user configuration to translate account
+   * territories to rep regions before scoring. Falls back to hierarchy-based
+   * scoring from @/_domain/geography.ts when no explicit mapping exists.
+   *
+   * SCORING (from MASTER_LOGIC.mdc §4.3):
+   * - Exact match (1.0): Account territory maps to rep's region
+   * - Same sub-region (0.85): Account maps to rep's sub-region
+   * - Same parent (0.65): Both in same parent region
+   * - Global fallback (0.40): Rep is "Global"
+   * - Cross-region (0.20): Different parent regions
    */
-  private calculateGeographyScore(accounts: any[], salesReps: any[], useProposed: boolean): number {
+  private calculateGeographyScore(
+    accounts: any[],
+    salesReps: any[],
+    useProposed: boolean,
+    territoryMappings: Record<string, string> = {}
+  ): number {
     const repsByRepId = new Map(salesReps.map(r => [r.rep_id, r]));
     const parentAccounts = accounts.filter(a => a.is_parent);
     if (parentAccounts.length === 0) return 0;
-    
+
+    // Create a case-insensitive mapping lookup
+    const mappingLookup = new Map<string, string>();
+    for (const [accountTerritory, targetRegion] of Object.entries(territoryMappings)) {
+      mappingLookup.set(accountTerritory.toLowerCase().trim(), targetRegion.trim());
+    }
+
     let totalScore = 0;
     let scoredCount = 0;
-    
+
     parentAccounts.forEach(account => {
       const ownerId = useProposed ? (account.new_owner_id || account.owner_id) : account.owner_id;
       if (!ownerId) return;
-      
+
       const rep = repsByRepId.get(ownerId);
       if (!rep) return;
-      
-      const accountGeo = account.geo || account.sales_territory;
+
+      const rawAccountGeo = account.geo || account.sales_territory;
       const repRegion = rep.region;
-      
-      if (!accountGeo || !repRegion) {
+
+      if (!rawAccountGeo || !repRegion) {
         totalScore += GEO_SCORE_WEIGHTS.global;
-      } else if (accountGeo === repRegion) {
-        totalScore += GEO_SCORE_WEIGHTS.exact;
-      } else {
-        // Simplified: if not exact match, use global fallback
-        // Could be enhanced to check sibling/parent regions
-        totalScore += GEO_SCORE_WEIGHTS.global;
+        scoredCount++;
+        return;
       }
+
+      // Apply territory mapping if configured, otherwise use raw value
+      const mappedGeo = mappingLookup.get(rawAccountGeo.toLowerCase().trim()) || rawAccountGeo;
+
+      // Use the hierarchy-aware scoring from @/_domain
+      const score = calculateGeoMatchScore(mappedGeo, repRegion);
+      totalScore += score;
       scoredCount++;
     });
-    
+
     return scoredCount > 0 ? totalScore / scoredCount : 0;
   }
 
   /**
    * Calculate Team Alignment Score - account tier matching rep tier
    * Uses employee count to classify accounts (not tier fields from database)
+   * Returns null if no accounts have valid tier data (N/A)
+   *
+   * @see MASTER_LOGIC.mdc §5.1.1 - Team Alignment Scoring with Missing Data
    */
-  private calculateTeamAlignmentScore(accounts: any[], salesReps: any[], useProposed: boolean): number {
+  private calculateTeamAlignmentScore(accounts: any[], salesReps: any[], useProposed: boolean): number | null {
     const repsByRepId = new Map(salesReps.map(r => [r.rep_id, r]));
     const parentAccounts = accounts.filter(a => a.is_parent);
-    if (parentAccounts.length === 0) return 0;
-    
+    if (parentAccounts.length === 0) return null;
+
     let totalScore = 0;
     let scoredCount = 0;
-    
+
     parentAccounts.forEach(account => {
       const ownerId = useProposed ? (account.new_owner_id || account.owner_id) : account.owner_id;
       if (!ownerId) return;
-      
+
       const rep = repsByRepId.get(ownerId);
       if (!rep) return;
-      
+
       // Classify account tier from employee count (from @/_domain)
-      const accountTier = classifyTeamTier(account.employees) || 'Standard';
-      const repTier = rep.team_tier || 'Standard';
-      
+      // Returns null if employee count is missing
+      const accountTier = classifyTeamTier(account.employees);
+      const repTier = rep.team_tier;
+
+      // N/A case: missing tier data - skip, don't count as mismatch
+      // Per MASTER_LOGIC.mdc §5.1.1 - missing data should NOT penalize
+      if (!accountTier || !repTier) {
+        return;
+      }
+
       // Normalize tier names
       const normAccountTier = this.normalizeTier(accountTier);
       const normRepTier = this.normalizeTier(repTier);
-      
+
       const tierDiff = Math.abs(normAccountTier - normRepTier);
-      
+
       if (tierDiff === 0) {
         totalScore += TEAM_ALIGNMENT_WEIGHTS.exact;
       } else if (tierDiff === 1) {
@@ -884,8 +962,9 @@ class BuildDataService {
       }
       scoredCount++;
     });
-    
-    return scoredCount > 0 ? totalScore / scoredCount : 0;
+
+    // Return null (N/A) if no accounts had valid tier data
+    return scoredCount > 0 ? totalScore / scoredCount : null;
   }
 
   private normalizeTier(tier: string): number {
@@ -914,91 +993,127 @@ class BuildDataService {
 
   /**
    * Calculate Geo Alignment Metrics
-   * 
-   * Uses the territory_mappings from assignment_configuration to determine
-   * if an account's territory maps to the assigned rep's region.
-   * 
+   *
+   * Uses hierarchy-based scoring from @/_domain/geography.ts to determine
+   * if an account's territory aligns with the assigned rep's region.
+   *
+   * ALIGNMENT SCORING (from MASTER_LOGIC.mdc §4.3):
+   * - Exact match (1.0): Account and rep have same region
+   * - Same sub-region (0.85): Account maps to rep's sub-region
+   * - Same parent (0.65): Both in same parent region (e.g., both AMER)
+   * - Global fallback (0.40): Rep is "Global" - can take anything
+   * - Cross-region (0.20): Different parent regions
+   *
+   * For dashboard purposes:
+   * - Score >= 0.40 (Global fallback or better) = Aligned
+   * - Score < 0.40 (cross-region) = Misaligned
+   *
    * @param accounts - All accounts
    * @param salesReps - All sales reps
    * @param useProposed - Whether to use new_owner_id (proposed) or owner_id (original)
    * @param territoryMappings - Mapping from account territory values to rep region values
    */
   private calculateGeoAlignment(
-    accounts: any[], 
-    salesReps: any[], 
+    accounts: any[],
+    salesReps: any[],
     useProposed: boolean,
     territoryMappings: Record<string, string> = {}
   ): GeoAlignmentMetrics {
     const repsByRepId = new Map(salesReps.map(r => [r.rep_id, r]));
     const parentAccounts = accounts.filter(a => a.is_parent);
-    
+
     let aligned = 0;
     let misaligned = 0;
     let unassigned = 0;
-    
-    // Create a case-insensitive mapping lookup
+
+    // Track by rep region for breakdown
+    const byRegionMap: Map<string, { aligned: number; misaligned: number; unassigned: number }> = new Map();
+
+    // Create a case-insensitive mapping lookup (account territory → target region)
     const mappingLookup = new Map<string, string>();
-    for (const [accountTerritory, repRegion] of Object.entries(territoryMappings)) {
-      mappingLookup.set(accountTerritory.toLowerCase().trim(), repRegion.toLowerCase().trim());
+    for (const [accountTerritory, targetRegion] of Object.entries(territoryMappings)) {
+      mappingLookup.set(accountTerritory.toLowerCase().trim(), targetRegion.trim());
     }
-    
+
     parentAccounts.forEach(account => {
       const ownerId = useProposed ? (account.new_owner_id || account.owner_id) : account.owner_id;
-      
+
       if (!ownerId) {
         unassigned++;
+        // Add to "Unassigned" region bucket
+        const regionData = byRegionMap.get('Unassigned') || { aligned: 0, misaligned: 0, unassigned: 0 };
+        regionData.unassigned++;
+        byRegionMap.set('Unassigned', regionData);
         return;
       }
-      
+
       const rep = repsByRepId.get(ownerId);
       if (!rep) {
         unassigned++;
+        // Add to "Unassigned" region bucket
+        const regionData = byRegionMap.get('Unassigned') || { aligned: 0, misaligned: 0, unassigned: 0 };
+        regionData.unassigned++;
+        byRegionMap.set('Unassigned', regionData);
         return;
       }
-      
-      // Get account territory - try geo first, then sales_territory
-      const accountTerritoryRaw = (account.geo || account.sales_territory || '').toString().trim();
-      // Get rep region - try region first, then team
+
+      // Get account territory - try sales_territory first (more specific), then geo
+      const accountTerritoryRaw = (account.sales_territory || account.geo || '').toString().trim();
+      // Get rep region
       const repRegionRaw = (rep.region || rep.team || '').toString().trim();
-      
-      // If either is empty, count as unassigned (can't determine alignment)
+      const regionKey = repRegionRaw || 'Unknown';
+
+      // Ensure region is in the map
+      if (!byRegionMap.has(regionKey)) {
+        byRegionMap.set(regionKey, { aligned: 0, misaligned: 0, unassigned: 0 });
+      }
+      const regionData = byRegionMap.get(regionKey)!;
+
+      // If either is empty, count as misaligned (missing geo data = not aligned)
       if (!accountTerritoryRaw || !repRegionRaw) {
-        unassigned++;
+        misaligned++;
+        regionData.misaligned++;
         return;
       }
-      
-      // Normalize for comparison
-      const accountTerritoryNorm = accountTerritoryRaw.toLowerCase();
-      const repRegionNorm = repRegionRaw.toLowerCase();
-      
-      // Look up the mapped region for this account territory
-      const mappedRegion = mappingLookup.get(accountTerritoryNorm);
-      
-      if (mappedRegion) {
-        // We have a configured mapping - use it
-        if (mappedRegion === repRegionNorm) {
-          aligned++;
-        } else {
-          misaligned++;
-        }
+
+      // Step 1: Apply territory mapping if configured
+      // This converts account territory (e.g., "NOR CAL") to target region (e.g., "California")
+      const mappedAccountRegion = mappingLookup.get(accountTerritoryRaw.toLowerCase()) || accountTerritoryRaw;
+
+      // Step 2: Use hierarchy-based geo scoring from @/_domain/geography.ts
+      // This handles: exact match, same sub-region, same parent, Global fallback, cross-region
+      const geoScore = calculateGeoMatchScore(mappedAccountRegion, repRegionRaw);
+
+      // Step 3: Determine alignment based on score
+      // Score >= 0.40 means at least Global fallback level (acceptable)
+      // Score < 0.40 means cross-region mismatch (not acceptable)
+      if (geoScore >= 0.40) {
+        aligned++;
+        regionData.aligned++;
       } else {
-        // No mapping configured - fall back to direct string comparison
-        if (accountTerritoryNorm === repRegionNorm || 
-            accountTerritoryNorm.includes(repRegionNorm) || 
-            repRegionNorm.includes(accountTerritoryNorm)) {
-          aligned++;
-        } else {
-          misaligned++;
-        }
+        misaligned++;
+        regionData.misaligned++;
       }
     });
-    
-    const total = aligned + misaligned;
+
+    // Include unassigned in total so 100% alignment requires ALL accounts to be assigned & aligned
+    const total = aligned + misaligned + unassigned;
     const alignmentRate = total > 0 ? (aligned / total) * 100 : 0;
-    
-    console.log(`[GeoAlignment] Aligned: ${aligned}, Misaligned: ${misaligned}, Unassigned: ${unassigned}, Rate: ${alignmentRate.toFixed(1)}%`);
-    
-    return { aligned, misaligned, unassigned, alignmentRate };
+
+    // Convert byRegion map to array, sorted by total count descending
+    const byRegion = Array.from(byRegionMap.entries())
+      .map(([region, data]) => ({
+        region,
+        aligned: data.aligned,
+        misaligned: data.misaligned,
+        unassigned: data.unassigned,
+        total: data.aligned + data.misaligned + data.unassigned,
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    console.log(`[GeoAlignment] Aligned: ${aligned}, Misaligned: ${misaligned}, Unassigned: ${unassigned}, Total: ${total}, Rate: ${alignmentRate.toFixed(1)}%`);
+
+    return { aligned, misaligned, unassigned, alignmentRate, byRegion };
   }
 
   /**
@@ -1052,36 +1167,45 @@ class BuildDataService {
   private calculateTierAlignmentBreakdown(accounts: any[], salesReps: any[], useProposed: boolean): TierAlignmentBreakdown {
     const repsByRepId = new Map(salesReps.map(r => [r.rep_id, r]));
     const parentAccounts = accounts.filter(a => a.is_parent);
-    
+
     let exactMatch = 0;
     let oneLevelMismatch = 0;
     let twoPlusLevelMismatch = 0;
     let unassigned = 0;
-    
+    let unknown = 0;
+
     parentAccounts.forEach(account => {
       const ownerId = useProposed ? (account.new_owner_id || account.owner_id) : account.owner_id;
-      
+
       if (!ownerId) {
         unassigned++;
         return;
       }
-      
+
       const rep = repsByRepId.get(ownerId);
       if (!rep) {
         unassigned++;
         return;
       }
-      
+
       // Classify account tier from employee count (from @/_domain)
-      const accountTier = classifyTeamTier(account.employees) || 'Standard';
-      const repTier = rep.team_tier || 'Standard';
-      
+      // Returns null if employee count is missing
+      const accountTier = classifyTeamTier(account.employees);
+      const repTier = rep.team_tier;
+
+      // N/A case: missing tier data for either account or rep
+      // Per MASTER_LOGIC.mdc §5.1.1 - missing data is NOT a mismatch
+      if (!accountTier || !repTier) {
+        unknown++;
+        return;
+      }
+
       // Normalize tier names
       const normAccountTier = this.normalizeTier(accountTier);
       const normRepTier = this.normalizeTier(repTier);
-      
+
       const tierDiff = Math.abs(normAccountTier - normRepTier);
-      
+
       if (tierDiff === 0) {
         exactMatch++;
       } else if (tierDiff === 1) {
@@ -1090,12 +1214,13 @@ class BuildDataService {
         twoPlusLevelMismatch++;
       }
     });
-    
+
     return {
       exactMatch,
       oneLevelMismatch,
       twoPlusLevelMismatch,
-      unassigned
+      unassigned,
+      unknown
     };
   }
 
@@ -1127,42 +1252,55 @@ class BuildDataService {
 
   /**
    * Calculate Region Metrics
+   *
+   * DYNAMIC: Discovers regions from actual rep data instead of hardcoded list.
+   * This respects whatever region values users have configured for their reps.
    */
   private calculateRegionMetrics(accounts: any[], salesReps: any[], opportunities: any[], useProposed: boolean): RegionMetrics[] {
-    const regions = ['AMER', 'EMEA', 'APAC'];
-    const repsByRepId = new Map(salesReps.map(r => [r.rep_id, r]));
+    // DYNAMIC: Get unique regions from actual rep data
+    const uniqueRegions = new Set<string>();
+    salesReps.forEach(r => {
+      if (r.region) uniqueRegions.add(r.region);
+    });
+    // Also include account geo values that might not have matching reps
+    accounts.filter(a => a.is_parent).forEach(a => {
+      const geo = a.geo || a.sales_territory;
+      if (geo) uniqueRegions.add(geo);
+    });
+
+    const regions = Array.from(uniqueRegions).sort();
     const parentAccounts = accounts.filter(a => a.is_parent);
-    
+
     return regions.map(region => {
       // Count accounts by their geo field
       const regionAccounts = parentAccounts.filter(a => {
         const geo = a.geo || a.sales_territory;
         return geo === region;
       });
-      
+
       const customers = regionAccounts.filter(a => (a.hierarchy_bookings_arr_converted || 0) > 0);
       const prospects = regionAccounts.filter(a => (a.hierarchy_bookings_arr_converted || 0) === 0);
-      
+
       const arr = customers.reduce((sum, a) => sum + getAccountARR(a), 0);
-      
+
       // ATR and Pipeline from opportunities linked to accounts in this region
       const regionAccountIds = new Set(regionAccounts.map(a => a.sfdc_account_id));
       const regionOpps = opportunities.filter(o => regionAccountIds.has(o.sfdc_account_id));
-      
+
       // ATR: use account fields first, fall back to opportunities if empty/0
-      let atr = regionAccounts.reduce((sum, a) => sum + (a.calculated_atr || a.atr || 0), 0);
+      let atr = regionAccounts.reduce((sum, a) => sum + getAccountATR(a), 0);
       // If account ATR is 0 or empty, fall back to summing from renewal opportunities
       if (atr === 0) {
         atr = regionOpps
-          .filter(o => o.opportunity_type && o.opportunity_type.toLowerCase().trim() === 'renewals')
+          .filter(isRenewalOpportunity)
           .reduce((sum, o) => sum + (o.available_to_renew || 0), 0);
       }
-      
+
       // Pipeline: sum of net_arr from all opportunities
-      const pipeline = regionOpps.reduce((sum, o) => sum + (o.net_arr || o.amount || 0), 0);
-      
+      const pipeline = regionOpps.reduce((sum, o) => sum + getOpportunityPipelineValue(o), 0);
+
       const repCount = salesReps.filter(r => r.region === region && r.is_active).length;
-      
+
       return {
         region,
         accounts: regionAccounts.length,
@@ -1179,19 +1317,26 @@ class BuildDataService {
   /**
    * Calculate complete LP Success Metrics
    */
-  private calculateLPSuccessMetrics(accounts: any[], salesReps: any[], opportunities: any[], useProposed: boolean, target?: number): LPSuccessMetrics {
+  private calculateLPSuccessMetrics(
+    accounts: any[],
+    salesReps: any[],
+    opportunities: any[],
+    useProposed: boolean,
+    target?: number,
+    territoryMappings: Record<string, string> = {}
+  ): LPSuccessMetrics {
     // Get detailed balance metrics (includes rep load distribution)
     const balanceDetail = this.calculateBalanceMetricsDetail(accounts, salesReps, useProposed);
-    
+
     // Use the balance detail for capacity utilization
     const avgTarget = target || balanceDetail.targetLoad;
     const loads = balanceDetail.distribution.map(d => d.arrLoad);
-    
+
     return {
       balanceScore: balanceDetail.score,
       balanceDetail,
       continuityScore: this.calculateContinuityScore(accounts, useProposed),
-      geographyScore: this.calculateGeographyScore(accounts, salesReps, useProposed),
+      geographyScore: this.calculateGeographyScore(accounts, salesReps, useProposed, territoryMappings),
       teamAlignmentScore: this.calculateTeamAlignmentScore(accounts, salesReps, useProposed),
       capacityUtilization: this.calculateCapacityUtilization(loads, avgTarget)
     };
@@ -1199,6 +1344,15 @@ class BuildDataService {
 
   /**
    * Calculate per-rep distribution data for charts
+   *
+   * IMPORTANT: Includes Sales Tools as a pseudo-rep when useProposed=true
+   * Sales Tools accounts are identified by:
+   * - new_owner_name = 'Sales Tools' AND new_owner_id is null
+   *
+   * Sales Tools appears as a distinct entry with:
+   * - repId: SALES_TOOLS_REP_ID ('__SALES_TOOLS__')
+   * - repName: 'Sales Tools'
+   * - region: 'Sales Tools' (no FLM/SLM hierarchy)
    */
   private calculateRepDistribution(
     accounts: any[],
@@ -1208,94 +1362,124 @@ class BuildDataService {
   ): import('@/types/analytics').RepDistributionData[] {
     const parentAccounts = accounts.filter(a => a.is_parent);
     const childAccounts = accounts.filter(a => !a.is_parent);
-    
+
     // Build opportunity maps by account (key by sfdc_account_id)
     // Pipeline: sum of net_arr from all opportunities
     const oppByAccount = new Map<string, number>();
     opportunities.forEach(opp => {
       const current = oppByAccount.get(opp.sfdc_account_id) || 0;
-      oppByAccount.set(opp.sfdc_account_id, current + (opp.net_arr || opp.amount || 0));
+      oppByAccount.set(opp.sfdc_account_id, current + getOpportunityPipelineValue(opp));
     });
-    
+
     // ATR: sum of available_to_renew from renewal opportunities only
     const atrByAccount = new Map<string, number>();
     opportunities.forEach(opp => {
       // Only include renewal opportunities with available_to_renew
-      if (opp.opportunity_type && opp.opportunity_type.toLowerCase().trim() === 'renewals' && opp.available_to_renew) {
+      if (isRenewalOpportunity(opp) && opp.available_to_renew) {
         const current = atrByAccount.get(opp.sfdc_account_id) || 0;
         atrByAccount.set(opp.sfdc_account_id, current + (opp.available_to_renew || 0));
       }
     });
-    
-    // Calculate per-rep metrics
-    return salesReps
+
+    // Helper to check if account is assigned to Sales Tools
+    // Note: Sales Tools accounts have new_owner_name='Sales Tools' regardless of useProposed flag
+    // This allows Sales Tools to appear in analytics even in "original" view
+    const isSalesToolsAccount = (account: any): boolean => {
+      // Sales Tools: new_owner_name = 'Sales Tools' and new_owner_id is null/empty
+      return account.new_owner_name === SALES_TOOLS_REP_NAME &&
+             (!account.new_owner_id || account.new_owner_id === '');
+    };
+
+    // Helper to calculate metrics for a set of accounts
+    const calculateAccountMetrics = (repParentAccounts: any[], repChildAccounts: any[]) => {
+      const parentCustomerAccounts = repParentAccounts.filter(a =>
+        (a.hierarchy_bookings_arr_converted || 0) > 0
+      );
+      const parentProspectAccounts = repParentAccounts.filter(a =>
+        (a.hierarchy_bookings_arr_converted || 0) === 0
+      );
+      const childCustomerAccounts = repChildAccounts.filter(a =>
+        (a.hierarchy_bookings_arr_converted || 0) > 0
+      );
+      const childProspectAccounts = repChildAccounts.filter(a =>
+        (a.hierarchy_bookings_arr_converted || 0) === 0
+      );
+
+      const arr = parentCustomerAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
+      const atr = repParentAccounts.reduce((sum, a) => {
+        const accountATR = getAccountATR(a);
+        if (accountATR > 0) return sum + accountATR;
+        return sum + (atrByAccount.get(a.sfdc_account_id) || 0);
+      }, 0);
+      const pipeline = repParentAccounts.reduce((sum, a) =>
+        sum + (oppByAccount.get(a.sfdc_account_id) || 0), 0
+      );
+
+      return {
+        arr,
+        atr,
+        pipeline,
+        customerAccounts: parentCustomerAccounts.length,
+        prospectAccounts: parentProspectAccounts.length,
+        totalAccounts: repParentAccounts.length,
+        parentCustomers: parentCustomerAccounts.length,
+        childCustomers: childCustomerAccounts.length,
+        parentProspects: parentProspectAccounts.length,
+        childProspects: childProspectAccounts.length,
+      };
+    };
+
+    // Calculate per-rep metrics for actual reps
+    const repDistribution = salesReps
       .filter(rep => rep.is_active && rep.include_in_assignments !== false)
       .map(rep => {
-        // Get parent accounts for this rep
+        // Get parent accounts for this rep (exclude Sales Tools accounts)
         const repParentAccounts = parentAccounts.filter(a => {
+          if (isSalesToolsAccount(a)) return false; // Exclude Sales Tools accounts
           const ownerId = useProposed ? (a.new_owner_id || a.owner_id) : a.owner_id;
           return ownerId === rep.rep_id;
         });
-        
+
         // Get child accounts for this rep
         const repChildAccounts = childAccounts.filter(a => {
+          if (isSalesToolsAccount(a)) return false;
           const ownerId = useProposed ? (a.new_owner_id || a.owner_id) : a.owner_id;
           return ownerId === rep.rep_id;
         });
-        
-        // Parent accounts by type
-        const parentCustomerAccounts = repParentAccounts.filter(a => 
-          (a.hierarchy_bookings_arr_converted || 0) > 0
-        );
-        const parentProspectAccounts = repParentAccounts.filter(a => 
-          (a.hierarchy_bookings_arr_converted || 0) === 0
-        );
-        
-        // Child accounts by type
-        const childCustomerAccounts = repChildAccounts.filter(a => 
-          (a.hierarchy_bookings_arr_converted || 0) > 0
-        );
-        const childProspectAccounts = repChildAccounts.filter(a => 
-          (a.hierarchy_bookings_arr_converted || 0) === 0
-        );
-        
-        // Calculate ARR from parent customer accounts
-        const arr = parentCustomerAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
-        
-        // Calculate ATR: use account fields first, fall back to opportunities if empty/0
-        const atr = repParentAccounts.reduce((sum, a) => {
-          const accountATR = a.calculated_atr || a.atr || 0;
-          // If account has ATR value, use it; otherwise fall back to opportunities
-          if (accountATR > 0) {
-            return sum + accountATR;
-          }
-          return sum + (atrByAccount.get(a.sfdc_account_id) || 0);
-        }, 0);
-        
-        // Calculate pipeline from opportunities linked to rep's accounts
-        const pipeline = repParentAccounts.reduce((sum, a) => 
-          sum + (oppByAccount.get(a.sfdc_account_id) || 0), 0
-        );
-        
+
+        const metrics = calculateAccountMetrics(repParentAccounts, repChildAccounts);
+
         return {
           repId: rep.rep_id,
           repName: rep.name,
           region: rep.region || 'Unknown',
-          arr,
-          atr,
-          pipeline,
-          // Total counts (backward compatible - parent accounts only)
-          customerAccounts: parentCustomerAccounts.length,
-          prospectAccounts: parentProspectAccounts.length,
-          totalAccounts: repParentAccounts.length,
-          // Parent/child breakdown for tooltip
-          parentCustomers: parentCustomerAccounts.length,
-          childCustomers: childCustomerAccounts.length,
-          parentProspects: parentProspectAccounts.length,
-          childProspects: childProspectAccounts.length,
+          ...metrics,
         };
-      })
-      .sort((a, b) => b.arr - a.arr); // Sort by ARR descending
+      });
+
+    // Add Sales Tools pseudo-rep ONLY when showing proposed assignments
+    // Sales Tools is a balancing concept that routes low-ARR accounts (<$25K) during assignment
+    // Data Overview (useProposed=false) should show original imported data without Sales Tools
+    // Balancing Dashboard (useProposed=true) should show Sales Tools bucket
+    if (useProposed) {
+      const salesToolsParentAccounts = parentAccounts.filter(isSalesToolsAccount);
+      const salesToolsChildAccounts = childAccounts.filter(isSalesToolsAccount);
+
+      if (salesToolsParentAccounts.length > 0) {
+        const salesToolsMetrics = calculateAccountMetrics(salesToolsParentAccounts, salesToolsChildAccounts);
+
+        console.log(`[RepDistribution] 📦 Sales Tools pseudo-rep: ${salesToolsParentAccounts.length} accounts, $${salesToolsMetrics.arr.toLocaleString()} ARR`);
+
+        repDistribution.push({
+          repId: SALES_TOOLS_REP_ID,
+          repName: SALES_TOOLS_REP_NAME,
+          region: 'Sales Tools', // Distinct region - no FLM/SLM hierarchy
+          ...salesToolsMetrics,
+        });
+      }
+    }
+
+    return repDistribution.sort((a, b) => b.arr - a.arr); // Sort by ARR descending
   }
 
   /**
@@ -1364,14 +1548,14 @@ class BuildDataService {
     // Fetch raw data with proper pagination
     const { accounts, opportunities, salesReps } = await this.fetchRawBuildData(buildId);
     
-    // Fetch territory mappings from configuration
+    // Fetch territory mappings from configuration (use maybeSingle to handle no rows gracefully)
     const { data: configData } = await supabase
       .from('assignment_configuration')
       .select('territory_mappings')
       .eq('build_id', buildId)
       .order('created_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
     
     const territoryMappings: Record<string, string> = (configData?.territory_mappings as Record<string, string>) || {};
     
@@ -1389,7 +1573,7 @@ class BuildDataService {
     const prospects = parentAccounts.filter(a => (a.hierarchy_bookings_arr_converted || 0) === 0);
     
     return {
-      lpMetrics: this.calculateLPSuccessMetrics(accounts, salesReps, opportunities, useProposed),
+      lpMetrics: this.calculateLPSuccessMetrics(accounts, salesReps, opportunities, useProposed, undefined, territoryMappings),
       byRegion: this.calculateRegionMetrics(accounts, salesReps, opportunities, useProposed),
       geoAlignment: this.calculateGeoAlignment(accounts, salesReps, useProposed, territoryMappings),
       arrBuckets: this.calculateArrBuckets(accounts),
@@ -1404,31 +1588,33 @@ class BuildDataService {
         arr: customers.reduce((sum, a) => sum + getAccountARR(a), 0),
         // ATR: use account fields first, fall back to opportunities if empty/0
         atr: (() => {
-          const accountATR = parentAccounts.reduce((sum, a) => sum + (a.calculated_atr || a.atr || 0), 0);
+          const accountATR = parentAccounts.reduce((sum, a) => sum + getAccountATR(a), 0);
           // If account ATR is 0 or empty, fall back to summing from renewal opportunities
           if (accountATR > 0) {
             return accountATR;
           }
           return opportunities
-            .filter(o => o.opportunity_type && o.opportunity_type.toLowerCase().trim() === 'renewals')
+            .filter(isRenewalOpportunity)
             .reduce((sum, o) => sum + (o.available_to_renew || 0), 0);
         })(),
-        pipeline: opportunities.reduce((sum, o) => sum + (o.net_arr || o.amount || 0), 0)
+        pipeline: opportunities.reduce((sum, o) => sum + getOpportunityPipelineValue(o), 0)
       }
     };
   }
 
   /**
    * Get Analytics Metrics for Data Overview
+   * @param buildId - Build ID
+   * @param useProposed - Whether to use proposed assignments (new_owner_id) or original (owner_id). Defaults to true.
    */
-  async getAnalyticsMetrics(buildId: string): Promise<MetricsSnapshot> {
-    const cacheKey = `analytics_${buildId}`;
+  async getAnalyticsMetrics(buildId: string, useProposed = true): Promise<MetricsSnapshot> {
+    const cacheKey = `analytics_${buildId}_${useProposed ? 'proposed' : 'original'}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey)!.data;
     }
     
-    const snapshot = await this.calculateMetricsSnapshot(buildId, false); // Use original owner_id
+    const snapshot = await this.calculateMetricsSnapshot(buildId, useProposed);
     this.setCache(cacheKey, snapshot);
     return snapshot;
   }
@@ -1462,7 +1648,9 @@ class BuildDataService {
       balanceScore: proposed.lpMetrics.balanceScore - original.lpMetrics.balanceScore,
       continuityScore: proposed.lpMetrics.continuityScore - original.lpMetrics.continuityScore,
       geographyScore: proposed.lpMetrics.geographyScore - original.lpMetrics.geographyScore,
-      teamAlignmentScore: proposed.lpMetrics.teamAlignmentScore - original.lpMetrics.teamAlignmentScore,
+      teamAlignmentScore: proposed.lpMetrics.teamAlignmentScore !== null && original.lpMetrics.teamAlignmentScore !== null
+        ? proposed.lpMetrics.teamAlignmentScore - original.lpMetrics.teamAlignmentScore
+        : null,
       capacityUtilization: proposed.lpMetrics.capacityUtilization !== null && original.lpMetrics.capacityUtilization !== null
         ? proposed.lpMetrics.capacityUtilization - original.lpMetrics.capacityUtilization
         : null

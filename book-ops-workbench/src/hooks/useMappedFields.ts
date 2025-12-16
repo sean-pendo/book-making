@@ -154,6 +154,7 @@ async function checkAccountFieldPresence(buildId: string): Promise<Set<string>> 
     'sales_territory',
     'owner_id',
     'renewal_quarter',
+    'renewal_date',  // For stability accounts - renewal soon
     'hq_country',
     'expansion_tier',
     'employees'  // For team alignment priority

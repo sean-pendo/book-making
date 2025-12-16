@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Upload, Check, AlertTriangle, X, FileText, Database, Settings, Download, Plus, Shield, Trash2, CheckCircle, FileSearch, ShieldCheck, GitBranch, Loader2, ChevronRight, Users } from 'lucide-react';
+import { Upload, Check, AlertTriangle, X, FileText, Database, Settings, Download, Plus, Shield, Trash2, CheckCircle, FileSearch, ShieldCheck, GitBranch, Loader2, ChevronRight, Users, Info } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
@@ -42,6 +42,7 @@ import {
 import { supabase } from '@/integrations/supabase/client';
 import type { Json } from '@/integrations/supabase/types';
 import { DataVerification } from '@/components/DataVerification';
+import { StreamingCsvParser } from '@/services/streamingCsvParser';
 
 // Helper function to save import metadata to Supabase for persistence across refreshes
 const saveImportMetadata = async (
@@ -200,6 +201,9 @@ interface ImportFile {
   importResult?: ImportResult;
   _populatedFieldCount?: number; // Count of populated fields from Supabase (fallback when no metadata)
   importProgress?: { processed: number; total: number }; // Track import progress
+  // Large file support
+  originalFile?: File; // Reference to original file for streaming import
+  isLargeFile?: boolean; // Flag to indicate this is a large file that needs streaming
 }
 
 interface FieldMapping {
@@ -813,6 +817,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     
     // High priority fields - Important for territory assignment and hierarchy (but not blocking)
     { csvField: '', schemaField: 'team', required: false, mapped: false, priority: 'high', description: 'Sales team assignment' },
+    { csvField: '', schemaField: 'team_tier', required: false, mapped: false, priority: 'high', description: 'Size tier for team alignment (SMB, Growth, MM, ENT)' },
     { csvField: '', schemaField: 'flm', required: false, mapped: false, priority: 'high', description: 'First Level Manager' },
     { csvField: '', schemaField: 'slm', required: false, mapped: false, priority: 'high', description: 'Second Level Manager' },
     { csvField: '', schemaField: 'region', required: false, mapped: false, priority: 'high', description: 'Geographic region assignment' },
@@ -834,10 +839,10 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     'Owner_ID__c'
   ];
 
-  const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>, fileType: 'accounts' | 'opportunities' | 'sales_reps') => {
+  const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>, fileType: 'accounts' | 'opportunities' | 'sales_reps') => {
     console.log('🔥 FILE UPLOAD STARTED:', fileType, 'at', new Date().toISOString());
     console.log('📁 Current files count before upload:', files.length);
-    
+
     // Check if a build is selected
     if (!currentBuildId) {
       toast({
@@ -850,107 +855,226 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
 
     const uploadedFiles = Array.from(event.target.files || []);
     console.log('Number of files selected:', uploadedFiles.length);
-    
-    uploadedFiles.forEach(file => {
-      console.log('Processing file:', file.name, 'with type:', fileType);
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const csvContent = e.target?.result as string;
-        
-        // Just parse CSV structure without validation
-        const parseResult = parseCSV(csvContent);
-        
-        // Perform auto-mapping using correct aliases for file type
-        const autoMappings = autoMapFields(parseResult.headers, fileType);
-        const fieldMappings = convertToFieldMappings(autoMappings);
-        
-        // Get required fields based on file type
-        let requiredFields: string[] = [];
-        if (fileType === 'accounts') {
-          requiredFields = ACCOUNT_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
-        } else if (fileType === 'opportunities') {
-          requiredFields = OPPORTUNITY_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
-        } else if (fileType === 'sales_reps') {
-          requiredFields = SALES_REP_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
-        }
-        
-        const autoMappingSummary = getAutoMappingSummary(autoMappings, requiredFields);
-        
-        // Determine status based on auto-mapping results
-        let status: ImportFile['status'] = 'uploaded';
-        if (parseResult.errors.length > 0) {
-          status = 'error';
-        } else if (autoMappingSummary.requiredFieldsMapped === autoMappingSummary.requiredFieldsTotal) {
-          status = 'mapped';
-        }
 
-        const newFile: ImportFile = {
-          id: Math.random().toString(36).substr(2, 9),
-          name: file.name,
-          type: fileType,
-          size: file.size,
-          status,
-          rowCount: parseResult.totalRows,
-          validRows: parseResult.validRows,
-          errorCount: parseResult.errors.length,
-          errors: parseResult.errors,
-          data: parseResult.data,
-          parsedData: parseResult.data, // Add parsedData for DataPreview component
-          headers: parseResult.headers,
-          fieldMappings,
-          autoMappings,
-          autoMappingSummary
-        };
-        
-        console.log('✅ Created new file object:', newFile.name, 'with type:', newFile.type);
-        console.log('📝 Adding to files array. Current count:', files.length);
-        
-        setFiles(prev => {
-          // Check for duplicate files by name and type
-          const existingFileIndex = prev.findIndex(f => f.name === newFile.name && f.type === newFile.type);
-          
-          let newFiles;
-          if (existingFileIndex >= 0) {
-            // Replace existing file instead of adding duplicate
-            console.log('🔄 Replacing existing file:', newFile.name);
-            newFiles = prev.map((f, index) => index === existingFileIndex ? newFile : f);
-          } else {
-            // Add new file
-            newFiles = [...prev, newFile];
-          }
-          
-          console.log('🔄 Files array updated. New count:', newFiles.length);
-          return newFiles;
+    for (const file of uploadedFiles) {
+      console.log('Processing file:', file.name, 'with type:', fileType, 'size:', (file.size / 1024 / 1024).toFixed(1) + 'MB');
+
+      const isLargeFile = StreamingCsvParser.isLargeFile(file);
+      console.log('📊 Large file detection:', isLargeFile ? 'YES (>10MB)' : 'NO (<10MB)');
+
+      if (isLargeFile) {
+        // Use streaming parser for large files
+        console.log('🌊 Using streaming parser for large file');
+
+        toast({
+          title: "Processing Large File",
+          description: `Parsing ${(file.size / 1024 / 1024).toFixed(1)}MB file. This may take a moment...`,
         });
-        
-        if (parseResult.errors.length === 0) {
-          const autoMappedCount = Object.keys(autoMappings).length;
-          const requiredMappedCount = autoMappingSummary.requiredFieldsMapped;
-          
-          if (autoMappedCount > 0) {
-            toast({
-              title: "File Uploaded with Auto-Mapping",
-              description: `${parseResult.totalRows} rows uploaded. ${autoMappedCount} fields auto-mapped (${requiredMappedCount}/${autoMappingSummary.requiredFieldsTotal} required).`,
-            });
-          } else {
-            toast({
-              title: "File Uploaded Successfully", 
-              description: `${parseResult.totalRows} rows uploaded. Please map fields to continue.`,
-            });
+
+        try {
+          // For large files, we only parse headers and a sample for auto-mapping
+          // The full data will be processed during import
+          const headerChunk = file.slice(0, 64 * 1024); // First 64KB for headers
+          const headerText = await headerChunk.text();
+          const headerLines = headerText.split('\n');
+          const firstLine = headerLines[0];
+
+          // Parse headers manually (simple CSV header parse)
+          const headers = firstLine.split(',').map(h => h.replace(/^"|"$/g, '').trim());
+          console.log('📋 Headers from large file:', headers.length, 'columns');
+
+          // Parse a sample of data rows for preview (next 100 rows)
+          const sampleData: any[] = [];
+          for (let i = 1; i < Math.min(headerLines.length, 101); i++) {
+            if (headerLines[i].trim()) {
+              const values = headerLines[i].split(',').map(v => v.replace(/^"|"$/g, '').trim());
+              const row: any = {};
+              headers.forEach((h, idx) => { row[h] = values[idx] || ''; });
+              sampleData.push(row);
+            }
           }
-          // Auto-switch to mapping tab
-          setActiveTab('mapping');
-        } else {
+
+          // Count actual rows by streaming through file (just counting newlines - fast)
+          console.log('📊 Counting rows in large file...');
+          let actualRowCount = 0;
+          const countChunkSize = 1024 * 1024; // 1MB chunks
+          let countOffset = 0;
+
+          while (countOffset < file.size) {
+            const chunk = file.slice(countOffset, countOffset + countChunkSize);
+            const chunkText = await chunk.text();
+            actualRowCount += (chunkText.match(/\n/g) || []).length;
+            countOffset += countChunkSize;
+          }
+
+          // Subtract 1 for header row
+          actualRowCount = Math.max(0, actualRowCount - 1);
+          console.log(`📊 Actual row count: ${actualRowCount.toLocaleString()} rows`);
+
+          // Auto-mapping
+          const autoMappings = autoMapFields(headers, fileType);
+          const fieldMappings = convertToFieldMappings(autoMappings);
+
+          let requiredFields: string[] = [];
+          if (fileType === 'accounts') {
+            requiredFields = ACCOUNT_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
+          } else if (fileType === 'opportunities') {
+            requiredFields = OPPORTUNITY_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
+          } else if (fileType === 'sales_reps') {
+            requiredFields = SALES_REP_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
+          }
+
+          const autoMappingSummary = getAutoMappingSummary(autoMappings, requiredFields);
+
+          let status: ImportFile['status'] = 'uploaded';
+          if (autoMappingSummary.requiredFieldsMapped === autoMappingSummary.requiredFieldsTotal) {
+            status = 'mapped';
+          }
+
+          const newFile: ImportFile = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            type: fileType,
+            size: file.size,
+            status,
+            rowCount: actualRowCount,
+            validRows: actualRowCount,
+            errorCount: 0,
+            errors: [],
+            data: sampleData, // Only sample data for preview
+            parsedData: sampleData,
+            headers,
+            fieldMappings,
+            autoMappings,
+            autoMappingSummary,
+            // Store the original file reference for streaming import later
+            originalFile: file,
+            isLargeFile: true
+          };
+
+          console.log('✅ Created large file object:', newFile.name, 'rows:', actualRowCount.toLocaleString());
+
+          setFiles(prev => {
+            const existingFileIndex = prev.findIndex(f => f.name === newFile.name && f.type === newFile.type);
+            if (existingFileIndex >= 0) {
+              return prev.map((f, index) => index === existingFileIndex ? newFile : f);
+            }
+            return [...prev, newFile];
+          });
+
           toast({
-            title: "File Upload Error",
-            description: `${parseResult.errors.length} parsing errors found.`,
+            title: "Large File Ready",
+            description: `${actualRowCount.toLocaleString()} rows detected. ${Object.keys(autoMappings).length} fields auto-mapped.`,
+          });
+
+          setActiveTab('mapping');
+
+        } catch (error) {
+          console.error('❌ Error parsing large file:', error);
+          toast({
+            title: "File Parse Error",
+            description: `Failed to parse large file: ${error instanceof Error ? error.message : 'Unknown error'}`,
             variant: "destructive",
           });
         }
-      };
-      
-      reader.readAsText(file);
-    });
+
+      } else {
+        // Use standard parsing for smaller files
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const csvContent = e.target?.result as string;
+
+          // Just parse CSV structure without validation
+          const parseResult = parseCSV(csvContent);
+
+          // Perform auto-mapping using correct aliases for file type
+          const autoMappings = autoMapFields(parseResult.headers, fileType);
+          const fieldMappings = convertToFieldMappings(autoMappings);
+
+          // Get required fields based on file type
+          let requiredFields: string[] = [];
+          if (fileType === 'accounts') {
+            requiredFields = ACCOUNT_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
+          } else if (fileType === 'opportunities') {
+            requiredFields = OPPORTUNITY_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
+          } else if (fileType === 'sales_reps') {
+            requiredFields = SALES_REP_FIELD_ALIASES.filter(f => f.required).map(f => f.schemaField);
+          }
+
+          const autoMappingSummary = getAutoMappingSummary(autoMappings, requiredFields);
+
+          // Determine status based on auto-mapping results
+          let status: ImportFile['status'] = 'uploaded';
+          if (parseResult.errors.length > 0) {
+            status = 'error';
+          } else if (autoMappingSummary.requiredFieldsMapped === autoMappingSummary.requiredFieldsTotal) {
+            status = 'mapped';
+          }
+
+          const newFile: ImportFile = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            type: fileType,
+            size: file.size,
+            status,
+            rowCount: parseResult.totalRows,
+            validRows: parseResult.validRows,
+            errorCount: parseResult.errors.length,
+            errors: parseResult.errors,
+            data: parseResult.data,
+            parsedData: parseResult.data,
+            headers: parseResult.headers,
+            fieldMappings,
+            autoMappings,
+            autoMappingSummary
+          };
+
+          console.log('✅ Created new file object:', newFile.name, 'with type:', newFile.type);
+          console.log('📝 Adding to files array. Current count:', files.length);
+
+          setFiles(prev => {
+            const existingFileIndex = prev.findIndex(f => f.name === newFile.name && f.type === newFile.type);
+
+            let newFiles;
+            if (existingFileIndex >= 0) {
+              console.log('🔄 Replacing existing file:', newFile.name);
+              newFiles = prev.map((f, index) => index === existingFileIndex ? newFile : f);
+            } else {
+              newFiles = [...prev, newFile];
+            }
+
+            console.log('🔄 Files array updated. New count:', newFiles.length);
+            return newFiles;
+          });
+
+          if (parseResult.errors.length === 0) {
+            const autoMappedCount = Object.keys(autoMappings).length;
+            const requiredMappedCount = autoMappingSummary.requiredFieldsMapped;
+
+            if (autoMappedCount > 0) {
+              toast({
+                title: "File Uploaded with Auto-Mapping",
+                description: `${parseResult.totalRows} rows uploaded. ${autoMappedCount} fields auto-mapped (${requiredMappedCount}/${autoMappingSummary.requiredFieldsTotal} required).`,
+              });
+            } else {
+              toast({
+                title: "File Uploaded Successfully",
+                description: `${parseResult.totalRows} rows uploaded. Please map fields to continue.`,
+              });
+            }
+            setActiveTab('mapping');
+          } else {
+            toast({
+              title: "File Upload Error",
+              description: `${parseResult.errors.length} parsing errors found.`,
+              variant: "destructive",
+            });
+          }
+        };
+
+        reader.readAsText(file);
+      }
+    }
 
     // Reset file input
     event.target.value = '';
@@ -1232,7 +1356,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
   }, []);
 
   const validateMappedFile = async (file: ImportFile) => {
-    console.log('🔍 validateMappedFile called for:', file.name, 'with data length:', file.data?.length);
+    console.log('🔍 validateMappedFile called for:', file.name, 'with data length:', file.data?.length, 'isLargeFile:', file.isLargeFile);
 
     // Skip validation for auto-loaded existing data (already in Supabase)
     if (file.id.startsWith('existing-')) {
@@ -1240,42 +1364,10 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
       return;
     }
 
-    // Enhanced validation - check all required data exists
-    if (!file.data || !Array.isArray(file.data)) {
-      console.error('❌ File has no valid data array:', {
-        fileName: file.name,
-        dataType: typeof file.data,
-        isArray: Array.isArray(file.data)
-      });
-      toast({
-        title: "Data Missing", 
-        description: `File "${file.name}" data needs to be reloaded. Please re-upload the file to validate.`,
-        variant: "destructive",
-      });
-      
-      // Update file status to indicate it needs re-upload
-      setFiles(prev => prev.map(f => 
-        f.id === file.id 
-          ? { ...f, status: 'uploaded' as const, errors: ['Data missing - please re-upload file'] }
-          : f
-      ));
-      return;
-    }
-
-    if (file.data.length === 0) {
-      console.warn('⚠️ File has empty data array:', file.name);
-      toast({
-        title: "No Data", 
-        description: `File "${file.name}" contains no data rows to validate.`,
-        variant: "destructive",
-      });
-      return;
-    }
-
     if (!file.fieldMappings || Object.keys(file.fieldMappings).length === 0) {
       console.error('❌ File has no field mappings:', file.name);
       toast({
-        title: "Mapping Required", 
+        title: "Mapping Required",
         description: `Please map fields for "${file.name}" before validation.`,
         variant: "destructive",
       });
@@ -1283,18 +1375,81 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     }
 
     // Set status to validating
-    setFiles(prev => prev.map(f => 
-      f.id === file.id 
+    setFiles(prev => prev.map(f =>
+      f.id === file.id
         ? { ...f, status: 'validating' }
         : f
     ));
 
     try {
-      const validationResult = validateMappedData(
-        file.data, 
-        file.fieldMappings, 
-        file.type
-      );
+      let validationResult;
+
+      // Handle large files by streaming
+      if (file.isLargeFile && file.originalFile) {
+        console.log('🌊 Streaming validation for large file:', file.name);
+
+        toast({
+          title: "Validating Large File",
+          description: `Processing ${file.rowCount?.toLocaleString()} rows...`,
+        });
+
+        // Stream parse the full file
+        const fullText = await file.originalFile.text();
+        const fullParseResult = parseCSV(fullText);
+
+        console.log(`📊 Full parse complete: ${fullParseResult.totalRows} rows`);
+
+        validationResult = validateMappedData(
+          fullParseResult.data,
+          file.fieldMappings,
+          file.type
+        );
+
+        // Update file with full data for import
+        setFiles(prev => prev.map(f =>
+          f.id === file.id
+            ? { ...f, data: fullParseResult.data, parsedData: fullParseResult.data }
+            : f
+        ));
+
+      } else {
+        // Standard validation for smaller files
+        if (!file.data || !Array.isArray(file.data)) {
+          console.error('❌ File has no valid data array:', {
+            fileName: file.name,
+            dataType: typeof file.data,
+            isArray: Array.isArray(file.data)
+          });
+          toast({
+            title: "Data Missing",
+            description: `File "${file.name}" data needs to be reloaded. Please re-upload the file to validate.`,
+            variant: "destructive",
+          });
+
+          setFiles(prev => prev.map(f =>
+            f.id === file.id
+              ? { ...f, status: 'uploaded' as const, errors: ['Data missing - please re-upload file'] }
+              : f
+          ));
+          return;
+        }
+
+        if (file.data.length === 0) {
+          console.warn('⚠️ File has empty data array:', file.name);
+          toast({
+            title: "No Data",
+            description: `File "${file.name}" contains no data rows to validate.`,
+            variant: "destructive",
+          });
+          return;
+        }
+
+        validationResult = validateMappedData(
+          file.data,
+          file.fieldMappings,
+          file.type
+        );
+      }
 
       // Additional business validation based on file type
       let businessValidationErrors: string[] = [];
@@ -1924,22 +2079,20 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                     Drag & drop or click to upload
                   </p>
                   <div className="space-y-2">
-                    <Input
-                      ref={accountsInputRef}
+                    <input
                       type="file"
                       accept=".csv"
                       onChange={(e) => handleFileUpload(e, 'accounts')}
-                      className="hidden"
                       id="accounts-upload"
                       multiple
+                      className="sr-only"
                     />
-                    <Button 
-                      variant="outline" 
-                      className="w-full cursor-pointer hover:bg-accent"
-                      onClick={() => accountsInputRef.current?.click()}
+                    <label
+                      htmlFor="accounts-upload"
+                      className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2 w-full cursor-pointer"
                     >
                       Choose File
-                    </Button>
+                    </label>
                     <Button 
                       variant="ghost" 
                       size="sm" 
@@ -1972,22 +2125,20 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                     Drag & drop or click to upload
                   </p>
                   <div className="space-y-2">
-                    <Input
-                      ref={opportunitiesInputRef}
+                    <input
                       type="file"
                       accept=".csv"
                       onChange={(e) => handleFileUpload(e, 'opportunities')}
-                      className="hidden"
                       id="opportunities-upload"
                       multiple
+                      className="sr-only"
                     />
-                    <Button 
-                      variant="outline" 
-                      className="w-full cursor-pointer hover:bg-accent"
-                      onClick={() => opportunitiesInputRef.current?.click()}
+                    <label
+                      htmlFor="opportunities-upload"
+                      className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2 w-full cursor-pointer"
                     >
                       Choose File
-                    </Button>
+                    </label>
                     <Button 
                       variant="ghost" 
                       size="sm" 
@@ -2008,35 +2159,21 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                 <CardTitle className="flex items-center gap-2">
                   <Users className="w-5 h-5" />
                   Sales Reps CSV
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="max-w-[300px]">
+                      <div className="space-y-2 text-xs">
+                        <p><strong>Open Headcount:</strong> For new hires without a Salesforce ID, leave User ID blank. A placeholder ID will be auto-generated.</p>
+                        <p><strong>Backfill:</strong> For departing reps, mark them as "Leaving" in the Reps tab after import to auto-create replacements.</p>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
                 </CardTitle>
                 <CardDescription className="min-h-[3rem]">
                   Upload sales representative data with Name, Manager, Team, Region, and Rep ID
                 </CardDescription>
-                <div className="mt-2 space-y-1.5">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-help hover:text-foreground transition-colors">
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-gray-50 dark:bg-gray-800">Open Headcount</Badge>
-                        <span>Leave User ID blank for new hires</span>
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-[280px]">
-                      <p className="text-xs"><strong>Open Headcount:</strong> For new hires without a Salesforce ID yet, leave the User ID field blank. A placeholder ID will be auto-generated. Ensure the rep name is unique.</p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <br />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-help hover:text-foreground transition-colors">
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">Backfill</Badge>
-                        <span>Mark departing reps in the Reps tab</span>
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-[280px]">
-                      <p className="text-xs"><strong>Backfill Reps:</strong> For reps leaving the business, mark them as "Leaving" in the Reps tab after import. This will auto-create a replacement rep and migrate their accounts.</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
               </CardHeader>
               <CardContent>
                 <div className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-6 text-center">
@@ -2045,22 +2182,20 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                     Drag & drop or click to upload
                   </p>
                   <div className="space-y-2">
-                    <Input
-                      ref={salesRepsInputRef}
+                    <input
                       type="file"
                       accept=".csv"
                       onChange={(e) => handleFileUpload(e, 'sales_reps')}
-                      className="hidden"
                       id="sales-reps-upload"
                       multiple
+                      className="sr-only"
                     />
-                    <Button 
-                      variant="outline" 
-                      className="w-full cursor-pointer hover:bg-accent"
-                      onClick={() => salesRepsInputRef.current?.click()}
+                    <label
+                      htmlFor="sales-reps-upload"
+                      className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2 w-full cursor-pointer"
                     >
                       Choose File
-                    </Button>
+                    </label>
                     <Button 
                       variant="ghost" 
                       size="sm" 

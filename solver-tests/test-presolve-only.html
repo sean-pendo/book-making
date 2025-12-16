@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Presolve Only Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #00d9ff; }
+    .test-row {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin: 8px 0;
+      background: #16213e;
+      border-radius: 8px;
+      border-left: 4px solid #666;
+    }
+    .test-row.passed { border-left-color: #4caf50; }
+    .test-row.failed { border-left-color: #f44336; }
+    .test-name { flex: 1; font-weight: 500; }
+    .test-time { width: 100px; text-align: right; }
+    .test-status { width: 120px; text-align: right; font-weight: bold; }
+    .passed .test-status { color: #4caf50; }
+    .failed .test-status { color: #f44336; }
+    button {
+      background: #00d9ff;
+      color: #1a1a2e;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 20px 0;
+    }
+    button:hover { background: #00b8d9; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    #log {
+      background: #0f0f1a;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 11px;
+      max-height: 500px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .summary {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    .summary h2 { margin-top: 0; color: #00d9ff; }
+  </style>
+</head>
+<body>
+  <h1>🔬 Presolve Option Test</h1>
+  <p>Testing if <code>presolve: 'on'</code> is what makes complex LPs work</p>
+  
+  <button id="runBtn" onclick="runTests()">Run Test</button>
+  
+  <div id="tests"></div>
+  
+  <h3>Console Log</h3>
+  <div id="log"></div>
+
+  <script src="https://lovasoa.github.io/highs-js/highs.js"></script>
+  
+  <script>
+    const log = (msg) => {
+      const el = document.getElementById('log');
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
+      console.log(msg);
+    };
+
+    // Same full production LP builder from previous test
+    function buildFullProductionLP(numAccounts, numReps) {
+      const MAX_LINE_LENGTH = 200;
+      const lines = [];
+      
+      const totalARR = numAccounts * 30000;
+      const targetARR = totalARR / numReps;
+      const totalATR = numAccounts * 10000;
+      const targetATR = totalATR / numReps;
+      const tierTargets = {
+        tier1: Math.floor(numAccounts * 0.1 / numReps),
+        tier2: Math.floor(numAccounts * 0.3 / numReps),
+        tier3: Math.floor(numAccounts * 0.4 / numReps),
+        tier4: Math.floor(numAccounts * 0.2 / numReps),
+      };
+      
+      const variance = 0.10;
+      const getAssignmentVarName = (aIdx, rIdx) => `x${aIdx}_${rIdx}`;
+      
+      lines.push('Maximize');
+      lines.push(' obj:');
+      
+      let currentLine = '';
+      const binaries = [];
+      const slackBounds = [];
+      const slackNameMap = new Map();
+      let slackIdx = 0;
+      
+      for (let a = 0; a < numAccounts; a++) {
+        for (let r = 0; r < numReps; r++) {
+          const varName = getAssignmentVarName(a, r);
+          binaries.push(varName);
+          const coef = 0.1 + ((a * 7 + r * 13) % 90) / 100;
+          
+          if (Math.abs(coef) > 1e-10) {
+            const term = `${coef >= 0 ? '+' : '-'} ${Math.abs(coef).toFixed(6)} ${varName}`;
+            if (currentLine.length + term.length > MAX_LINE_LENGTH) {
+              lines.push(' ' + currentLine);
+              currentLine = term;
+            } else {
+              currentLine += ' ' + term;
+            }
+          }
+        }
+      }
+      
+      const PENALTY = { ALPHA: 0.001, BETA: 0.01, BIG_M: 0.1 };
+      const CUSTOMER_WEIGHTS = { arr: 0.50, atr: 0.25, tiers: 0.25 };
+      const tierWeight = CUSTOMER_WEIGHTS.tiers / 4;
+      
+      function addMetricSlacks(metric, weight, target) {
+        for (let r = 0; r < numReps; r++) {
+          const slacks = [
+            { suffix: 'ao', penalty: PENALTY.ALPHA * weight, upper: variance },
+            { suffix: 'au', penalty: PENALTY.ALPHA * weight, upper: variance },
+            { suffix: 'bo', penalty: PENALTY.BETA * weight, upper: 0.5 },
+            { suffix: 'bu', penalty: PENALTY.BETA * weight, upper: 0.5 },
+            { suffix: 'mo', penalty: PENALTY.BIG_M * weight, upper: null },
+            { suffix: 'mu', penalty: PENALTY.BIG_M * weight, upper: null },
+          ];
+          
+          for (const s of slacks) {
+            const name = `s${slackIdx++}`;
+            slackNameMap.set(`${metric}_${s.suffix}_${r}`, name);
+            slackBounds.push({ varName: name, lower: 0, upper: s.upper });
+            
+            const term = `- ${s.penalty.toFixed(6)} ${name}`;
+            if (currentLine.length + term.length > MAX_LINE_LENGTH) {
+              lines.push(' ' + currentLine);
+              currentLine = term;
+            } else {
+              currentLine += ' ' + term;
+            }
+          }
+        }
+      }
+      
+      addMetricSlacks('arr', CUSTOMER_WEIGHTS.arr, targetARR);
+      addMetricSlacks('atr', CUSTOMER_WEIGHTS.atr, targetATR);
+      addMetricSlacks('tier1', tierWeight, tierTargets.tier1);
+      addMetricSlacks('tier2', tierWeight, tierTargets.tier2);
+      addMetricSlacks('tier3', tierWeight, tierTargets.tier3);
+      addMetricSlacks('tier4', tierWeight, tierTargets.tier4);
+      
+      if (currentLine.trim()) {
+        lines.push(' ' + currentLine);
+      }
+      
+      lines.push('Subject To');
+      let constraintCount = 0;
+      
+      for (let a = 0; a < numAccounts; a++) {
+        let constraintLine = ` c${constraintCount++}:`;
+        let lineLength = constraintLine.length;
+        
+        for (let r = 0; r < numReps; r++) {
+          const varName = getAssignmentVarName(a, r);
+          const term = ` + 1.000000 ${varName}`;
+          
+          if (lineLength + term.length > MAX_LINE_LENGTH) {
+            lines.push(constraintLine);
+            constraintLine = ' ' + term;
+            lineLength = constraintLine.length;
+          } else {
+            constraintLine += term;
+            lineLength += term.length;
+          }
+        }
+        
+        constraintLine += ` = 1.000000`;
+        lines.push(constraintLine);
+      }
+      
+      function addDecompConstraint(metric, r, getCoef) {
+        let constraintLine = ` c${constraintCount++}:`;
+        let lineLength = constraintLine.length;
+        
+        for (let a = 0; a < numAccounts; a++) {
+          const varName = getAssignmentVarName(a, r);
+          const coef = getCoef(a);
+          
+          if (Math.abs(coef) > 1e-10) {
+            const term = ` + ${coef.toFixed(6)} ${varName}`;
+            if (lineLength + term.length > MAX_LINE_LENGTH) {
+              lines.push(constraintLine);
+              constraintLine = ' ' + term;
+              lineLength = constraintLine.length;
+            } else {
+              constraintLine += term;
+              lineLength += term.length;
+            }
+          }
+        }
+        
+        const slackTerms = [
+          { name: slackNameMap.get(`${metric}_ao_${r}`), coef: -1 },
+          { name: slackNameMap.get(`${metric}_au_${r}`), coef: 1 },
+          { name: slackNameMap.get(`${metric}_bo_${r}`), coef: -1 },
+          { name: slackNameMap.get(`${metric}_bu_${r}`), coef: 1 },
+          { name: slackNameMap.get(`${metric}_mo_${r}`), coef: -1 },
+          { name: slackNameMap.get(`${metric}_mu_${r}`), coef: 1 },
+        ];
+        
+        for (const s of slackTerms) {
+          const term = ` ${s.coef >= 0 ? '+' : '-'} 1.000000 ${s.name}`;
+          if (lineLength + term.length > MAX_LINE_LENGTH) {
+            lines.push(constraintLine);
+            constraintLine = ' ' + term;
+            lineLength = constraintLine.length;
+          } else {
+            constraintLine += term;
+            lineLength += term.length;
+          }
+        }
+        
+        constraintLine += ` = 1.000000`;
+        lines.push(constraintLine);
+      }
+      
+      for (let r = 0; r < numReps; r++) {
+        addDecompConstraint('arr', r, (a) => {
+          const arr = 10000 + (a * 1234) % 50000;
+          return arr / targetARR;
+        });
+      }
+      
+      for (let r = 0; r < numReps; r++) {
+        addDecompConstraint('atr', r, (a) => {
+          const atr = 5000 + (a * 567) % 15000;
+          return atr / targetATR;
+        });
+      }
+      
+      const tierAssignment = (a) => {
+        const mod = a % 10;
+        if (mod < 1) return 1;
+        if (mod < 4) return 2;
+        if (mod < 8) return 3;
+        return 4;
+      };
+      
+      for (let tier = 1; tier <= 4; tier++) {
+        const tierTarget = tierTargets[`tier${tier}`];
+        if (tierTarget > 0) {
+          for (let r = 0; r < numReps; r++) {
+            addDecompConstraint(`tier${tier}`, r, (a) => {
+              return tierAssignment(a) === tier ? 1 / tierTarget : 0;
+            });
+          }
+        }
+      }
+      
+      lines.push('Bounds');
+      for (const bound of slackBounds) {
+        if (bound.upper !== null) {
+          lines.push(` ${bound.lower} <= ${bound.varName} <= ${bound.upper}`);
+        } else {
+          lines.push(` ${bound.varName} >= ${bound.lower}`);
+        }
+      }
+      for (const v of binaries) {
+        lines.push(` 0 <= ${v} <= 1`);
+      }
+      
+      lines.push('Binary');
+      for (let i = 0; i < binaries.length; i += 50) {
+        lines.push(' ' + binaries.slice(i, i + 50).join(' '));
+      }
+      
+      lines.push('End');
+      
+      return {
+        lp: lines.join('\n'),
+        numBinaryVars: binaries.length,
+        numSlackVars: slackBounds.length,
+        numConstraints: constraintCount
+      };
+    }
+
+    const testCases = [
+      { name: 'NO options', options: null },
+      { name: 'presolve ONLY', options: { presolve: 'on' } },
+      { name: 'time_limit ONLY', options: { time_limit: 60 } },
+      { name: 'mip_rel_gap ONLY', options: { mip_rel_gap: 0.01 } },
+      { name: 'ALL options', options: { presolve: 'on', time_limit: 60, mip_rel_gap: 0.01 } },
+    ];
+
+    let results = [];
+    let highs = null;
+
+    function renderTests() {
+      const container = document.getElementById('tests');
+      container.innerHTML = testCases.map((tc, i) => {
+        const result = results[i];
+        const statusClass = result ? (result.passed ? 'passed' : 'failed') : '';
+        const status = result ? (result.passed ? '✓ PASS' : '✗ FAIL') : 'pending';
+        const time = result ? (result.time ? `${result.time}ms` : result.error?.substring(0, 20) || 'error') : '-';
+        
+        return `
+          <div class="test-row ${statusClass}" id="test-${i}">
+            <span class="test-name">${tc.name}</span>
+            <span class="test-time">${time}</span>
+            <span class="test-status">${status}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function runTests() {
+      const btn = document.getElementById('runBtn');
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      
+      results = [];
+      renderTests();
+      document.getElementById('log').textContent = '';
+      
+      log('Building full production LP (432×48)...');
+      const { lp, numBinaryVars, numSlackVars, numConstraints } = buildFullProductionLP(432, 48);
+      log(`  Binary vars: ${numBinaryVars}, Slack vars: ${numSlackVars}, Constraints: ${numConstraints}`);
+      log(`  LP size: ${(lp.length / 1024).toFixed(1)} KB\n`);
+      
+      for (let i = 0; i < testCases.length; i++) {
+        const tc = testCases[i];
+        log(`[${tc.name}]`);
+        log(`  Options: ${tc.options ? JSON.stringify(tc.options) : 'none'}`);
+        
+        // Fresh HiGHS instance for each test
+        log('  Loading fresh HiGHS...');
+        highs = await Module();
+        
+        await new Promise(r => setTimeout(r, 50));
+        
+        try {
+          const startTime = performance.now();
+          let solution;
+          
+          if (tc.options) {
+            solution = highs.solve(lp, tc.options);
+          } else {
+            solution = highs.solve(lp);
+          }
+          
+          const solveTime = Math.round(performance.now() - startTime);
+          
+          if (solution.Status === 'Optimal' || solution.Status === 'Feasible') {
+            log(`  ✓ ${solution.Status} in ${solveTime}ms\n`);
+            results[i] = { passed: true, time: solveTime };
+          } else {
+            log(`  ✗ Status: ${solution.Status}\n`);
+            results[i] = { passed: false, error: solution.Status };
+          }
+        } catch (err) {
+          const errMsg = err.message || err.toString();
+          log(`  ✗ CRASHED: ${errMsg.substring(0, 80)}\n`);
+          results[i] = { passed: false, error: errMsg.substring(0, 30) };
+        }
+        
+        renderTests();
+      }
+      
+      // Summary
+      log('='.repeat(50));
+      log('SUMMARY');
+      log('='.repeat(50));
+      testCases.forEach((tc, i) => {
+        log(`${results[i]?.passed ? '✓' : '✗'} ${tc.name}`);
+      });
+      
+      btn.disabled = false;
+      btn.textContent = 'Run Test Again';
+    }
+
+    renderTests();
+  </script>
+</body>
+</html>
+

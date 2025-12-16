@@ -110,7 +110,7 @@ export const RuleUsageByRegionChart: React.FC<RuleUsageByRegionChartProps> = ({ 
                 interval={0}
               />
               <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<CustomTooltip />} wrapperStyle={{ zIndex: 1000 }} />
               
               {allRules.map((rule, index) => (
                 <Bar

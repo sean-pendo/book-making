@@ -21,7 +21,9 @@
 | Pipeline | `SUM(opps.net_arr) WHERE is_customer=false OR type='Expansion'` | §2.3 |
 | Team Tier | `employees < 100 → SMB, < 500 → Growth, < 1500 → MM, else ENT` | §5.1 |
 | Geo Score | `exact=1.0, sibling=0.85, parent=0.65, global=0.40, cross=0.20` | §4.3 |
-| Balance Target | `Total Value / Number of Active Reps` | §12.1 |
+| Priority Weight | `1.0 / position` (P1=1.0, P2=0.5, P3=0.33, ...) | §10.2.1 |
+| Balance Target | `Total Value / Number of Active Reps` (pure average) | §12.1 |
+| Balance Max | `MAX(avg × 1.5, largestAccount × 1.2)` | §12.1.1 |
 
 </details>
 
@@ -161,6 +163,7 @@ ATR = SUM(opportunities.available_to_renew)
 - Only include opportunities where `opportunity_type` (case-insensitive) equals "Renewals"
 - Other opportunity types (New Business, Expansion, etc.) do NOT count toward ATR
 - ATR is about timing, not risk
+- **Constraint**: ATR ≤ ARR (ATR is a subset of existing customer revenue - renewal value cannot exceed total revenue)
 
 ### 2.3 Pipeline Calculation
 
@@ -180,7 +183,7 @@ Pipeline = SUM(opportunities.net_arr)
 
 ## 3. Account Classification
 
-**Impl**: `calculations.ts` - `isCustomer()`, `hasARR()`
+**Impl**: `calculations.ts` - `isCustomer()`, `isParentCustomer()`, `hasARR()`
 
 ### 3.1 Customer vs Prospect
 
@@ -203,7 +206,35 @@ function isCustomer(account) {
 
 **Note**: The `isCustomer()` function uses the same ARR priority chain as `getAccountARR()`. This ensures consistent classification.
 
-**Exception**: Some filtering code (e.g., in `buildDataService.ts`) intentionally checks ONLY `hierarchy_bookings_arr_converted > 0` for customer classification. This is safer and prevents false positives from `calculated_arr` on child accounts. See `_domain/CLEANUP_PLAN.md` for details.
+### 3.1.1 Parent Account Customer Classification
+
+**Impl**: `calculations.ts` - `isParentCustomer()`
+
+A **parent account** is classified as a customer if:
+1. **Has direct ARR** (`hierarchy_bookings_arr_converted > 0`), OR
+2. **Has customer children** (`has_customer_hierarchy = true`)
+
+```typescript
+// From _domain/calculations.ts
+function isParentCustomer(account) {
+  // Has direct ARR = customer
+  if (getAccountARR(account) > 0) return true;
+  
+  // Has customer children = customer (for grouping purposes)
+  if (account.has_customer_hierarchy === true) return true;
+  
+  return false;
+}
+```
+
+**Why children matter**: A parent account may have $0 direct ARR but children who are paying customers. For grouping, rollups, and assignment purposes, this parent represents a **customer relationship** because they pay us (through their children).
+
+**Use Cases**:
+- **Customer/Prospect grouping**: Parent with customer children should be grouped with customers
+- **ARR rollups**: All customer accounts (including parents with customer children) should be included
+- **Assignment engine**: Customer parents get different priority handling than prospect parents
+
+**Database Sync**: The `syncIsCustomerField()` function in `batchImportService.ts` uses this logic to set `is_customer` on parent accounts after import.
 
 ### 3.2 Parent vs Child
 
@@ -361,11 +392,33 @@ function classifyTeamTier(employees) {
 
 **Null Handling**: If employee count is unknown, return `null` rather than forcing a tier. Let the consumer decide how to handle unmapped fields.
 
-**⚠️ Data Quality Note**: 
+**⚠️ Data Quality Note**:
 - Team tier classification is **only relevant if employee count data is present and accurate**
 - If `employees` field is null, 0, or missing → tier is null → team alignment scoring is skipped
 - ENT threshold (1500+) was chosen to align with typical enterprise sales org structure
 - These thresholds can be adjusted in `TIER_THRESHOLDS` constant if your org uses different breakpoints
+
+### 5.1.1 Team Alignment Scoring with Missing Data
+
+**Rule**: When either account tier OR rep tier is unknown (null), team alignment is **N/A** - not a mismatch.
+
+| Account Tier | Rep Tier | Result | Explanation |
+|--------------|----------|--------|-------------|
+| SMB | SMB | 1.0 (exact match) | Both known, same tier |
+| SMB | Growth | 0.60 (1 level) | Both known, adjacent tiers |
+| SMB | null | **N/A** | Rep tier unknown → exclude from scoring |
+| null | Growth | **N/A** | Account tier unknown → exclude from scoring |
+| null | null | **N/A** | Both unknown → exclude from scoring |
+
+**Implementation**:
+- `teamAlignmentScore()` returns `null` (not 0.5) when either tier is unknown
+- Aggregation redistributes weights to continuity + geography when team alignment is N/A
+- Analytics display "N/A" instead of a percentage for these assignments
+
+**Why N/A instead of penalty?**
+- Missing data ≠ bad match. Penalizing unknown tiers would bias assignments toward reps with complete data.
+- N/A allows the optimizer to use continuity and geography without artificial handicap.
+- Users see "N/A" in analytics, prompting data cleanup rather than hiding the gap.
 
 ### 5.2 Expansion Tier (Scoring-Based)
 
@@ -684,7 +737,62 @@ Assignments are processed in priority order. Each level runs before the next:
 ### 10.2 Priority Types
 
 - **Holdover**: Account is LOCKED to current owner. Runs before optimization.
-- **Optimization**: Account is available for reassignment. LP solver decides.
+- **Optimization**: Account is available for reassignment. LP solver decides using weighted scoring.
+
+### 10.2.1 Priority Weighting in LP Solver
+
+> **Higher priorities (lower position numbers) = higher weights in the LP objective function.**
+
+When the LP solver runs, it combines multiple factors into a single score for each account-rep pair. The weight of each factor is **derived from its priority position** in the user's configuration.
+
+**SSOT**:
+- Formula: `_domain/constants.ts` → `calculatePriorityWeight(position)`
+- Implementation: `optimization/utils/weightNormalizer.ts` → `deriveWeightsFromPriorityConfig()`
+
+**Weight Derivation Formula**:
+```
+raw_weight = 1 / (position + 1)    // Positions are 0-indexed
+normalized_weight = raw_weight / sum(all_raw_weights)
+```
+
+**Special Case**: `geo_and_continuity` contributes 50% of its weight to both geography and continuity.
+
+| Position | Raw Weight | Description |
+|----------|------------|-------------|
+| P0 | 1.0 / 1 = **1.00** | Highest priority |
+| P3 | 1.0 / 4 = **0.25** | Team alignment (example) |
+| P5 | 1.0 / 6 = **0.17** | Continuity (example) |
+| P6 | 1.0 / 7 = **0.14** | Geography (example) |
+
+**Example Configuration** (user sets P3=team, P5=continuity, P6=geography):
+```
+Raw:   team=0.25, continuity=0.17, geography=0.14 → total=0.56
+Final: team=45%, continuity=30%, geography=25%
+```
+Result: Team alignment has highest influence, continuity beats geography.
+
+**LP Objective Coefficient**:
+```
+coefficient = wC × continuityScore + wG × geoScore + wT × teamScore + tieBreaker
+```
+
+**Default Weights** (when priority_config is empty): `wC=0.35, wG=0.35, wT=0.30`
+
+**Code Locations**:
+| File | Purpose |
+|------|---------|
+| `_domain/constants.ts` | `calculatePriorityWeight()` formula |
+| `optimization/utils/weightNormalizer.ts` | `deriveWeightsFromPriorityConfig()` implementation |
+| `optimization/constraints/lpProblemBuilder.ts` | Applies derived weights in LP objective (line ~162) |
+
+### 10.2.2 Waterfall Execution
+
+Holdover priorities (P0-P2) execute sequentially before optimization:
+1. Manual holdovers lock accounts
+2. Sales Tools bucket routes low-ARR accounts
+3. Stability accounts lock at-risk accounts
+
+Then the LP solver runs with all remaining accounts, using priority-weighted scoring.
 
 ### 10.3 Preset Configurations by Mode
 
@@ -757,6 +865,23 @@ Each sub-condition can be enabled/disabled independently:
 | Renewal Soon | `renewal_soon` | `renewal_date` within 90 days | Enabled |
 | PE Firm | `pe_firm` | `pe_firm IS NOT NULL` | Enabled |
 | Recent Change | `recent_owner_change` | `owner_change_date` within 90 days | Enabled |
+
+**renewal_date Aggregation**:
+
+The `renewal_date` field on accounts is automatically populated from opportunities during import:
+
+| Field | Scope | Source | Purpose |
+|-------|-------|--------|---------|
+| `renewal_quarter` | Parent accounts only | Rolled up from hierarchy | Reporting (e.g., "Q4-FY27") |
+| `renewal_date` | All accounts (parent + child) | Individual earliest `renewal_event_date` | Stability check |
+
+**Rules**:
+- Takes the **earliest (soonest)** `renewal_event_date` from the account's opportunities
+- Opportunity data **always overwrites** any CSV-imported `renewal_date`
+- If an account has no opportunities, it keeps its CSV-imported value or remains null
+- Days until renewal is calculated at **runtime**: `renewal_date - today`
+
+**Impl**: `batchImportService.ts` - `syncRenewalQuarterFromOpportunities()`
 
 #### P3: Team Alignment
 **Condition**: Account tier matches rep tier
@@ -942,16 +1067,18 @@ Balance constraints use a **three-tier penalty system** to handle deviation from
 actual_value = target + α_over - α_under + β_over - β_under + BigM_over - BigM_under
 ```
 
-| Zone | Variable | Penalty Weight | Description |
-|------|----------|---------------|-------------|
-| **Alpha (α)** | Within variance band | 0.01 | Small penalty - expected/acceptable deviation |
-| **Beta (β)** | Buffer zone | 1.0 | Medium penalty - undesirable but not catastrophic |
-| **BigM** | Beyond absolute limits | 1000.0 | Huge penalty - effectively forbidden |
+| Zone | Variable | Penalty Weight (Normalized) | Description |
+|------|----------|----------------------------|-------------|
+| **Alpha (α)** | Within variance band | 0.001 | Small penalty - expected/acceptable deviation |
+| **Beta (β)** | Buffer zone | 0.01 | Medium penalty - undesirable but not catastrophic |
+| **BigM** | Beyond absolute limits | 0.1 | Large penalty - strongly discouraged |
+
+> **Numerical Stability Note (December 2025)**: Penalty values are normalized to 0.001-0.1 range to avoid HiGHS WASM crashes. Original conceptual values (0.01, 1.0, 1000.0) caused coefficient magnitude mismatch with assignment scores (0.1-1.0 range), leading to solver instability. The relative ratios (1:10:100) are preserved.
 
 **Why Three Tiers?**
 - **Alpha**: Allows the solver flexibility within the configured variance band (soft constraint). Penalty scales linearly the further you deviate from target.
 - **Beta**: Warns when approaching hard limits, but still feasible. Also uses linear penalty scaling.
-- **BigM**: Makes violations extremely expensive → treated as hard constraints
+- **BigM**: Makes violations expensive → strongly discouraged but not mathematically forbidden (allows solver to find feasible solutions)
 
 **Visual Representation**:
 ```
@@ -961,14 +1088,16 @@ actual_value = target + α_over - α_under + β_over - β_under + BigM_over - Bi
     (absolute)           (variance)                      (variance)          (absolute)
 ```
 
-**Bounds**:
+**Bounds** (all normalized to 0-1 scale):
 ```typescript
-α_over_bound  = max(0, prefMax - target)      // Variance band above target
-α_under_bound = max(0, target - prefMin)      // Variance band below target
-β_over_bound  = max(0, max - prefMax)         // Gap to absolute max
-β_under_bound = max(0, prefMin - min)         // Gap to absolute min
-BigM: unbounded (but 1000x penalty makes it prohibitive)
+α_over_bound  = variance                      // e.g., 0.10 for 10% variance
+α_under_bound = variance
+β_over_bound  = 0.5                           // Buffer zone
+β_under_bound = 0.5
+BigM: unbounded                               // But penalty makes it expensive
 ```
+
+**Implementation**: `lpProblemBuilder.ts` - `PENALTY` constant and `buildMetricPenaltyTerms()`
 
 ### 11.4 Scoring Functions
 
@@ -1173,6 +1302,35 @@ The optimization generates human-readable rationales for each assignment:
 
 **Highest-Scoring Display**: Even in relaxed mode, the rationale shows which factor scored highest for transparency.
 
+### 11.10 Scale Limits (HiGHS WASM)
+
+**Impl**: `_domain/constants.ts` - `LP_SCALE_LIMITS`, `pureOptimizationEngine.ts`
+
+HiGHS WASM in the browser has practical limits on problem size:
+
+| Limit | Value | Reason |
+|-------|-------|--------|
+| **MAX_ACCOUNTS_FOR_GLOBAL_LP** | 3,000 | Dense constraint matrix causes hangs |
+| **WARN_ACCOUNTS_THRESHOLD** | 2,000 | Performance warning threshold |
+
+**Why the limit exists:**
+- Each balance constraint (ARR, ATR, Tier 1-4) references ALL accounts
+- For N accounts and R reps, constraint matrix has ~N × R × 6 non-zeros
+- At 3000 accounts × 48 reps × 6 metrics = ~864K non-zeros
+- HiGHS WASM struggles with matrix operations at this scale
+
+**What happens when exceeded:**
+```
+Account count (8000) exceeds global LP limit (3000). Use waterfall mode for large builds.
+```
+
+**Fallback behavior:**
+- Global LP returns error with message to use waterfall
+- UI should detect this and offer waterfall mode
+- Waterfall processes smaller batches per priority level
+
+**Testing**: `solver-tests/test-scale-threshold.html` tests various account counts to find the exact threshold.
+
 ---
 
 ## 12. Balancing & Thresholds
@@ -1184,6 +1342,8 @@ The optimization generates human-readable rationales for each assignment:
 
 ### 12.1 Balance Targets
 
+**Target = Pure Average**: `Total Value / Number of Active Reps`
+
 ```typescript
 // From calculations.ts
 function calculateBalanceTarget(totalValue: number, repCount: number): number {
@@ -1191,6 +1351,24 @@ function calculateBalanceTarget(totalValue: number, repCount: number): number {
   return totalValue / repCount;
 }
 ```
+
+### 12.1.1 Auto-Calculate Targets
+
+**Impl**: `FullAssignmentConfig.tsx` → `calculateRecommendedTargets()`
+
+The "Auto-Calculate Targets" button calculates recommended values using this pattern:
+
+| Metric | Target Formula | Max Formula |
+|--------|----------------|-------------|
+| **Customer ARR** | `totalARR / repCount` | `MAX(target × 1.5, largestAccountARR × 1.2)` |
+| **Prospect Pipeline** | `totalPipeline / repCount` | `target × 1.5` |
+| **ATR** | `totalATR / repCount` | `MAX(avg × 1.2, largestAccountATR × 1.2)` |
+| **CRE Count** | `totalCRE / repCount` | `MAX(avg × 1.2, largestAccountCRE × 1.2)` |
+| **Tier 1/2 Count** | `totalTierX / repCount` | `avg × 1.2` |
+
+**Why Max considers largest account**: Ensures every account can be assigned to at least one rep. If max were lower than the largest account's value, that account could never fit within any rep's capacity.
+
+**Why Target is pure average**: Continuity rules keep large accounts with their current owners naturally. The target should reflect the true balanced state, not be inflated by outliers.
 
 ### 12.2 Variance Bands
 

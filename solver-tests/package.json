@@ -1,0 +1,14 @@
+{
+  "name": "solver-tests",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test:highs": "node test-highs.js",
+    "test:glpk": "node test-glpk.js",
+    "test:bigm": "node test-bigm-model.js"
+  },
+  "dependencies": {
+    "highs": "^1.8.0",
+    "glpk.js": "^4.0.1"
+  }
+}

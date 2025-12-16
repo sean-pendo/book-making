@@ -355,6 +355,15 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     ],
     patterns: [/.*related.*partner.*account.*/i, /.*pe.*firm.*/i, /.*private.*equity.*/i, /.*partner.*account.*/i],
     required: false
+  },
+  {
+    schemaField: 'is_strategic',
+    aliases: [
+      'Is_Strategic', 'Is Strategic', 'Strategic', 'Strategic_Account', 'Strategic Account',
+      'is_strategic', 'strategic', 'strategic_account', 'is_strategic_account'
+    ],
+    patterns: [/.*is.*strategic.*/i, /^strategic$/i, /.*strategic.*account.*/i],
+    required: false
   }
 ];
 
@@ -563,6 +572,15 @@ export const SALES_REP_FIELD_ALIASES: FieldAlias[] = [
       'team_tier', 'segment', 'rep_tier', 'size_tier', 'tier'
     ],
     patterns: [/.*team.*tier.*/i, /.*size.*tier.*/i, /.*rep.*tier.*/i, /^segment$/i],
+    required: false
+  },
+  {
+    schemaField: 'is_strategic_rep',
+    aliases: [
+      'Is_Strategic_Rep', 'Is Strategic Rep', 'Strategic_Rep', 'Strategic Rep', 'Is_Strategic',
+      'is_strategic_rep', 'strategic_rep', 'is_strategic', 'strategic'
+    ],
+    patterns: [/.*is.*strategic.*rep.*/i, /.*strategic.*rep.*/i, /^is.*strategic$/i],
     required: false
   }
 ];

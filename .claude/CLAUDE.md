@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Book Builder** is a territory balancing and assignment tool for Sales Operations (RevOps). It enables users to import sales data (Accounts, Sales Reps, Opportunities), configure assignment rules, and generate fair territory assignments based on ARR, geography, and other business metrics.
+**Book Builder** is a territory balancing and assignment tool for Sales Operations. It allows RevOps to import data (Accounts, Reps), define rules, and generate fair account assignments based on ARR, geography, and other metrics.
 
-**Current Status**: v1.0 QA Phase - The codebase is unstable with known critical issues in assignment generation and data import flows.
+**Current Status**: v1.3+ (Stabilized) - Business logic is centralized in `src/_domain/` with comprehensive documentation.
 
 ## Business Terminology
 
@@ -159,6 +159,119 @@ parseFloat(value) || parseFloat(fallback) || 0
 
 **Testing tip:** If you see `$0` displayed but query shows values, check if `parseFloat()` is missing.
 
+## Business Logic Architecture: `src/_domain/`
+
+### 📚 SINGLE SOURCE OF TRUTH
+
+**The `_domain/` folder is the authoritative source for ALL business logic.**
+
+| File | Purpose |
+|------|---------|
+| **`MASTER_LOGIC.mdc`** | Human-readable documentation of all business rules |
+| **`calculations.ts`** | ARR, ATR, Pipeline calculations |
+| **`tiers.ts`** | Team tier (SMB/Growth/MM/ENT) classification |
+| **`geography.ts`** | Region hierarchy, territory mapping, geo scoring |
+| **`constants.ts`** | Thresholds, defaults, configuration values |
+| **`normalization.ts`** | Typo handling and data normalization |
+
+### ✅ What BELONGS in `_domain/` (Business Logic)
+- **Calculations**: How ARR, ATR, Pipeline values are computed
+- **Classification rules**: Tier thresholds, account categorization
+- **Geography rules**: Region hierarchy, territory mapping logic
+- **Constants**: Threshold values, scoring weights, defaults
+- **Normalization**: Data cleanup (region aliases, typos)
+
+### ❌ What does NOT belong in `_domain/`
+- React components (`*.tsx` with JSX)
+- Hooks (`useXxx`)
+- Services (API calls, Supabase queries)
+- UI state management
+- Contexts (`AuthContext`, etc.)
+- Formatting helpers (currency display, date formatting)
+
+**Rule**: `_domain/` answers "HOW should the app calculate/classify things?"
+It does NOT answer "HOW should the app render/fetch/store things?"
+
+### 🔒 MANDATORY RULES
+
+#### ⚠️ THE SSOT FLOW (Single Source of Truth)
+
+**When adding or editing ANY reusable business logic, ALWAYS follow this order:**
+
+```
+1. MASTER_LOGIC.mdc   →   Document the rule/formula first
+2. _domain/*.ts       →   Implement in the appropriate .ts file
+3. Consumer files     →   Import from @/_domain and use
+```
+
+**This flow is NON-NEGOTIABLE.** Never skip steps or go out of order.
+
+| Step | Action | Example |
+|------|--------|---------|
+| **1. Document** | Add/update in `MASTER_LOGIC.mdc` | "§12.1.1 Balance Max = MAX(avg × 1.5, largest × 1.2)" |
+| **2. Implement** | Add function/constant to `_domain/*.ts` | `export function calculateBalanceMax(...)` in `constants.ts` |
+| **3. Export** | Ensure exported from `_domain/index.ts` | Already auto-exports via `export * from './constants'` |
+| **4. Import** | Use in components/services/hooks | `import { calculateBalanceMax } from '@/_domain'` |
+
+**Why this order?**
+- Documentation-first prevents logic drift
+- Single implementation prevents duplicates
+- Centralized exports enable easy refactoring
+- Consumers stay clean and focused on their purpose
+
+### Key Rules for `_domain/`
+
+1. **Always import from `@/_domain`** - Never hardcode business logic elsewhere
+   ```typescript
+   // ✅ CORRECT
+   import { getAccountARR, classifyTeamTier, REGION_HIERARCHY } from '@/_domain';
+
+   // ❌ WRONG - inline logic
+   const arr = account.calculated_arr || account.arr || 0;
+   ```
+
+2. **Paired updates required** - When changing business logic:
+   - Update `MASTER_LOGIC.mdc` (documentation) **FIRST**
+   - Update the corresponding `.ts` file (implementation)
+   - Both must stay in sync
+
+3. **Never create duplicate logic** - If you find business logic outside `_domain/`:
+   - Flag it to the user
+   - Refactor to import from `@/_domain`
+
+4. **Standardized Consolidation Technique** - When consolidating code:
+   - `_domain/` = **DEFINITIONS** (source of truth)
+   - `utils/`, `components/`, `services/`, `hooks/` = **CONSUMERS**
+   - **Don't MOVE files** between folders. Refactor them to IMPORT from `@/_domain`
+   - Keep utils in utils, components in components, etc.
+
+### 🔍 Gradual Refactoring Rule
+
+When working on ANY file in the codebase:
+
+1. **Detect Hardcoded Logic**: Look for inline calculations that should use `@/_domain`:
+   - ARR calculations (priority chains like `calculated_arr || arr || 0`)
+   - ATR calculations (filtering by `opportunity_type = 'Renewals'`)
+   - Tier thresholds (magic numbers like `100`, `500`, `1500`)
+   - Region/territory mappings
+   - PE firm name handling
+
+2. **Flag Discrepancies**: If you find hardcoded logic that **differs** from `src/_domain/`:
+   - **STOP and ASK the user** before changing anything
+   - Example: "I found `employees < 150` for SMB in this file, but `TIER_THRESHOLDS.SMB_MAX` is 99. Which is correct?"
+
+3. **Propose Refactor**: If the hardcoded logic **matches** `src/_domain/`:
+   - Suggest replacing with the import
+   - Example: "This file has inline ARR calculation. Want me to refactor to use `getAccountARR()` from `@/_domain`?"
+
+4. **Never Silently Change**: Business logic discrepancies may be intentional edge cases. Always confirm with user.
+
+**Questions to Ask When Discrepancy Found:**
+- "Is this intentional or a bug?"
+- "Should we update `MASTER_LOGIC.mdc` and `src/_domain/` to match this, or vice versa?"
+- "Is this an exception for this specific use case?"
+- "Should we add this as a new constant/function in the _domain module?"
+
 ## Tech Stack
 
 - **Frontend**: React 18 + TypeScript + Vite
@@ -257,21 +370,15 @@ book-ops-workbench/
 - `assignments.sales_rep_id` → `sales_reps.id`
 - `assignments.build_id` → `builds.id`
 
-### Assignment Engine Architecture
+### Assignment Engine
 
-**CRITICAL**: Multiple assignment services exist due to iterative development. This creates fragmentation risk.
+Multiple services exist for different use cases:
+1. **`simplifiedAssignmentEngine.ts`**: Primary engine with priority waterfall
+2. **`rebalancingAssignmentService.ts`**: Multi-pass rebalancing
+3. **`enhancedAssignmentService.ts`**: Enhanced balancing features
+4. **`optimization/`**: HiGHS LP solver for optimal assignments
 
-**Primary Engine (Use This):**
-- `src/services/rebalancingAssignmentService.ts` - "Complete Assignment Logic Overhaul"
-  - Handles full flow: Fetch → Apply Rules → Optimize → Save
-  - Entry point: `generateRebalancedAssignments()`
-
-**Legacy Engines (Avoid):**
-- `collaborativeAssignmentService.ts` - Rule-based approach
-- `sophisticatedAssignmentService.ts` - Multi-pass (Geo → Continuity → Balance)
-- `algorithmicAssignmentService.ts` - Older algorithmic approach
-
-**When debugging assignment generation, first verify which service the UI is calling.**
+All engines import business logic from `@/_domain`.
 
 ### Edge Functions
 
@@ -279,41 +386,49 @@ Located in `supabase/functions/`:
 - `ai-balance-optimizer` - AI-powered balancing optimization
 - `calculate-balance-thresholds` - Calculate balance thresholds
 - `generate-assignment-rule` - Generate assignment rules
+- `gemini-territory-mapping` - AI territory mapping suggestions
+- `lp-solver` - Linear programming solver (HiGHS WASM) for optimal assignments
 - `manager-ai-assistant` - AI assistant for managers
 - `optimize-balancing` - Balancing optimization
 - `parse-ai-balancer-config` - Parse AI balancer configuration
 - `process-large-import` - Handle large data imports
 - `recalculate-accounts` - Recalculate account metrics
+- `send-slack-notification` - Send Slack notifications for errors/feedback
 - `sync-assignments` - Sync assignment data
 - `fix-owner-assignments` - Fix owner assignment issues
 
 All Edge Functions have `verify_jwt = false` in `config.toml`.
 
-## Critical Issues & Known Pitfalls
+## QA Status (v1.3+)
 
-### 🔴 Critical Bugs (QA Phase)
+Codebase has been stabilized and consolidated. Business logic is centralized in `_domain/`.
 
-1. **Assignment Generation Broken**
-   - Assignments fail to generate or return blank results
-   - Check `RebalancingAssignmentService` logs first
-   - Verify which assignment service is being called by the UI
+### Recent Improvements (v1.3.x)
+- **Domain Consolidation**: All business logic in `src/_domain/`
+- **Dead Code Removal**: ~4,000 lines of dead code removed
+- **Unified Scoring**: Analytics and engine use same scoring weights
+- **Documentation**: MASTER_LOGIC.mdc is comprehensive and audited
 
-2. **Data Import State Sync**
-   - Users see "0 Accounts" after import until hard refresh
-   - State desync between React state and Supabase
-   - Root cause: `localStorage` state vs actual DB state in `DataImport.tsx`
-   - **Always verify data in Supabase first** - if it's not in DB, the UI is lying
+### Debugging Strategy
+1. **Check `_domain/`**: All business logic should come from here
+2. **Verify Supabase**: If data looks wrong, check the DB first
+3. **Console Logs**: Assignment engine logs to console with `[AssignmentEngine]` prefix
 
-3. **Optimized Import Risk**
-   - `BatchImportService` uses "Optimized Import" which **deletes all existing records before inserting**
-   - High risk of data loss if insert operation fails after delete
-   - Affects opportunities table especially
+### 🔴 Debug Mode Requirements
 
-### State Management
+**When entering Debug Mode, ALWAYS start by reviewing business logic:**
 
-- React Query handles server state caching
-- `localStorage` used for import state persistence (source of bugs)
-- Auth state managed via `AuthContext.tsx`
+1. **Read `src/_domain/MASTER_LOGIC.mdc`** - Understand the expected behavior before investigating
+2. **Check relevant `_domain/*.ts` files** - Verify the implementation matches documentation
+3. **Compare actual vs expected** - Use `MASTER_LOGIC.mdc` as the source of truth for what *should* happen
+
+**Debug Mode Checklist:**
+- [ ] Did I read `MASTER_LOGIC.mdc` to understand the business rule?
+- [ ] Is the bug in the business logic (fix `_domain/`) or in a consumer (fix component/service)?
+- [ ] Does the current implementation match the documented behavior?
+- [ ] If there's a discrepancy, which is correct - the docs or the code?
+
+**Why this matters:** Many bugs are business logic misunderstandings, not code errors. Reading the docs first prevents "fixing" code that's actually correct.
 
 ### Important Conventions
 
@@ -323,38 +438,31 @@ All Edge Functions have `verify_jwt = false` in `config.toml`.
 - **Use React Query for data fetching** - Don't bypass the cache
 - **Follow Shadcn UI patterns** for new components
 
-## Documentation Rules
+## Rules & Guidelines
 
-### MANDATORY: Changelog Maintenance
+### 📜 Documentation Rules
+- **Structure**:
+  - `docs/core/`: Strategy & Architecture (e.g., `architecture.md`).
+  - `docs/archive/`: Historical plans and resolved issues.
+  - `src/_domain/MASTER_LOGIC.mdc`: Business logic documentation (primary reference).
+- **Docs First**: Update `MASTER_LOGIC.mdc` or `docs/core/architecture.md` before complex changes.
+- **Changelog Maintenance**: **MANDATORY**. You must maintain a `CHANGELOG.md` file in the root.
+  - Every time you make a code change (fix, feature, refactor), you must append an entry to `CHANGELOG.md`.
+  - Format: `[YYYY-MM-DD] - {Type}: {Description}`.
+  - Types: `Fix`, `Feature`, `Refactor`, `Docs`.
+- **Simple Language**: Use clear, non-jargon English in comments and docs.
 
-**Every code change must be logged in `CHANGELOG.md`** (root directory).
-Highlight bigger changed in the changelog
-
-Format:
-```markdown
-## [YYYY-MM-DD] - Category
-- **Type**: Description
-```
-
-Types: `Fix`, `Feature`, `Refactor`, `Docs`, `Infra`, `Env`
-
-Example:
-```markdown
-## [2025-11-20] - Database Fixes
-- **Fix**: Wrapped ghost build ID references in DO blocks to prevent FK violations.
-- **Fix**: Fixed column name mismatches in migrations.
-```
-
-### Documentation Structure
-
-- `docs/core/` - Strategy, architecture, long-term planning
-  - `architecture.md` - System architecture & data flows
-  - `ideas.md` - Future feature brainstorming
-
-- `docs/ops/` - Daily operations, QA, debugging
-  - `qa_log.md` - Bug tracking during QA phase
-
-**Before complex changes**, update relevant docs in `docs/core/` or `docs/ops/`.
+### 🛡️ Safety & Coding
+- **File Operations**: Always check if a file exists before creation. Prefer `edit` over `overwrite`.
+- **No Magic**: Do not assume deployment environments. Check env vars first.
+- **Browser Tools**: Only use browser/testing tools (navigate, snapshot, click, screenshot, etc.) when the user **explicitly asks** to test in the browser or view the app. Do NOT proactively open browser tabs or test features without being asked.
+- **Pre-Deploy Code Review**: **MANDATORY**. Before deploying ANY change to Vercel:
+  1. Re-read the code you modified to verify it makes sense
+  2. Check for edge cases (null values, empty arrays, race conditions)
+  3. Verify the change doesn't break related flows (e.g., if you change approval logic, check ALL approval paths)
+  4. Look for missing error handling
+  5. Ensure notifications go to the right people
+  6. Run linter checks on modified files
 
 ## Environment & Configuration
 
@@ -373,43 +481,128 @@ Located in `book-ops-workbench/.env`:
 - Local Studio: `http://localhost:54323`
 - Client configured in `src/integrations/supabase/client.ts`
 
-## Git Workflow
+## Versioning & Releases
 
-- Main branch: `master`
-- Project uses conventional commits (see `CHANGELOG.md`)
-- **The user will notify you when to push to GitHub** - don't push proactively
-- WHen its a big change we should make ti stand out like v1.1 etc. smaller will be 1.0.1
+### Version Display
+The app version is shown in **Settings** at the bottom. It pulls from `package.json` at build time.
 
-## Testing Strategy
+### Release Workflow (AI-Assisted)
+**Proactive releases**: After significant changes (3+ features/fixes, or end of session), suggest a patch release (e.g., 1.1.1 → 1.1.2).
 
-No automated tests currently exist. QA is manual.
+When the user says "release", "push to GitHub", or "create a version", follow this process:
 
-**Debugging Strategy (from master_context.mdc):**
-1. **Trust Nothing** - Verify data in Supabase first
-2. **Isolate Flow** - When fixing Generation, check `RebalancingAssignmentService` logs
-3. **Local Dev** - Debug locally with connected Supabase to reproduce bugs
+1. **Bump version** in `book-ops-workbench/package.json`
+   - Patch (x.x.1): Bug fixes only
+   - Minor (x.1.0): New features
+   - Major (1.0.0): Breaking changes
 
-## Key Pages & Routes
+2. **Update CHANGELOG.md** with all changes since last release
 
-- `/` - Index (Home/Dashboard)
-- `/auth` - Authentication
-- `/import` - Data Import (CSV upload)
-- `/build/:id` - Build Detail view
-- `/assignment-config/:id` - Assignment Configuration
-- `/manager-dashboard` - Manager Dashboard
-- `/revops-final` - RevOps Final View
-- `/governance` - Governance page
-- `/settings` - User Settings
+3. **Run these commands** (requires git_write permission):
+   ```bash
+   cd "/Users/sean.muse/code/book building v1.0 QA"
+   git add -A
+   git commit -m "Release vX.X.X - <summary>"
+   git tag vX.X.X
+   git push origin master --tags
+   ```
 
-## Notes for Future Claude Instances
+4. **Deploy to Vercel** (if not already done)
 
-1. **This is a QA-phase codebase** - expect bugs and incomplete features
-2. **Assignment engine is fragmented** - multiple competing implementations exist
-3. **State sync is unreliable** - always verify Supabase data directly
-4. **Import flow is dangerous** - deletes before insert (data loss risk)
-5. **No automated tests** - rely on manual QA and careful verification
-6. **User wants learning log maintained** - document what changes are made and why
+### Current Version
+Check `book-ops-workbench/package.json` for the current version number.
 
-## Additional Context
+## Git & GitHub
 
-Review `.cursor/rules/master_context.mdc` for detailed project context, QA status, and debugging rules. This file is the source of truth for current project state and critical issues.
+### When to Push
+Push to GitHub when:
+- A feature is complete and tested
+- User explicitly requests a release
+- Before ending a long session with significant changes
+
+### Commit Message Format
+`Release vX.X.X - Brief summary` for releases
+`Fix: description` or `Feature: description` for regular commits
+
+## Developer & Notifications
+
+### Developer Info
+- **Developer Slack**: `@sean.muse` (pendo.io workspace)
+- **Developer Email**: `sean.muse@pendo.io`
+- All developer feedback, error notifications, and fallback messages go to @sean.muse
+
+### Slack Notification Routing
+- **pendo.io emails** → DM to user (extracted from email prefix)
+- **Non-pendo.io emails** → Fallback DM to @sean.muse with context
+- **Feedback widget** → Always DMs @sean.muse
+- **Error reports** → Always DMs @sean.muse (includes stack traces)
+
+### Error Reporting
+The app has global error handlers that automatically send errors to Slack:
+- Uncaught JavaScript errors
+- Unhandled Promise rejections
+- React Error Boundary catches
+All errors include: stack trace, URL, user agent, app version, timestamp.
+
+### Supabase Project
+- **Project ID**: `lolnbotrdamhukdrrsmh`
+- **Edge Functions**: `send-slack-notification`, `gemini-territory-mapping`, etc.
+- **Required Secret**: `SLACK_BOT_TOKEN` - Must be set in Supabase Dashboard → Settings → Edge Functions for Slack notifications to work
+
+### Vercel Deployment
+- **Account**: `seanxmuses-projects` (personal Vercel - CLI deployments only)
+- **Project**: `book-ops-workbench`
+- **Production URL**: `https://book-ops-workbench-eosin.vercel.app`
+- **Beta URL (v1.2)**: `https://book-ops-v1-2-beta.vercel.app` (pinned deployment for beta testers)
+- **Deploy Command**: `vercel --prod` (from `book-ops-workbench` directory)
+- **Environment Variables**: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+
+**Note**: Beta URL requires Deployment Protection to be disabled in Vercel Settings for public access.
+
+### GitHub (Separate from Vercel)
+- **Repo**: `https://github.com/sean-pendo/book-making` (work GitHub)
+- **Purpose**: Version control only - NOT connected to Vercel
+- **Push Command**: `git push origin master`
+
+**Important**: GitHub and Vercel are intentionally separate. Push to GitHub for version control, use `vercel --prod` CLI for deployments.
+
+## Terminology & Glossary
+
+> **Full Reference**: See [`src/_domain/MASTER_LOGIC.mdc`](../../book-ops-workbench/src/_domain/MASTER_LOGIC.mdc) for complete glossary with calculation formulas.
+
+### Quick Reference
+
+| Term | Meaning |
+|------|---------|
+| **ARR** | Annual Recurring Revenue (customers only) |
+| **ATR** | Available to Renew - revenue timing, NOT risk |
+| **Pipeline** | Prospect opportunity value (`net_arr`) |
+| **CRE** | Customer Renewal at Risk - churn indicator |
+| **Team Tier** | SMB/Growth/MM/ENT based on employee count |
+
+### Key Calculation Rules
+
+```
+ARR Priority:  hierarchy_bookings_arr_converted → calculated_arr → arr → 0
+               (hierarchy_bookings first to prevent double-counting from children)
+ATR Source:    SUM(available_to_renew) WHERE opportunity_type = 'Renewals'
+Team Tier:     SMB (<100 emp) | Growth (100-499) | MM (500-1499) | ENT (1500+) | null (unknown)
+```
+
+## Monorepo Structure
+
+This repo has a nested structure:
+```
+book building v1.0 QA/     ← Git root (you start here)
+├── .claude/               ← Claude Code instructions (this file)
+├── .cursor/               ← Cursor IDE rules
+├── docs/                  ← Documentation
+├── CHANGELOG.md           ← Required: update on every change
+└── book-ops-workbench/    ← The actual React app
+    ├── src/              ← Frontend source code
+    ├── supabase/         ← Migrations & Edge Functions
+    ├── package.json      ← npm commands run from here
+    └── .env              ← Environment variables (not committed)
+```
+
+**Important**: Run `npm` commands from `book-ops-workbench/`, not the git root.

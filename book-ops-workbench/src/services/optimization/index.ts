@@ -32,7 +32,13 @@ export { teamAlignmentScore, getTierIndex, explainTeamAlignmentScore } from './s
 // Note: classifyTeamTier should be imported from @/_domain instead
 
 // Utilities
-export { normalizeWeights, adjustLinkedWeights, areWeightsNormalized, formatWeights } from './utils/weightNormalizer';
+export {
+  normalizeWeights,
+  adjustLinkedWeights,
+  areWeightsNormalized,
+  formatWeights,
+  deriveWeightsFromPriorityConfig
+} from './utils/weightNormalizer';
 
 // Preprocessing
 export { loadBuildData } from './preprocessing/dataLoader';
@@ -48,5 +54,5 @@ export { buildLPProblem } from './constraints/lpProblemBuilder';
 export { solveProblem, extractAssignments } from './solver/highsWrapper';
 
 // Post-processing
-export { generateRationale, generateScoreBreakdown } from './postprocessing/rationaleGenerator';
+export { generateRationale, generateScoreBreakdown, getPositionLabel } from './postprocessing/rationaleGenerator';
 export { calculateRepLoads, calculateMetrics, formatMetricsSummary } from './postprocessing/metricsCalculator';

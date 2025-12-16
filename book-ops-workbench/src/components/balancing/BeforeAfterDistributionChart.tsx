@@ -411,7 +411,7 @@ export const BeforeAfterDistributionChart: React.FC<BeforeAfterDistributionChart
                       </div>
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="right" className="max-w-xs z-[9999]">
+                  <TooltipContent side="top" className="max-w-xs">
                     <div className="text-sm">
                       <div className="font-medium">{rep.repName}</div>
                       <div className="text-muted-foreground text-xs">{rep.region}</div>

@@ -1,10 +1,13 @@
 // Balance Threshold Calculator Service
 // Calculates dynamic thresholds from account data for normal reps
 
+import { getAccountATR } from '@/_domain';
+
 interface Account {
   sfdc_account_id: string;
   cre_count: number;
   calculated_atr?: number;
+  atr?: number;
   expansion_tier?: string;
   renewal_quarter?: string;
   calculated_arr?: number;
@@ -137,8 +140,8 @@ export class BalanceThresholdCalculator {
       // CRE count
       totalCRE += account.cre_count || 0;
       
-      // ATR (calculated_atr or 0)
-      totalATR += account.calculated_atr || 0;
+      // ATR (use getAccountATR for consistent priority chain)
+      totalATR += getAccountATR(account);
       
       // Tier counts
       const tier = account.expansion_tier?.toLowerCase();

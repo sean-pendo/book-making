@@ -88,7 +88,7 @@ export const BeforeAfterBar: React.FC<BeforeAfterBarProps> = ({
                 width={45}
                 tickFormatter={(value) => formatValue(value, metric)}
               />
-              <Tooltip content={(props) => <CustomTooltip {...props} metric={metric} />} />
+              <Tooltip content={(props) => <CustomTooltip {...props} metric={metric} />} wrapperStyle={{ zIndex: 1000 }} />
               <Legend 
                 wrapperStyle={{ fontSize: 11 }}
                 iconType="circle"

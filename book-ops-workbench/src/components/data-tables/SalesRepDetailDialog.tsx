@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { calculateSalesRepMetrics, getAccountCustomerStatus } from '@/utils/salesRepCalculations';
-import { getAccountARR, getAccountATR } from '@/_domain';
+import { getAccountARR, getAccountATR, isParentAccount, isRenewalOpportunity } from '@/_domain';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -144,12 +144,8 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
       const getARR = (acc: any): number => getAccountARR(acc);
 
       // Filter to parent accounts only for cleaner view
-      const gainingParents = (gainingAccounts || []).filter(a => 
-        !a.ultimate_parent_id || a.ultimate_parent_id.trim() === ''
-      );
-      const losingParents = (losingAccounts || []).filter(a => 
-        !a.ultimate_parent_id || a.ultimate_parent_id.trim() === ''
-      );
+      const gainingParents = (gainingAccounts || []).filter(isParentAccount);
+      const losingParents = (losingAccounts || []).filter(isParentAccount);
 
       return {
         gaining: gainingParents.map(a => ({
@@ -446,17 +442,8 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
         const hierarchicalAccounts: AccountWithHierarchy[] = [];
         
         // Group accounts: parents and children separately
-        const parentAccounts = accounts.filter(a => 
-          !a.ultimate_parent_id || 
-          a.ultimate_parent_id === '' || 
-          a.ultimate_parent_id.trim() === ''
-        );
-        
-        const childAccounts = accounts.filter(a => 
-          a.ultimate_parent_id && 
-          a.ultimate_parent_id !== '' && 
-          a.ultimate_parent_id.trim() !== ''
-        );
+        const parentAccounts = accounts.filter(isParentAccount);
+        const childAccounts = accounts.filter(a => !isParentAccount(a));
 
         // Add parent accounts to hierarchy
         parentAccounts.forEach(parent => {
@@ -1093,7 +1080,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
                                     // Calculate ATR from RENEWAL opportunities only for this account
                                     const accountATR = repDetail?.hierarchyOpportunities?.filter(o => 
                                       o.sfdc_account_id === account.sfdc_account_id &&
-                                      o.opportunity_type && o.opportunity_type.toLowerCase().trim() === 'renewals'
+                                      isRenewalOpportunity(o)
                                     ).reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0) || 0;
                                     return <span className="text-red-600">{formatCurrency(accountATR)}</span>;
                                   } else {
@@ -1195,7 +1182,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
                                         // Calculate ATR from RENEWAL opportunities only for child account
                                         const childATR = repDetail?.hierarchyOpportunities?.filter(o => 
                                           o.sfdc_account_id === child.sfdc_account_id &&
-                                          o.opportunity_type && o.opportunity_type.toLowerCase().trim() === 'renewals'
+                                          isRenewalOpportunity(o)
                                         ).reduce((sum, opp) => sum + (opp.available_to_renew || 0), 0) || 0;
                                         return <span className="text-red-600">{formatCurrency(childATR)}</span>;
                                       } else {

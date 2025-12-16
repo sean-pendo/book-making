@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HiGHS WASM Scale Limit Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #00d9ff; }
+    .test-row {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin: 8px 0;
+      background: #16213e;
+      border-radius: 8px;
+      border-left: 4px solid #666;
+    }
+    .test-row.running { border-left-color: #ffc107; }
+    .test-row.passed { border-left-color: #4caf50; }
+    .test-row.failed { border-left-color: #f44336; }
+    .test-row.skipped { border-left-color: #666; opacity: 0.6; }
+    .test-name { flex: 1; font-weight: 500; }
+    .test-vars { width: 120px; color: #888; }
+    .test-time { width: 100px; text-align: right; }
+    .test-status { width: 100px; text-align: right; font-weight: bold; }
+    .passed .test-status { color: #4caf50; }
+    .failed .test-status { color: #f44336; }
+    .running .test-status { color: #ffc107; }
+    button {
+      background: #00d9ff;
+      color: #1a1a2e;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 20px 0;
+    }
+    button:hover { background: #00b8d9; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    #log {
+      background: #0f0f1a;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 13px;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .summary {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    .summary h2 { margin-top: 0; color: #00d9ff; }
+    .highlight { color: #ffc107; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>🧪 HiGHS WASM Scale Limit Test</h1>
+  <p>This test finds the exact breaking point for HiGHS WASM in the browser.</p>
+  <p>Uses a <strong>simple LP structure</strong> (same as waterfall) - only binary assignment vars, no Big-M slacks.</p>
+  
+  <button id="runBtn" onclick="runTests()">Run Scale Test</button>
+  
+  <div id="tests"></div>
+  
+  <div id="summary" class="summary" style="display:none;">
+    <h2>📊 Results Summary</h2>
+    <div id="summaryContent"></div>
+  </div>
+  
+  <h3>Console Log</h3>
+  <div id="log"></div>
+
+  <!-- Load HiGHS from CDN -->
+  <script src="https://lovasoa.github.io/highs-js/highs.js"></script>
+  
+  <script>
+    const log = (msg) => {
+      const el = document.getElementById('log');
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
+      console.log(msg);
+    };
+
+    /**
+     * Build a SIMPLE LP (same structure as waterfall)
+     * - Only binary assignment variables
+     * - Simple constraints (each account to one rep, capacity)
+     * - NO Big-M penalty slacks
+     * - All coefficients in 1-100 range
+     */
+    function buildSimpleLP(numAccounts, numReps) {
+      const lines = [];
+      const binaries = [];
+      
+      lines.push('Maximize');
+      lines.push(' obj:');
+      
+      // Objective: assignment scores (1-100 range)
+      const objTerms = [];
+      for (let a = 0; a < numAccounts; a++) {
+        for (let r = 0; r < numReps; r++) {
+          const varName = `x${a}_${r}`;
+          const score = (10 + (a * 7 + r * 13) % 90).toFixed(2); // Deterministic 10-100
+          objTerms.push(`+ ${score} ${varName}`);
+          binaries.push(varName);
+        }
+      }
+      
+      // Write objective in chunks (avoid very long lines)
+      let currentLine = '';
+      for (const term of objTerms) {
+        if (currentLine.length + term.length > 200) {
+          lines.push(' ' + currentLine);
+          currentLine = term;
+        } else {
+          currentLine += ' ' + term;
+        }
+      }
+      if (currentLine) lines.push(' ' + currentLine);
+      
+      // Constraints
+      lines.push('Subject To');
+      let cIdx = 0;
+      
+      // Each account assigned to exactly one rep
+      for (let a = 0; a < numAccounts; a++) {
+        const terms = [];
+        for (let r = 0; r < numReps; r++) {
+          terms.push(`+ 1 x${a}_${r}`);
+        }
+        lines.push(` c${cIdx++}: ${terms.join(' ')} = 1`);
+      }
+      
+      // Capacity constraints (simple)
+      for (let r = 0; r < numReps; r++) {
+        const terms = [];
+        for (let a = 0; a < numAccounts; a++) {
+          const arr = 10000 + (a * 1234) % 50000; // Deterministic ARR
+          terms.push(`+ ${arr} x${a}_${r}`);
+        }
+        const maxCap = Math.ceil(numAccounts / numReps) * 100000;
+        lines.push(` c${cIdx++}: ${terms.join(' ')} <= ${maxCap}`);
+      }
+      
+      // Bounds (binary 0-1)
+      lines.push('Bounds');
+      for (const v of binaries) {
+        lines.push(` 0 <= ${v} <= 1`);
+      }
+      
+      // Binary declaration
+      lines.push('Binary');
+      // Write in chunks
+      for (let i = 0; i < binaries.length; i += 50) {
+        lines.push(' ' + binaries.slice(i, i + 50).join(' '));
+      }
+      
+      lines.push('End');
+      
+      return {
+        lp: lines.join('\n'),
+        numVars: binaries.length,
+        numConstraints: cIdx
+      };
+    }
+
+    // Test configurations - TEST 2M VARS
+    const testCases = [
+      { name: '2M', accounts: 20000, reps: 100 },         // 2,000,000 vars
+    ];
+
+    let results = [];
+    let highs = null;
+
+    function renderTests() {
+      const container = document.getElementById('tests');
+      container.innerHTML = testCases.map((tc, i) => {
+        const vars = tc.accounts * tc.reps;
+        const result = results[i];
+        const statusClass = result ? (result.passed ? 'passed' : 'failed') : '';
+        const status = result ? (result.passed ? '✓ PASS' : '✗ FAIL') : 'pending';
+        const time = result ? `${result.time}ms` : '-';
+        
+        return `
+          <div class="test-row ${statusClass}" id="test-${i}">
+            <span class="test-name">${tc.name} (${tc.accounts}×${tc.reps})</span>
+            <span class="test-vars">${vars.toLocaleString()} vars</span>
+            <span class="test-time">${time}</span>
+            <span class="test-status">${status}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function updateTest(index, status, time = null, error = null) {
+      const el = document.getElementById(`test-${index}`);
+      el.className = `test-row ${status}`;
+      
+      if (status === 'running') {
+        el.querySelector('.test-status').textContent = '⏳ Running...';
+      } else if (status === 'passed') {
+        el.querySelector('.test-status').textContent = '✓ PASS';
+        el.querySelector('.test-time').textContent = `${time}ms`;
+        results[index] = { passed: true, time };
+      } else if (status === 'failed') {
+        el.querySelector('.test-status').textContent = '✗ FAIL';
+        el.querySelector('.test-time').textContent = error ? error.substring(0, 20) : 'error';
+        results[index] = { passed: false, time, error };
+      } else if (status === 'skipped') {
+        el.querySelector('.test-status').textContent = '⏭ SKIP';
+        results[index] = { passed: false, skipped: true };
+      }
+    }
+
+    async function runTests() {
+      const btn = document.getElementById('runBtn');
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      
+      results = [];
+      renderTests();
+      document.getElementById('summary').style.display = 'none';
+      document.getElementById('log').textContent = '';
+      
+      log('='.repeat(60));
+      log('HiGHS WASM Scale Limit Test');
+      log('='.repeat(60));
+      log('');
+      
+      // Load HiGHS
+      log('Loading HiGHS WASM...');
+      try {
+        highs = await Module();
+        log('✓ HiGHS loaded successfully');
+      } catch (err) {
+        log('✗ Failed to load HiGHS: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Run Scale Test';
+        return;
+      }
+      
+      let lastPassedVars = 0;
+      let firstFailedVars = null;
+      let consecutiveFailures = 0;
+      
+      for (let i = 0; i < testCases.length; i++) {
+        const tc = testCases[i];
+        const vars = tc.accounts * tc.reps;
+        
+        // Skip if we've had 2 consecutive failures (found the limit)
+        if (consecutiveFailures >= 2) {
+          log(`\n[${tc.name}] Skipping (limit already found)`);
+          updateTest(i, 'skipped');
+          continue;
+        }
+        
+        log(`\n[${tc.name}] Building LP: ${tc.accounts} accounts × ${tc.reps} reps = ${vars.toLocaleString()} vars`);
+        updateTest(i, 'running');
+        
+        // Small delay to let UI update
+        await new Promise(r => setTimeout(r, 50));
+        
+        try {
+          // Build LP
+          const { lp, numVars, numConstraints } = buildSimpleLP(tc.accounts, tc.reps);
+          log(`  LP size: ${(lp.length / 1024).toFixed(1)} KB, ${numConstraints} constraints`);
+          
+          // Solve
+          const startTime = performance.now();
+          const solution = highs.solve(lp);
+          const solveTime = Math.round(performance.now() - startTime);
+          
+          if (solution.Status === 'Optimal' || solution.Status === 'Feasible') {
+            log(`  ✓ ${solution.Status} in ${solveTime}ms (obj: ${solution.ObjectiveValue?.toFixed(2)})`);
+            updateTest(i, 'passed', solveTime);
+            lastPassedVars = vars;
+            consecutiveFailures = 0;
+          } else {
+            log(`  ✗ Status: ${solution.Status}`);
+            updateTest(i, 'failed', solveTime, solution.Status);
+            consecutiveFailures++;
+            if (!firstFailedVars) firstFailedVars = vars;
+          }
+        } catch (err) {
+          const errMsg = err.message || err.toString();
+          log(`  ✗ CRASHED: ${errMsg.substring(0, 100)}`);
+          updateTest(i, 'failed', null, errMsg.substring(0, 30));
+          consecutiveFailures++;
+          if (!firstFailedVars) firstFailedVars = vars;
+          
+          // Try to reload HiGHS for next test
+          try {
+            log('  Reloading HiGHS...');
+            highs = await Module();
+            log('  ✓ HiGHS reloaded');
+          } catch (reloadErr) {
+            log('  ✗ Failed to reload HiGHS');
+          }
+        }
+      }
+      
+      // Show summary
+      log('\n' + '='.repeat(60));
+      log('SUMMARY');
+      log('='.repeat(60));
+      
+      const summaryEl = document.getElementById('summaryContent');
+      let summaryHtml = '';
+      
+      if (firstFailedVars) {
+        log(`\n🎯 BREAKING POINT FOUND:`);
+        log(`   Last successful: ${lastPassedVars.toLocaleString()} binary variables`);
+        log(`   First failure:   ${firstFailedVars.toLocaleString()} binary variables`);
+        
+        summaryHtml = `
+          <p>🎯 <strong>Breaking Point Found:</strong></p>
+          <p>Last successful: <span class="highlight">${lastPassedVars.toLocaleString()}</span> binary variables</p>
+          <p>First failure: <span class="highlight">${firstFailedVars.toLocaleString()}</span> binary variables</p>
+          <p><br>This means HiGHS WASM in the browser has a hard limit around <span class="highlight">${lastPassedVars.toLocaleString()}</span> variables.</p>
+          <p>Your production problem (~20,000+ vars) exceeds this limit.</p>
+        `;
+        
+        if (lastPassedVars >= 10000) {
+          log(`\n✅ Good news: HiGHS can handle ${lastPassedVars.toLocaleString()} vars`);
+          log(`   Your production problem may work with LP structure optimization.`);
+          summaryHtml += `<p><br>✅ <strong>Good news:</strong> The limit is high enough that your production problem might work with LP structure optimization.</p>`;
+        } else {
+          log(`\n⚠️ The limit is too low for your production problem.`);
+          log(`   You need a server-side solver or problem decomposition.`);
+          summaryHtml += `<p><br>⚠️ <strong>The limit is too low.</strong> You need a server-side solver or problem decomposition.</p>`;
+        }
+      } else {
+        log(`\n✅ All tests passed! HiGHS can handle at least ${lastPassedVars.toLocaleString()} variables.`);
+        summaryHtml = `<p>✅ <strong>All tests passed!</strong> HiGHS can handle at least <span class="highlight">${lastPassedVars.toLocaleString()}</span> variables.</p>`;
+      }
+      
+      summaryEl.innerHTML = summaryHtml;
+      document.getElementById('summary').style.display = 'block';
+      
+      btn.disabled = false;
+      btn.textContent = 'Run Scale Test Again';
+    }
+
+    // Initial render
+    renderTests();
+  </script>
+</body>
+</html>
+

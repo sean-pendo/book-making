@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { supabase } from '@/integrations/supabase/client';
+import { getAccountARR } from '@/_domain';
 import { useToast } from '@/hooks/use-toast';
 import { 
   Bug, 
@@ -130,7 +131,7 @@ export const EnhancedAssignmentDebugger: React.FC<EnhancedAssignmentDebuggerProp
           cutoffAmount: hardCutoff
         };
 
-        const arr = acc.calculated_arr || acc.arr || 0;
+        const arr = getAccountARR(acc);
         existing.existingARR += arr;
         existing.totalARR += arr;
         existing.accountCount += 1;
@@ -154,7 +155,7 @@ export const EnhancedAssignmentDebugger: React.FC<EnhancedAssignmentDebuggerProp
           cutoffAmount: hardCutoff
         };
 
-        const arr = acc.calculated_arr || acc.arr || 0;
+        const arr = getAccountARR(acc);
         existing.newARR += arr;
         existing.totalARR += arr;
         existing.accountCount += 1;

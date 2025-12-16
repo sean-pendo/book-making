@@ -1,7 +1,7 @@
 // Shared calculation logic for Sales Rep metrics
 // Used by both SalesRepsTable and SalesRepDetailDialog to ensure consistency
 
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, isRenewalOpportunity, isParentAccount } from '@/_domain';
 
 interface Account {
   sfdc_account_id: string;
@@ -86,17 +86,8 @@ export function calculateSalesRepMetrics(
     // Account Rules: Parent vs Child (Updated per user requirements)
     // Parent Account: ultimate_parent_id is blank/null/empty
     // Child Account: ultimate_parent_id is not blank/null/empty
-    const parentAccounts = repAccounts.filter(a => 
-      !a.ultimate_parent_id || 
-      a.ultimate_parent_id === '' || 
-      a.ultimate_parent_id.trim() === ''
-    );
-    
-    const childAccounts = repAccounts.filter(a => 
-      a.ultimate_parent_id && 
-      a.ultimate_parent_id !== '' && 
-      a.ultimate_parent_id.trim() !== ''
-    );
+    const parentAccounts = repAccounts.filter(isParentAccount);
+    const childAccounts = repAccounts.filter(a => !isParentAccount(a));
 
     console.log(`[DEBUG] Parent/Child Classification for Rep ${repId}:`);
     console.log(`[DEBUG] - Parent accounts: ${parentAccounts.length}`, parentAccounts.map(a => ({ id: a.sfdc_account_id, name: a.account_name, parent_id: a.ultimate_parent_id })));
@@ -186,14 +177,14 @@ export function calculateSalesRepMetrics(
     // Sum available_to_renew from ONLY renewal opportunities for this rep's accounts
     const totalATR = repOpportunities.reduce((sum, opp) => {
       // Only include opportunities where opportunity_type is 'Renewals'
-      if (opp.opportunity_type && opp.opportunity_type.toLowerCase().trim() === 'renewals') {
+      if (isRenewalOpportunity(opp)) {
         const atrValue = opp.available_to_renew || 0;
         return sum + atrValue;
       }
       return sum;
     }, 0);
     
-    console.log(`[DEBUG] Total ATR calculation for Rep ${repId}: ${totalATR} (from ${repOpportunities.filter(o => o.opportunity_type?.toLowerCase().trim() === 'renewals').length} renewal opportunities)`);
+    console.log(`[DEBUG] Total ATR calculation for Rep ${repId}: ${totalATR} (from ${repOpportunities.filter(isRenewalOpportunity).length} renewal opportunities)`);
 
     // Risk Assessment: Count of CRE opportunities tied to parent and children
     const accountIds = repAccounts.map(a => a.sfdc_account_id);

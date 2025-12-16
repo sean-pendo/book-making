@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HiGHS Scale Threshold Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1200px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #00d9ff; }
+    .test-row {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin: 8px 0;
+      background: #16213e;
+      border-radius: 8px;
+      border-left: 4px solid #666;
+    }
+    .test-row.passed { border-left-color: #4caf50; }
+    .test-row.failed { border-left-color: #f44336; }
+    .test-row.running { border-left-color: #ff9800; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .test-name { flex: 1; font-weight: 500; }
+    .test-time { width: 120px; text-align: right; }
+    .test-status { width: 150px; text-align: right; font-weight: bold; }
+    .passed .test-status { color: #4caf50; }
+    .failed .test-status { color: #f44336; }
+    .running .test-status { color: #ff9800; }
+    button {
+      background: #00d9ff;
+      color: #1a1a2e;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 10px 5px;
+    }
+    button:hover { background: #00b8d9; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    #log {
+      background: #0f0f1a;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 11px;
+      max-height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .summary {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    .summary h2 { margin-top: 0; color: #00d9ff; }
+    .info { 
+      background: #1e3a5f; 
+      padding: 15px; 
+      border-radius: 8px; 
+      margin: 15px 0;
+      border-left: 4px solid #00d9ff;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔬 HiGHS Scale Threshold Test</h1>
+  
+  <div class="info">
+    <strong>Purpose:</strong> Find the account count threshold where HiGHS starts hanging.<br>
+    <strong>Method:</strong> Test with increasing account counts (500, 1000, 2000, 3000, 4000, 5000) with full Big-M slack structure.<br>
+    <strong>Timeout:</strong> 30 seconds per test. If it takes longer, we've found the threshold.
+  </div>
+  
+  <button id="runBtn" onclick="runTests()">Run Scale Tests</button>
+  <button id="stopBtn" onclick="stopTests()" disabled>Stop</button>
+  
+  <div id="tests"></div>
+  
+  <div class="summary" id="summary" style="display: none;">
+    <h2>Summary</h2>
+    <div id="summaryContent"></div>
+  </div>
+  
+  <h3>Console Log</h3>
+  <div id="log"></div>
+
+  <script src="https://lovasoa.github.io/highs-js/highs.js"></script>
+  
+  <script>
+    let stopRequested = false;
+    const TIMEOUT_MS = 30000; // 30 seconds
+    const NUM_REPS = 48;
+    
+    const log = (msg) => {
+      const el = document.getElementById('log');
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
+      console.log(msg);
+    };
+
+    /**
+     * Build LP with full production slack structure (matching lpProblemBuilder.ts)
+     * - Binary assignment vars
+     * - ARR balance with Big-M slacks (6 per rep)
+     * - ATR balance with Big-M slacks (6 per rep)
+     * - Tier 1-4 balance with Big-M slacks (24 per rep)
+     * Total: 36 slacks per rep
+     */
+    function buildProductionLP(numAccounts, numReps) {
+      const lines = [];
+      const MAX_LINE_LENGTH = 200;
+      
+      // Realistic ARR distribution (matching production data)
+      const totalARR = numAccounts * 50000; // ~$50K avg per account
+      const targetARR = totalARR / numReps;
+      const totalATR = numAccounts * 15000; // ~$15K avg ATR
+      const targetATR = totalATR / numReps;
+      
+      // Tier distribution (realistic)
+      const tierTargets = {
+        tier1: Math.max(1, Math.floor(numAccounts * 0.05 / numReps)), // 5% ENT
+        tier2: Math.max(1, Math.floor(numAccounts * 0.15 / numReps)), // 15% MM
+        tier3: Math.max(1, Math.floor(numAccounts * 0.35 / numReps)), // 35% Growth
+        tier4: Math.max(1, Math.floor(numAccounts * 0.45 / numReps)), // 45% SMB
+      };
+      
+      const variance = 0.10;
+      const PENALTY = { ALPHA: 0.001, BETA: 0.01, BIG_M: 0.1 };
+      const WEIGHTS = { arr: 0.50, atr: 0.25, tiers: 0.25 };
+      const tierWeight = WEIGHTS.tiers / 4;
+      
+      const getVarName = (aIdx, rIdx) => `x${aIdx}_${rIdx}`;
+      
+      lines.push('Maximize');
+      lines.push(' obj:');
+      
+      let currentLine = '';
+      const binaries = [];
+      const slackBounds = [];
+      
+      // Assignment variables with realistic coefficients (0.1-1.0 range)
+      for (let a = 0; a < numAccounts; a++) {
+        for (let r = 0; r < numReps; r++) {
+          const varName = getVarName(a, r);
+          binaries.push(varName);
+          
+          // Simulate scoring: continuity (0-0.4) + geography (0-0.4) + team (0-0.2)
+          const contScore = (a % 10 === r % 10) ? 0.35 : 0.05; // Current owner bonus
+          const geoScore = 0.1 + ((a * 7 + r * 13) % 30) / 100; // 0.1-0.4
+          const teamScore = 0.1 + ((a + r) % 10) / 100; // 0.1-0.2
+          const coef = contScore + geoScore + teamScore + 0.001 * (a / numAccounts); // Tie-breaker
+          
+          const term = `${coef >= 0 ? '+' : '-'} ${Math.abs(coef).toFixed(6)} ${varName}`;
+          if (currentLine.length + term.length > MAX_LINE_LENGTH) {
+            lines.push(' ' + currentLine);
+            currentLine = term;
+          } else {
+            currentLine += ' ' + term;
+          }
+        }
+      }
+      
+      // Add Big-M penalty slacks for each metric
+      function addMetricSlacks(metric, weight, numReps) {
+        for (let r = 0; r < numReps; r++) {
+          const slacks = [
+            `${metric}_ao_${r}`, `${metric}_au_${r}`,
+            `${metric}_bo_${r}`, `${metric}_bu_${r}`,
+            `${metric}_mo_${r}`, `${metric}_mu_${r}`
+          ];
+          
+          // Add penalty terms to objective
+          const alphaPen = PENALTY.ALPHA * weight;
+          const betaPen = PENALTY.BETA * weight;
+          const bigMPen = PENALTY.BIG_M * weight;
+          
+          for (const [idx, slack] of slacks.entries()) {
+            const pen = idx < 2 ? alphaPen : idx < 4 ? betaPen : bigMPen;
+            const term = `- ${pen.toFixed(6)} ${slack}`;
+            if (currentLine.length + term.length > MAX_LINE_LENGTH) {
+              lines.push(' ' + currentLine);
+              currentLine = term;
+            } else {
+              currentLine += ' ' + term;
+            }
+          }
+          
+          // Bounds
+          slackBounds.push(`0 <= ${slacks[0]} <= ${variance}`);
+          slackBounds.push(`0 <= ${slacks[1]} <= ${variance}`);
+          slackBounds.push(`0 <= ${slacks[2]} <= 0.5`);
+          slackBounds.push(`0 <= ${slacks[3]} <= 0.5`);
+          slackBounds.push(`${slacks[4]} >= 0`);
+          slackBounds.push(`${slacks[5]} >= 0`);
+        }
+      }
+      
+      addMetricSlacks('arr', WEIGHTS.arr, numReps);
+      addMetricSlacks('atr', WEIGHTS.atr, numReps);
+      addMetricSlacks('t1', tierWeight, numReps);
+      addMetricSlacks('t2', tierWeight, numReps);
+      addMetricSlacks('t3', tierWeight, numReps);
+      addMetricSlacks('t4', tierWeight, numReps);
+      
+      if (currentLine) lines.push(' ' + currentLine);
+      
+      // Constraints
+      lines.push('Subject To');
+      
+      // 1. Assignment constraints: each account assigned to exactly one rep
+      for (let a = 0; a < numAccounts; a++) {
+        const terms = [];
+        for (let r = 0; r < numReps; r++) {
+          terms.push(getVarName(a, r));
+        }
+        lines.push(` a${a}: ${terms.join(' + ')} = 1`);
+      }
+      
+      // 2. ARR balance decomposition constraints (normalized)
+      for (let r = 0; r < numReps; r++) {
+        let constraintLine = ` arr_d${r}:`;
+        for (let a = 0; a < numAccounts; a++) {
+          const arr = 30000 + (a * 17 % 70000); // $30K-$100K range
+          const normalizedArr = arr / targetARR;
+          constraintLine += ` + ${normalizedArr.toFixed(6)} ${getVarName(a, r)}`;
+        }
+        constraintLine += ` - 1 arr_ao_${r} + 1 arr_au_${r}`;
+        constraintLine += ` - 1 arr_bo_${r} + 1 arr_bu_${r}`;
+        constraintLine += ` - 1 arr_mo_${r} + 1 arr_mu_${r}`;
+        constraintLine += ` = 1`;
+        lines.push(constraintLine);
+      }
+      
+      // 3. ATR balance decomposition constraints (normalized)
+      for (let r = 0; r < numReps; r++) {
+        let constraintLine = ` atr_d${r}:`;
+        for (let a = 0; a < numAccounts; a++) {
+          const atr = 10000 + (a * 13 % 30000); // $10K-$40K range
+          const normalizedAtr = atr / targetATR;
+          constraintLine += ` + ${normalizedAtr.toFixed(6)} ${getVarName(a, r)}`;
+        }
+        constraintLine += ` - 1 atr_ao_${r} + 1 atr_au_${r}`;
+        constraintLine += ` - 1 atr_bo_${r} + 1 atr_bu_${r}`;
+        constraintLine += ` - 1 atr_mo_${r} + 1 atr_mu_${r}`;
+        constraintLine += ` = 1`;
+        lines.push(constraintLine);
+      }
+      
+      // 4. Tier balance constraints (simplified - count-based)
+      for (const [tierNum, tierKey] of [[1, 't1'], [2, 't2'], [3, 't3'], [4, 't4']]) {
+        const tierTarget = tierTargets[`tier${tierNum}`];
+        for (let r = 0; r < numReps; r++) {
+          let constraintLine = ` ${tierKey}_d${r}:`;
+          for (let a = 0; a < numAccounts; a++) {
+            // Simulate tier assignment based on account index
+            const accountTier = (a % 4) + 1;
+            if (accountTier === tierNum) {
+              const normalizedCount = 1 / tierTarget;
+              constraintLine += ` + ${normalizedCount.toFixed(6)} ${getVarName(a, r)}`;
+            }
+          }
+          constraintLine += ` - 1 ${tierKey}_ao_${r} + 1 ${tierKey}_au_${r}`;
+          constraintLine += ` - 1 ${tierKey}_bo_${r} + 1 ${tierKey}_bu_${r}`;
+          constraintLine += ` - 1 ${tierKey}_mo_${r} + 1 ${tierKey}_mu_${r}`;
+          constraintLine += ` = 1`;
+          lines.push(constraintLine);
+        }
+      }
+      
+      // Bounds
+      lines.push('Bounds');
+      lines.push(...slackBounds);
+      for (const varName of binaries) {
+        lines.push(` 0 <= ${varName} <= 1`);
+      }
+      
+      // Binary
+      lines.push('Binary');
+      // Split binaries into chunks to avoid line length issues
+      const chunkSize = 100;
+      for (let i = 0; i < binaries.length; i += chunkSize) {
+        lines.push(' ' + binaries.slice(i, i + chunkSize).join(' '));
+      }
+      
+      lines.push('End');
+      
+      return {
+        lp: lines.join('\n'),
+        stats: {
+          binaryVars: binaries.length,
+          slackVars: slackBounds.length,
+          constraints: numAccounts + numReps * 6, // assignment + 6 metrics
+        }
+      };
+    }
+
+    async function runSingleTest(numAccounts) {
+      const testId = `test-${numAccounts}`;
+      const row = document.getElementById(testId);
+      row.className = 'test-row running';
+      row.querySelector('.test-status').textContent = 'Running...';
+      row.querySelector('.test-time').textContent = '';
+      
+      log(`\n${'='.repeat(60)}`);
+      log(`Testing ${numAccounts} accounts × ${NUM_REPS} reps...`);
+      
+      try {
+        // Build LP
+        const buildStart = Date.now();
+        const { lp, stats } = buildProductionLP(numAccounts, NUM_REPS);
+        const buildTime = Date.now() - buildStart;
+        log(`  LP built in ${buildTime}ms: ${stats.binaryVars} binary, ${stats.slackVars} slack, ${stats.constraints} constraints`);
+        log(`  LP size: ${(lp.length / 1024).toFixed(1)} KB`);
+        
+        // Load fresh HiGHS instance
+        log(`  Loading HiGHS...`);
+        const highs = await Module();
+        
+        // Solve with timeout
+        log(`  Solving with mip_rel_gap: 0.01...`);
+        const solveStart = Date.now();
+        
+        // Create a promise that resolves when solve completes or times out
+        const solvePromise = new Promise((resolve, reject) => {
+          try {
+            const result = highs.solve(lp, { mip_rel_gap: 0.01 });
+            resolve(result);
+          } catch (e) {
+            reject(e);
+          }
+        });
+        
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('TIMEOUT')), TIMEOUT_MS);
+        });
+        
+        const result = await Promise.race([solvePromise, timeoutPromise]);
+        const solveTime = Date.now() - solveStart;
+        
+        if (result.Status === 'Optimal') {
+          log(`  ✓ Optimal in ${solveTime}ms, objective: ${result.ObjectiveValue?.toFixed(2)}`);
+          row.className = 'test-row passed';
+          row.querySelector('.test-status').textContent = '✓ Optimal';
+          row.querySelector('.test-time').textContent = `${solveTime}ms`;
+          return { success: true, time: solveTime };
+        } else {
+          log(`  ✗ Non-optimal: ${result.Status}`);
+          row.className = 'test-row failed';
+          row.querySelector('.test-status').textContent = `✗ ${result.Status}`;
+          row.querySelector('.test-time').textContent = `${solveTime}ms`;
+          return { success: false, time: solveTime, status: result.Status };
+        }
+      } catch (e) {
+        const elapsed = Date.now() - Date.now();
+        if (e.message === 'TIMEOUT') {
+          log(`  ⏱️ TIMEOUT after ${TIMEOUT_MS}ms - this is the threshold!`);
+          row.className = 'test-row failed';
+          row.querySelector('.test-status').textContent = '⏱️ TIMEOUT';
+          row.querySelector('.test-time').textContent = `>${TIMEOUT_MS}ms`;
+          return { success: false, timeout: true };
+        } else {
+          log(`  ✗ ERROR: ${e.message}`);
+          row.className = 'test-row failed';
+          row.querySelector('.test-status').textContent = `✗ ${e.message.substring(0, 20)}`;
+          return { success: false, error: e.message };
+        }
+      }
+    }
+
+    async function runTests() {
+      stopRequested = false;
+      document.getElementById('runBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      document.getElementById('log').textContent = '';
+      document.getElementById('summary').style.display = 'none';
+      
+      const testCounts = [5000, 6000, 7000, 8000, 9000, 10000];
+      const results = [];
+      
+      // Create test rows
+      const testsDiv = document.getElementById('tests');
+      testsDiv.innerHTML = testCounts.map(count => `
+        <div id="test-${count}" class="test-row">
+          <span class="test-name">${count} accounts × ${NUM_REPS} reps = ${(count * NUM_REPS).toLocaleString()} binary vars</span>
+          <span class="test-time"></span>
+          <span class="test-status">Pending</span>
+        </div>
+      `).join('');
+      
+      log('Starting scale threshold tests...');
+      log(`Timeout: ${TIMEOUT_MS}ms per test`);
+      log(`Reps: ${NUM_REPS}`);
+      log(`Structure: Full Big-M slacks (ARR + ATR + 4 Tiers = 36 slacks/rep)`);
+      
+      for (const count of testCounts) {
+        if (stopRequested) {
+          log('\nTests stopped by user.');
+          break;
+        }
+        
+        const result = await runSingleTest(count);
+        results.push({ accounts: count, ...result });
+        
+        // If we hit a timeout, we've found the threshold
+        if (result.timeout) {
+          log(`\n🎯 THRESHOLD FOUND: HiGHS hangs between ${results[results.length - 2]?.accounts || 0} and ${count} accounts`);
+          break;
+        }
+      }
+      
+      // Show summary
+      const summaryDiv = document.getElementById('summary');
+      summaryDiv.style.display = 'block';
+      
+      const passed = results.filter(r => r.success);
+      const failed = results.filter(r => !r.success);
+      const threshold = failed.find(r => r.timeout);
+      
+      let summaryHtml = `<p><strong>Passed:</strong> ${passed.length}/${results.length}</p>`;
+      if (threshold) {
+        const lastPassed = passed[passed.length - 1];
+        summaryHtml += `<p style="color: #ff9800;"><strong>⚠️ Threshold Found:</strong> HiGHS times out at ${threshold.accounts} accounts</p>`;
+        summaryHtml += `<p><strong>Recommended MAX_ACCOUNTS_FOR_GLOBAL_LP:</strong> ${lastPassed?.accounts || 500}</p>`;
+      } else if (passed.length === results.length) {
+        summaryHtml += `<p style="color: #4caf50;"><strong>✓ All tests passed!</strong> No threshold found up to ${testCounts[testCounts.length - 1]} accounts.</p>`;
+      }
+      
+      summaryHtml += `<h3>Results:</h3><table style="width:100%">`;
+      summaryHtml += `<tr><th>Accounts</th><th>Binary Vars</th><th>Time</th><th>Status</th></tr>`;
+      for (const r of results) {
+        const color = r.success ? '#4caf50' : r.timeout ? '#ff9800' : '#f44336';
+        summaryHtml += `<tr style="color:${color}">`;
+        summaryHtml += `<td>${r.accounts}</td>`;
+        summaryHtml += `<td>${(r.accounts * NUM_REPS).toLocaleString()}</td>`;
+        summaryHtml += `<td>${r.time ? r.time + 'ms' : r.timeout ? '>30s' : 'N/A'}</td>`;
+        summaryHtml += `<td>${r.success ? '✓ Optimal' : r.timeout ? '⏱️ Timeout' : r.status || r.error}</td>`;
+        summaryHtml += `</tr>`;
+      }
+      summaryHtml += `</table>`;
+      
+      document.getElementById('summaryContent').innerHTML = summaryHtml;
+      
+      document.getElementById('runBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+    }
+
+    function stopTests() {
+      stopRequested = true;
+      document.getElementById('stopBtn').disabled = true;
+    }
+  </script>
+</body>
+</html>
+

@@ -14,7 +14,7 @@ import TerritoryBalancingDashboard from './TerritoryBalancingDashboard';
 import { AccountsTable } from '@/components/data-tables/AccountsTable';
 import { OpportunitiesTable } from '@/components/data-tables/OpportunitiesTable';
 import { SalesRepsTable } from '@/components/data-tables/SalesRepsTable';
-import { useBuildDataSummary, useInvalidateBuildData, useAnalyticsMetrics } from '@/hooks/useBuildData';
+import { useBuildDataSummary, useInvalidateBuildData, useAnalyticsMetrics, useLoadProgress } from '@/hooks/useBuildData';
 import { formatCurrency } from '@/_domain';
 import { InteractiveKPICard } from '@/components/InteractiveKPICard';
 import { DataVisualizationCard } from '@/components/DataVisualizationCard';
@@ -127,9 +127,13 @@ export const BuildDetail = () => {
     data: buildData,
     isLoading: summaryLoading
   } = useBuildDataSummary(id);
-  
-  // Get analytics metrics for Coverage and Team Fit cards
-  const { data: analyticsMetrics } = useAnalyticsMetrics(id);
+
+  // Track loading progress for large datasets
+  const loadProgress = useLoadProgress();
+
+  // Get analytics metrics for Coverage and Team Fit cards on Data Overview tab
+  // Use useProposed=false to show original imported data (not proposed assignments)
+  const { data: analyticsMetrics } = useAnalyticsMetrics(id, false);
   
   // Hook to invalidate and refresh build data
   const invalidateBuildData = useInvalidateBuildData();
@@ -197,7 +201,15 @@ export const BuildDetail = () => {
   }, [buildData?.assignments.total, stage2WasLocked]);
   
   if (buildLoading || summaryLoading) {
-    return <EnhancedLoader size="lg" text={buildLoading ? 'Loading Build Details' : 'Loading Data'} className="min-h-screen" />;
+    return (
+      <EnhancedLoader
+        size="lg"
+        text={buildLoading ? 'Loading Build Details' : loadProgress?.stage || 'Loading Data'}
+        subtext={loadProgress && loadProgress.total > 10000 ? 'Large dataset detected' : undefined}
+        progress={loadProgress && loadProgress.total > 1000 ? { current: loadProgress.current, total: loadProgress.total } : null}
+        className="min-h-screen"
+      />
+    );
   }
   if (!build) {
     return <Navigate to="/dashboard" replace />;
@@ -640,7 +652,7 @@ export const BuildDetail = () => {
                         </ul>
                       </TooltipContent>
                     </Tooltip>
-                    {analyticsMetrics.tierAlignmentBreakdown.exactMatch + analyticsMetrics.tierAlignmentBreakdown.oneLevelMismatch + analyticsMetrics.tierAlignmentBreakdown.twoPlusLevelMismatch + analyticsMetrics.tierAlignmentBreakdown.unassigned > 0 ? (
+                    {analyticsMetrics.tierAlignmentBreakdown.exactMatch + analyticsMetrics.tierAlignmentBreakdown.oneLevelMismatch + analyticsMetrics.tierAlignmentBreakdown.twoPlusLevelMismatch + analyticsMetrics.tierAlignmentBreakdown.unassigned + (analyticsMetrics.tierAlignmentBreakdown.unknown || 0) > 0 ? (
                       <TeamFitPieChart 
                         breakdown={analyticsMetrics.tierAlignmentBreakdown}
                         teamAlignmentScore={analyticsMetrics.lpMetrics.teamAlignmentScore}

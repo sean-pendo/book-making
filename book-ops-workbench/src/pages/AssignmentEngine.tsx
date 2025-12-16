@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Users, AlertTriangle, Search, Edit, CheckCircle, FileText, Target, Settings, UserCheck, UserX, RefreshCw, Download, RotateCcw, Play, Loader2, Wrench, Eye, Info, ChevronDown, MoreHorizontal } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/components/ui/use-toast';
+import { getAccountARR } from '@/_domain';
 import { useAssignmentEngine } from '@/hooks/useAssignmentEngine';
 import { useNavigate } from 'react-router-dom';
 import { useAccountCalculations } from '@/hooks/useAccountCalculations';
@@ -36,7 +37,6 @@ import { supabase } from '@/integrations/supabase/client';
 import { AssignmentSuccessDialog } from '@/components/AssignmentSuccessDialog';
 import { fixOwnerAssignments } from '@/utils/fixOwnerAssignments';
 import { QuickResetButton } from '@/components/QuickResetButton';
-import { getAccountARR } from '@/_domain';
 import { FullAssignmentConfig } from '@/components/FullAssignmentConfig';
 import { PriorityConfig, getDefaultPriorityConfig } from '@/config/priorityRegistry';
 import { useMappedFields } from '@/hooks/useMappedFields';
@@ -1440,7 +1440,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
         'Current Owner': account.owner_name || 'Unassigned',
         'New Owner': account.new_owner_name || 'Unassigned',
         'Account Type': account.is_customer ? 'Customer' : 'Prospect',
-        'ARR': account.calculated_arr || account.arr || 0,
+        'ARR': getAccountARR(account),
         'Geo': account.geo,
         'Country': account.hq_country || '',
         'Territory': account.sales_territory || '',

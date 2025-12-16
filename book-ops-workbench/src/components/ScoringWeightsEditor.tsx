@@ -130,14 +130,14 @@ export const ScoringWeightsEditor: React.FC<ScoringWeightsEditorProps> = ({ rule
         
         <div className="rounded-lg bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">
-            <strong>How it works:</strong> Each account is scored for every rep using all enabled rules. 
-            Rule scores are multiplied by priority weight (Priority 1 = 1.0x, Priority 2 = 0.5x, Priority 3 = 0.33x).
-            A capacity multiplier (0.5x to 1.5x) adjusts based on rep workload.
-            The rep with the highest total score gets the account.
+            <strong>How it works:</strong> Priority position determines weight in the LP solver. 
+            Position 1 = 1.0x weight, Position 2 = 0.5x, Position 3 = 0.33x, and so on.
+            All factors compete simultaneously - higher priority = stronger influence on assignments.
           </p>
           <p className="text-xs text-muted-foreground mt-2">
-            <strong>Example:</strong> Priority 1 Geo rule (50 pts) + Priority 2 Continuity (75 pts) + Priority 3 Balance (30 pts) 
-            = 50×1.0 + 75×0.5 + 30×0.33 = 97.4 total score
+            <strong>Example:</strong> Moving Geography to Position 1 gives it 1.0x weight. 
+            If Continuity is at Position 2 (0.5x) and Balance at Position 4 (0.25x), 
+            geography matching will have 4x more influence than balance.
           </p>
         </div>
       </CardContent>

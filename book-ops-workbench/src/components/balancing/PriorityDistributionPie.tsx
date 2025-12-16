@@ -100,8 +100,8 @@ export const PriorityDistributionPie: React.FC<PriorityDistributionPieProps> = (
   }));
 
   return (
-    <Card className="card-elevated card-glass">
-      <CardContent className={compact ? "p-4" : "p-5"}>
+    <Card className="card-elevated card-glass overflow-visible">
+      <CardContent className={`${compact ? "p-4" : "p-5"} overflow-visible`}>
         <div className="flex items-center gap-3 mb-3">
           <div className="p-2 bg-violet-500/20 rounded-lg">
             <Layers className="h-5 w-5 text-violet-600 dark:text-violet-400" />
@@ -113,8 +113,8 @@ export const PriorityDistributionPie: React.FC<PriorityDistributionPieProps> = (
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Pie Chart */}
-          <div className={compact ? "w-28 h-28" : "w-36 h-36"}>
+          {/* Pie Chart - overflow-visible allows tooltip to escape */}
+          <div className={`${compact ? "w-28 h-28" : "w-36 h-36"} overflow-visible`}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -132,25 +132,31 @@ export const PriorityDistributionPie: React.FC<PriorityDistributionPieProps> = (
                     <Cell key={`cell-${index}`} fill={entry.fill} />
                   ))}
                 </Pie>
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip
+                  content={<CustomTooltip />}
+                  wrapperStyle={{ zIndex: 9999, pointerEvents: 'none' }}
+                />
               </PieChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Legend */}
-          <div className="flex-1 space-y-1.5">
+          {/* Legend - shows priority name with count */}
+          <div className="flex-1 space-y-1 min-w-0">
             {chartData.slice(0, 5).map((item) => (
-              <div key={item.priorityId} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
+              <div key={item.priorityId} className="flex items-center justify-between text-xs gap-2">
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
                   <div
-                    className="w-2.5 h-2.5 rounded-full"
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                     style={{ backgroundColor: item.fill }}
                   />
-                  <span className="text-muted-foreground truncate max-w-[100px]">
-                    {item.priorityId}
+                  <span
+                    className="text-muted-foreground truncate"
+                    title={`${item.priorityId}: ${item.priorityName}`}
+                  >
+                    {item.priorityId}: {item.priorityName}
                   </span>
                 </div>
-                <span className="font-medium tabular-nums">
+                <span className="font-medium tabular-nums flex-shrink-0">
                   {item.count.toLocaleString()}
                 </span>
               </div>

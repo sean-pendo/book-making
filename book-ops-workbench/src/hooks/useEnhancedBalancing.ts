@@ -4,7 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { EnhancedAssignmentService } from '@/services/enhancedAssignmentService';
 import { toast } from '@/hooks/use-toast';
 import { calculateEnhancedRepMetrics } from '@/utils/enhancedRepMetrics';
-import { autoMapTerritoryToRegion, getAccountARR } from '@/_domain';
+import { autoMapTerritoryToRegion, getAccountARR, isRenewalOpportunity } from '@/_domain';
 
 export interface AccountDetail {
   sfdc_account_id: string;
@@ -324,7 +324,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
           .reduce((sum, acc) => {
             const accOpportunities = allOpportunities.filter(o => o.sfdc_account_id === acc.sfdc_account_id);
             const atrAmount = accOpportunities
-              .filter(o => o.opportunity_type?.toLowerCase().trim() === 'renewals') // Only include 'Renewals' opportunity type
+              .filter(isRenewalOpportunity)
               .reduce((sum, o) => sum + (o.available_to_renew || 0), 0);
             return sum + atrAmount;
           }, 0);
@@ -340,7 +340,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
           const accOpportunities = allOpportunities.filter(o => o.sfdc_account_id === acc.sfdc_account_id);
           const renewalCount = accOpportunities.filter(o => o.renewal_event_date).length;
           const atrAmount = accOpportunities
-            .filter(o => o.opportunity_type?.toLowerCase().trim() === 'renewals') // Only include 'Renewals' opportunity type
+            .filter(isRenewalOpportunity)
             .reduce((sum, o) => sum + (o.available_to_renew || 0), 0);
           const creRiskCount = accOpportunities.filter(o => o.cre_status && o.cre_status.trim() !== '').length;
           

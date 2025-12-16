@@ -316,7 +316,8 @@ function parseLPConfiguration(config: any): LPConfiguration {
     lp_solver_params: {
       ...defaults.lp_solver_params,
       ...(config.lp_solver_params || {})
-    }
+    },
+    priority_config: config.priority_config || []
   };
 }
 
