@@ -2,6 +2,30 @@
 
 ---
 
+## [2025-12-16] - Release v1.4.0 - Cloud Run Solver (Bug Ridden State)
+
+**Major milestone release with known issues to address.**
+
+### ✅ What Works
+- Cloud Run native HiGHS solver handles 365K+ variable problems
+- Full-scale production runs (8K+ accounts) complete successfully
+- Variable mapping and solution parsing validated
+- Assignment generation and preview working
+
+### 🐛 Known Issues (Bug Ridden)
+- React warnings: `validateDOMNesting` (div inside p)
+- React warnings: `Function components cannot be given refs` (Badge component)
+- HiGHS WASM still crashes on complex problems (falls back correctly)
+- Some UI polish needed
+
+### Next Steps
+- Fix React component warnings
+- Improve error messaging in UI
+- Add Cloud Run solve time display to user
+- Consider lowering Cloud Run threshold for better UX
+
+---
+
 ## [2025-12-16 06:55] - 🎉 MILESTONE: Cloud Run Solver Production Verified
 
 **First successful full-scale production run using Cloud Run native HiGHS solver!**
