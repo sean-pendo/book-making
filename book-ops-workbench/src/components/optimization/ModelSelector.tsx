@@ -118,6 +118,9 @@ export function ModelSelector({ value, onChange, disabled }: ModelSelectorProps)
             <p className="text-xs text-muted-foreground">
               Evaluates all factors simultaneously. Better balance, globally optimal.
             </p>
+            <p className="text-xs text-yellow-600 font-medium mt-1">
+              ⏱ Takes 4-6 minutes for large datasets
+            </p>
           </Label>
         </RadioGroup>
       </CardContent>
