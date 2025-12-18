@@ -381,20 +381,15 @@ export const validateMappedData = (
         // DON'T block import - allow it to proceed
       }
       
-      // Generate warnings for potentially problematic values
-      if (!mappedRow['stage'] || mappedRow['stage'] === null) {
-        warnings.push(`Row ${rowNum}: Missing stage`);
-        // No default - keep it blank/null
-      }
-      
+      // REMOVED: stage warning (v1.4.1) - stage is display-only, not used in business logic
+      // See MASTER_LOGIC.mdc Appendix: Deprecated Fields
       
       // Add debug logging for opportunity mapping
       if (rowNum <= 3) {
         console.log(`Debug Row ${rowNum} mapped data:`, {
           owner_id: mappedRow['owner_id'],
           owner_name: mappedRow['owner_name'], 
-          amount: mappedRow['amount'],
-          stage: mappedRow['stage']
+          amount: mappedRow['amount']
         });
       }
       
