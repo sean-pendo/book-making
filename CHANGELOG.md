@@ -2,6 +2,23 @@
 
 ---
 
+## [2025-12-18 17:42 PST] - DEPLOYED v1.4.1 to Production
+
+**Git:** `d141cfd` pushed to `origin/master`
+**Vercel:** https://book-ops-workbench-c5axj1cdt-seanxmuses-projects.vercel.app
+
+### v1.4.1 Highlights
+- **LP Progress Fix:** Batch-aware progress scaling for multi-batch solves (customers + prospects)
+- **Telemetry:** Full config capture for waterfall/LP optimization runs
+- **Chart Fixes:** RepId-based unique keys fix bar rendering collisions
+- **SSOT Audit:** Magic numbers refactored to `@/_domain` constants
+- **Balance Intensity:** Full slider integration with `INTENSITY_MULTIPLIER`
+- **Assignment Reasons:** Fixed missing rationale display
+- **Orphan Data Warnings:** UX improvements for mismatched accounts/opps
+- **New DB migrations:** `optimization_runs` table, `is_strategic` column, `balance_intensity` column
+
+---
+
 ## [2025-12-18] - Fix: Relaxed Optimization Progress Shows 100% Before Completion
 
 **Problem:** When running relaxed optimization with "all" accounts (customers + prospects), the progress dialog would show 100% complete while the solver was still running. The UI was stuck showing "Processing..." with 100% progress for several minutes.
