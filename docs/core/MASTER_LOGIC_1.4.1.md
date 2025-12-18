@@ -2069,7 +2069,8 @@ The following fields were identified as unused or legacy. They have been removed
 
 | Field | Status | Reason |
 |-------|--------|--------|
-| `manager` | REMOVED | Legacy field - use `flm`/`slm` instead |
+| `team` | REMOVED (v1.4.1) | Legacy field - use `team_tier` instead. Import aliases merged into `team_tier`. |
+| `manager` | REMOVED (v1.3.9) | Legacy field - use `flm`/`slm` instead |
 | `sub_region` | REMOVED | Never implemented - EMEA uses region field directly |
 | `is_renewal_specialist` | REMOVED | Never used in production - RS routing disabled |
 
@@ -2092,6 +2093,7 @@ The following columns exist in the database but are no longer populated via impo
 | `opportunities` | `stage` | Can be dropped |
 | `opportunities` | `close_date` | Can be dropped |
 | `opportunities` | `created_date` | Can be dropped |
+| `sales_reps` | `team` | Can be dropped (use `team_tier` - v1.4.1) |
 | `sales_reps` | `manager` | Can be dropped (use `flm`/`slm`) |
 | `sales_reps` | `sub_region` | Can be dropped |
 | `sales_reps` | `is_renewal_specialist` | Can be dropped |

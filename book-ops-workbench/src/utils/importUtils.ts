@@ -433,7 +433,8 @@ export const validateMappedData = (
 
       // High priority fields - generate warnings but don't block import
       // Some reps may not have all hierarchy info filled in yet
-      const highPriorityFields = ['team', 'manager', 'region'];
+      // DEPRECATED: team, manager - removed in v1.4.1 (use team_tier, flm/slm instead)
+      const highPriorityFields = ['team_tier', 'region'];
       const missingHighPriority = highPriorityFields.filter(field => {
         const value = mappedRow[field];
         return !value || value === null || value === '' || value === 'undefined' || 

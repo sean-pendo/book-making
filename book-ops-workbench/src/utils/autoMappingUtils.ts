@@ -397,16 +397,7 @@ export const SALES_REP_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*name.*/i, /^rep$/i],
     required: true
   },
-  // DEPRECATED: manager - removed in v1.3.9, use flm/slm instead. See MASTER_LOGIC.mdc Appendix
-  {
-    schemaField: 'team',
-    aliases: [
-      'Team', 'Sales_Team', 'Team_Name', 'Department',
-      'team', 'sales_team', 'team_name', 'department'
-    ],
-    patterns: [/.*team.*/i, /.*department.*/i],
-    required: false
-  },
+  // DEPRECATED: team - removed in v1.4.1, use team_tier instead. See MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'region',
     aliases: [
@@ -438,9 +429,11 @@ export const SALES_REP_FIELD_ALIASES: FieldAlias[] = [
     schemaField: 'team_tier',
     aliases: [
       'Team_Tier', 'TeamTier', 'Team Tier', 'Segment', 'Rep_Tier', 'Size_Tier', 'Tier',
-      'team_tier', 'segment', 'rep_tier', 'size_tier', 'tier'
+      'team_tier', 'segment', 'rep_tier', 'size_tier', 'tier',
+      // Legacy 'team' field aliases (v1.4.1 - merged into team_tier)
+      'Team', 'Sales_Team', 'Team_Name', 'team', 'sales_team', 'team_name'
     ],
-    patterns: [/.*team.*tier.*/i, /.*size.*tier.*/i, /.*rep.*tier.*/i, /^segment$/i],
+    patterns: [/.*team.*tier.*/i, /.*size.*tier.*/i, /.*rep.*tier.*/i, /^segment$/i, /^team$/i, /^sales.*team$/i],
     required: false
   },
   {

@@ -188,12 +188,13 @@ async function checkAccountFieldPresence(buildId: string): Promise<Set<string>> 
  */
 async function checkSalesRepFieldPresence(buildId: string): Promise<Set<string>> {
   // DEPRECATED: is_renewal_specialist, sub_region - removed in v1.3.9
+  // DEPRECATED: team - removed in v1.4.1, use team_tier instead
   const fieldsToCheck = [
     'region',
     'is_strategic_rep',
     'flm',
     'slm',
-    'team'  // For team alignment priority (contains tier values: SMB/Growth/MM/ENT)
+    'team_tier'  // For team alignment priority (SMB/Growth/MM/ENT)
   ];
 
   const presentFields = new Set<string>();
