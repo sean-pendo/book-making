@@ -1851,14 +1851,65 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     }
   };
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, file?: ImportFile) => {
+    // Helper to get tooltip content for warnings/errors
+    const getTooltipContent = () => {
+      if (!file?.validationResult) return null;
+      
+      const { criticalErrors = [], errors = [], warnings = [] } = file.validationResult;
+      const allIssues = [...criticalErrors, ...errors, ...warnings];
+      
+      if (allIssues.length === 0) return null;
+      
+      // Show first 5 issues as preview
+      const preview = allIssues.slice(0, 5);
+      const remaining = allIssues.length - preview.length;
+      
+      return (
+        <div className="max-w-xs space-y-1">
+          <p className="font-semibold text-xs mb-1">
+            {criticalErrors.length > 0 && `${criticalErrors.length} critical · `}
+            {errors.length > 0 && `${errors.length} errors · `}
+            {warnings.length > 0 && `${warnings.length} warnings`}
+          </p>
+          {preview.map((issue, i) => (
+            <p key={i} className="text-xs text-muted-foreground truncate">{issue}</p>
+          ))}
+          {remaining > 0 && (
+            <p className="text-xs text-muted-foreground italic">...and {remaining} more</p>
+          )}
+          <p className="text-xs text-muted-foreground mt-2 border-t pt-1">Click "View Errors" for full details</p>
+        </div>
+      );
+    };
+
+    const wrapWithTooltip = (badge: React.ReactNode, content: React.ReactNode | null) => {
+      if (!content) return badge;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="cursor-help">{badge}</span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-sm">
+            {content}
+          </TooltipContent>
+        </Tooltip>
+      );
+    };
+
     switch (status) {
       case 'completed':
         return <Badge className="bg-green-500"><Check className="w-3 h-3 mr-1" />Completed</Badge>;
       case 'error':
-        return <Badge variant="destructive"><AlertTriangle className="w-3 h-3 mr-1" />Errors Found</Badge>;
+        return wrapWithTooltip(
+          <Badge variant="destructive"><AlertTriangle className="w-3 h-3 mr-1" />Errors Found</Badge>,
+          getTooltipContent()
+        );
       case 'warning':
-        return <Badge className="bg-yellow-500 text-white"><AlertTriangle className="w-3 h-3 mr-1" />Warnings</Badge>;
+        return wrapWithTooltip(
+          <Badge className="bg-yellow-500 text-white"><AlertTriangle className="w-3 h-3 mr-1" />Warnings</Badge>,
+          getTooltipContent()
+        );
       case 'validating':
         return <Badge variant="outline" className="animate-pulse">Importing...</Badge>;
       case 'validated':
@@ -2314,7 +2365,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                        </TableCell>
                        <TableCell className="capitalize">{file.type.replace('_', ' ')}</TableCell>
                        <TableCell>{file.rowCount?.toLocaleString()}</TableCell>
-                       <TableCell>{getStatusBadge(file.status)}</TableCell>
+                       <TableCell>{getStatusBadge(file.status, file)}</TableCell>
                        <TableCell>
                          <div className="flex items-center gap-2">
                            {file.status === 'uploaded' && (
@@ -2391,7 +2442,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                         <div className="flex items-center gap-2">
                           {getFileTypeIcon(file.type)}
                           <span className="font-medium">{file.name}</span>
-                          {getStatusBadge(file.status)}
+                          {getStatusBadge(file.status, file)}
                         </div>
                         <div className="flex gap-2">
                           {/* Only show edit controls for non-completed files */}
