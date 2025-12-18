@@ -36,14 +36,32 @@ export interface ThresholdConfig {
   absoluteMax?: number;
 }
 
+/**
+ * Multi-metric threshold configuration
+ * Allows passing different thresholds for each metric type
+ */
+export interface MetricThresholds {
+  arr?: ThresholdConfig;
+  atr?: ThresholdConfig;
+  pipeline?: ThresholdConfig;
+}
+
 interface RepDistributionChartProps {
   data: RepDistributionData[];
   title?: string;
   allowedMetrics?: RepDistributionMetric[];  // Controls which metrics are available
   showStats?: boolean;  // Shows Total/Avg/CV header
   className?: string;
-  /** Threshold lines to display (min/max/target from config) */
+  /** 
+   * Threshold lines to display (min/max/target from config)
+   * @deprecated Use metricThresholds for per-metric thresholds
+   */
   thresholds?: ThresholdConfig;
+  /** 
+   * Per-metric threshold configuration
+   * Allows different thresholds for ARR, ATR, and Pipeline
+   */
+  metricThresholds?: MetricThresholds;
   /** Whether to show threshold legend */
   showThresholdLegend?: boolean;
 }
@@ -94,6 +112,11 @@ const DEFAULT_METRICS_ORDER: RepDistributionMetric[] = ['arr', 'atr', 'pipeline'
 
 // Sales Tools distinct color - orange to stand out
 const SALES_TOOLS_COLOR = '#f97316'; // Orange-500
+
+// Strategic rep colors - two shades of purple for stacked bars
+const STRATEGIC_REP_COLOR = '#a855f7'; // Purple-500 (for ARR/ATR/Pipeline bars)
+const STRATEGIC_REP_CUSTOMER_COLOR = '#7c3aed'; // Violet-600 (darker purple for customers)
+const STRATEGIC_REP_PROSPECT_COLOR = '#c084fc'; // Purple-400 (lighter purple for prospects)
 
 // Check if a rep is Sales Tools pseudo-rep
 const isSalesToolsRep = (repId: string, repName: string): boolean => {
@@ -164,7 +187,8 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
   allowedMetrics,
   showStats = false,
   className,
-  thresholds,
+  thresholds: legacyThresholds,
+  metricThresholds,
   showThresholdLegend = false,
 }) => {
   // Use allowedMetrics if provided, otherwise use default order
@@ -183,6 +207,20 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
 
   const config = METRIC_CONFIG[currentMetric];
   const Icon = config.icon;
+
+  // Select thresholds based on current metric
+  // Prefer metricThresholds if provided, fall back to legacy thresholds (for backward compatibility)
+  const thresholds = useMemo(() => {
+    if (metricThresholds) {
+      // Use metric-specific thresholds
+      if (currentMetric === 'arr') return metricThresholds.arr;
+      if (currentMetric === 'atr') return metricThresholds.atr;
+      if (currentMetric === 'pipeline') return metricThresholds.pipeline;
+      return undefined; // No thresholds for 'accounts'
+    }
+    // Fall back to legacy single threshold (backward compatible)
+    return legacyThresholds;
+  }, [currentMetric, metricThresholds, legacyThresholds]);
 
   // Navigate to previous/next metric within allowed metrics
   const goToPrev = () => {
@@ -231,6 +269,7 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
       name: formatRepName(rep.repName, rep.repId),
       fullName: rep.repName,
       isSalesTools: isSalesToolsRep(rep.repId, rep.repName),
+      isStrategicRep: rep.isStrategicRep ?? false,
     }));
   }, [data, currentMetric]);
 
@@ -258,23 +297,34 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
       if (currentMetric === 'accounts') {
         // Check if parent/child data exists
         const hasParentChildData = 'parentCustomers' in repData;
+        const isStrategicRep = repData.isStrategicRep;
+        
+        // Strategic rep styling for accounts tooltip
+        const strategicHeaderBgClass = isStrategicRep ? 'bg-purple-50 dark:bg-purple-950 border-purple-200 dark:border-purple-800' : '';
+        const strategicNameClass = isStrategicRep ? 'text-purple-600 dark:text-purple-400' : '';
 
         return (
-          <div className={`bg-background border rounded-lg px-3 py-2 shadow-lg text-sm ${headerBgClass}`}>
+          <div className={`bg-background border rounded-lg px-3 py-2 shadow-lg text-sm ${isSalesTools ? headerBgClass : strategicHeaderBgClass}`}>
             <div className="flex items-center gap-2">
               {isSalesTools && <Briefcase className="h-4 w-4 text-orange-500" />}
-              <p className={`font-medium ${nameClass}`}>{repData.fullName}</p>
+              {isStrategicRep && <Users className="h-4 w-4 text-purple-500" />}
+              <p className={`font-medium ${isSalesTools ? nameClass : strategicNameClass}`}>{repData.fullName}</p>
             </div>
             <p className="text-muted-foreground text-xs">
               {isSalesTools ? 'Low-ARR Customer Bucket (No FLM/SLM)' : repData.region}
             </p>
+            {isStrategicRep && (
+              <p className="text-xs mt-1 text-purple-500">
+                Strategic Rep - balanced separately
+              </p>
+            )}
             <div className="mt-2 space-y-1">
               <p className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded ${isSalesTools ? 'bg-orange-500' : 'bg-emerald-500'}`} />
+                <span className={`w-2 h-2 rounded ${isSalesTools ? 'bg-orange-500' : isStrategicRep ? 'bg-violet-600' : 'bg-emerald-500'}`} />
                 Customers: <span className="font-medium">{repData.customerAccounts}</span>
               </p>
               <p className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded bg-blue-500" />
+                <span className={`w-2 h-2 rounded ${isStrategicRep ? 'bg-purple-400' : 'bg-blue-500'}`} />
                 Prospects: <span className="font-medium">{repData.prospectAccounts}</span>
               </p>
               <p className="text-muted-foreground border-t pt-1 mt-1">
@@ -293,13 +343,19 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
       }
 
       const value = repData[currentMetric] as number;
+      const isStrategicRep = repData.isStrategicRep;
       const status = getThresholdStatus(value, thresholds);
 
+      // Strategic rep styling
+      const strategicHeaderBgClass = isStrategicRep ? 'bg-purple-50 dark:bg-purple-950 border-purple-200 dark:border-purple-800' : '';
+      const strategicNameClass = isStrategicRep ? 'text-purple-600 dark:text-purple-400' : '';
+
       return (
-        <div className={`bg-background border rounded-lg px-3 py-2 shadow-lg text-sm ${headerBgClass}`}>
+        <div className={`bg-background border rounded-lg px-3 py-2 shadow-lg text-sm ${isSalesTools ? headerBgClass : strategicHeaderBgClass}`}>
           <div className="flex items-center gap-2">
             {isSalesTools && <Briefcase className="h-4 w-4 text-orange-500" />}
-            <p className={`font-medium ${nameClass}`}>{repData.fullName}</p>
+            {isStrategicRep && <Users className="h-4 w-4 text-purple-500" />}
+            <p className={`font-medium ${isSalesTools ? nameClass : strategicNameClass}`}>{repData.fullName}</p>
           </div>
           <p className="text-muted-foreground text-xs">
             {isSalesTools ? 'Low-ARR Customer Bucket (No FLM/SLM)' : repData.region}
@@ -308,11 +364,15 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
             {config.label.replace(' Distribution', '')}:
             <span className="font-medium ml-1">{config.format(value)}</span>
           </p>
-          {thresholds && status.text && (
+          {isStrategicRep ? (
+            <p className="text-xs mt-1 text-purple-500">
+              Strategic Rep - balanced separately
+            </p>
+          ) : thresholds && status.text ? (
             <p className={`text-xs mt-1 ${status.color}`}>
               {status.text}
             </p>
-          )}
+          ) : null}
         </div>
       );
     }
@@ -403,25 +463,27 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
           </div>
         )}
         
-        {/* Stats for accounts mode */}
+        {/* Stats for accounts mode - compact single row */}
         {showStats && currentMetric === 'accounts' && (
-          <div className="flex items-center gap-4 text-xs mt-2 py-2 px-3 bg-muted/30 rounded-md">
-            <div className="flex items-center gap-1">
-              <span className="font-semibold">{stats.total.toLocaleString()}</span>
-              <span className="text-muted-foreground">assigned to {data.length} reps</span>
-            </div>
+          <div className="flex items-center gap-2 text-xs mt-2 py-1.5 px-2 bg-muted/30 rounded-md">
+            <span className="font-semibold">{stats.total.toLocaleString()}</span>
+            <span className="text-muted-foreground">assigned to {data.length} reps</span>
             <div className="h-3 w-px bg-border" />
-            <div className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded bg-emerald-500" />
-              <span className="text-emerald-600 dark:text-emerald-400 font-medium">{totals.customers}</span>
-              <span className="text-muted-foreground">customers</span>
-            </div>
+            <span className="w-3 h-3 rounded bg-emerald-500" />
+            <span className="text-emerald-600 dark:text-emerald-400 font-medium">{totals.customers}</span>
+            <span className="text-muted-foreground">customers</span>
             <div className="h-3 w-px bg-border" />
-            <div className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded bg-blue-500" />
-              <span className="text-blue-600 dark:text-blue-400 font-medium">{totals.prospects}</span>
-              <span className="text-muted-foreground">prospects</span>
-            </div>
+            <span className="w-3 h-3 rounded bg-blue-500" />
+            <span className="text-blue-600 dark:text-blue-400 font-medium">{totals.prospects}</span>
+            <span className="text-muted-foreground">prospects</span>
+            {/* Strategic rep indicator - only show if there are strategic reps */}
+            {chartData.some(d => d.isStrategicRep) && (
+              <>
+                <div className="h-3 w-px bg-border" />
+                <span className="w-3 h-3 rounded bg-purple-500" />
+                <span className="text-purple-600 dark:text-purple-400 font-medium">Strategic</span>
+              </>
+            )}
           </div>
         )}
         
@@ -445,77 +507,37 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
           </div>
         )}
         
-        {/* Minimal legend when no thresholds but showStats is enabled - just shows average line */}
+        {/* Minimal legend when no thresholds but showStats is enabled - just shows average */}
         {showStats && !thresholds && currentMetric !== 'accounts' && stats.average > 0 && (
-          <div className="flex items-center gap-2 text-xs mt-2">
-            <div className="flex items-center gap-1">
-              <div className="w-4 h-0.5 border-t-2 border-dashed border-gray-500" />
-              <span className="text-muted-foreground">Avg: {config.format(stats.average)}</span>
-            </div>
+          <div className="flex items-center gap-2 text-xs mt-1">
+            <span className="text-muted-foreground">Avg: {config.format(stats.average)}</span>
           </div>
         )}
         
-        {/* Threshold legend - shows bar color meanings, lines, and target zone */}
+        {/* Threshold legend - compact single-line format */}
         {showThresholdLegend && thresholds && currentMetric !== 'accounts' && (
-          <div className="flex flex-wrap items-center gap-3 text-xs mt-2 py-2 px-3 bg-muted/20 rounded-md border border-muted">
-            {/* Bar color legend */}
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded bg-blue-500" />
-                <span className="text-muted-foreground">Below Floor</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded bg-green-500" />
-                <span className="text-muted-foreground">In Range</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded bg-red-500" />
-                <span className="text-muted-foreground">Over Ceiling</span>
-              </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs mt-2 py-1.5 px-2 bg-muted/20 rounded-md border border-muted">
+            {/* Bar colors */}
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded bg-blue-500" />
+              <span className="w-3 h-3 rounded bg-green-500" />
+              <span className="w-3 h-3 rounded bg-red-500" />
+              {chartData.some(d => d.isStrategicRep) && <span className="w-3 h-3 rounded bg-purple-500" />}
             </div>
-            <div className="h-4 w-px bg-border" />
-            {/* Average line indicator */}
-            {showStats && stats.average > 0 && (
-              <>
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-0.5 border-t-2 border-dashed border-gray-500" />
-                  <span className="text-gray-500 font-medium">Avg: {config.format(stats.average)}</span>
-                </div>
-                <div className="h-4 w-px bg-border" />
-              </>
+            <div className="h-3 w-px bg-border" />
+            {/* Target zone */}
+            {thresholds.target != null && (
+              <span className="text-green-600 dark:text-green-400">
+                Target: {config.format(thresholds.target)}
+              </span>
             )}
-            {/* Target and Target Zone together */}
-            <div className="flex items-center gap-3">
-              {thresholds.target != null && (
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-0.5 bg-green-500" />
-                  <span className="text-green-500 font-medium">Target: {config.format(thresholds.target)}</span>
-                </div>
-              )}
-              {/* Target zone */}
-              <div className="flex items-center gap-1.5">
-                <div className="w-6 h-4 bg-green-500/20 border border-dashed border-green-500/40 rounded-sm" />
-                <span className="text-green-600 dark:text-green-400 font-medium">
-                  Zone: {config.format(thresholds.min || 0)} - {config.format(thresholds.max || 0)}
-                </span>
-              </div>
-            </div>
-            <div className="h-4 w-px bg-border" />
-            {/* Absolute limit indicators */}
-            <div className="flex items-center gap-3">
-              {thresholds.absoluteMin != null && (
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-0.5 border-t-2 border-dashed border-blue-500" />
-                  <span className="text-blue-500 font-medium">Min: {config.format(thresholds.absoluteMin)}</span>
-                </div>
-              )}
-              {thresholds.absoluteMax != null && (
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-0.5 border-t-2 border-dashed border-red-500" />
-                  <span className="text-red-500 font-medium">Max: {config.format(thresholds.absoluteMax)}</span>
-                </div>
-              )}
-            </div>
+            <span className="text-muted-foreground">
+              Zone: {config.format(thresholds.min || 0)} - {config.format(thresholds.max || 0)}
+            </span>
+            <div className="h-3 w-px bg-border" />
+            {/* Min/Max */}
+            <span className="text-blue-500">Min: {config.format(thresholds.absoluteMin || 0)}</span>
+            <span className="text-red-500">Max: {config.format(thresholds.absoluteMax || 0)}</span>
           </div>
         )}
 
@@ -540,13 +562,21 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                     return upperBound * 1.1; // 10% padding
                   }]}
                 />
+                {/* IMPORTANT: Use repId as dataKey, not name (initials).
+                    Recharts uses dataKey as category key - if two reps share initials 
+                    (e.g., "DP" for both "David Parks" and "Dan Peterson"), bars collide.
+                    tickFormatter displays the initials while repId ensures uniqueness. */}
                 <YAxis
                   type="category"
-                  dataKey="name"
+                  dataKey="repId"
                   tick={{ fontSize: 11 }}
                   width={40}
                   axisLine={false}
                   tickLine={false}
+                  tickFormatter={(repId: string) => {
+                    const rep = chartData.find(r => r.repId === repId);
+                    return rep?.name ?? '??';
+                  }}
                 />
                 <RechartsTooltip content={<CustomTooltip />} />
                 
@@ -565,6 +595,7 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                 {currentMetric === 'accounts' ? (
                   // Stacked bar for accounts - customers green, prospects blue
                   // Sales Tools gets orange color to stand out
+                  // Strategic reps get two shades of purple
                   <>
                     <Bar
                       dataKey="customerAccounts"
@@ -576,7 +607,7 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                       {chartData.map((entry, index) => (
                         <Cell
                           key={`customer-${index}`}
-                          fill={entry.isSalesTools ? SALES_TOOLS_COLOR : '#22c55e'}
+                          fill={entry.isSalesTools ? SALES_TOOLS_COLOR : entry.isStrategicRep ? STRATEGIC_REP_CUSTOMER_COLOR : '#22c55e'}
                         />
                       ))}
                     </Bar>
@@ -590,7 +621,7 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                       {chartData.map((entry, index) => (
                         <Cell
                           key={`prospect-${index}`}
-                          fill={entry.isSalesTools ? SALES_TOOLS_COLOR : '#3b82f6'}
+                          fill={entry.isSalesTools ? SALES_TOOLS_COLOR : entry.isStrategicRep ? STRATEGIC_REP_PROSPECT_COLOR : '#3b82f6'}
                         />
                       ))}
                     </Bar>
@@ -608,6 +639,10 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                       // Sales Tools always orange
                       if (entry.isSalesTools) {
                         return <Cell key={`cell-${index}`} fill={SALES_TOOLS_COLOR} />;
+                      }
+                      // Strategic reps always purple (separate balancing pool)
+                      if (entry.isStrategicRep) {
+                        return <Cell key={`cell-${index}`} fill={STRATEGIC_REP_COLOR} />;
                       }
                       // If thresholds are set, use threshold-based coloring
                       if (thresholds) {

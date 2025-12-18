@@ -17,6 +17,7 @@ export interface RepSheetData {
   prospects: ProspectAccount[];
 }
 
+// DEPRECATED: expansion_score, inbound_count, idr_count - removed in v1.3.9
 export interface CustomerAccount {
   account_name: string;
   account_id: string;
@@ -24,15 +25,12 @@ export interface CustomerAccount {
   atr: number;
   renewal_date: string;
   risk_level: string;
-  expansion_score: number;
 }
 
 export interface ProspectAccount {
   account_name: string;
   account_id: string;
   tier: string;
-  inbound_count: number;
-  idr_count: number;
   employees: number;
 }
 
@@ -76,8 +74,9 @@ export const generateRepSheetCSV = (repData: RepSheetData): string => {
   lines.push(''); // Empty line
   
   // Customer accounts section
+  // DEPRECATED: expansion_score - removed in v1.3.9
   lines.push('CUSTOMER ACCOUNTS');
-  lines.push('Account Name,Account ID,ARR,ATR,Renewal Date,Risk Level,Expansion Score');
+  lines.push('Account Name,Account ID,ARR,ATR,Renewal Date,Risk Level');
   repData.customers.forEach(customer => {
     lines.push([
       `"${customer.account_name}"`,
@@ -85,23 +84,21 @@ export const generateRepSheetCSV = (repData: RepSheetData): string => {
       customer.arr.toString(),
       customer.atr.toString(),
       customer.renewal_date,
-      customer.risk_level,
-      customer.expansion_score.toString()
+      customer.risk_level
     ].join(','));
   });
   
   lines.push(''); // Empty line
   
   // Prospect accounts section
+  // DEPRECATED: inbound_count, idr_count - removed in v1.3.9
   lines.push('PROSPECT ACCOUNTS');
-  lines.push('Account Name,Account ID,Tier,Inbound Count,IDR Count,Employees');
+  lines.push('Account Name,Account ID,Tier,Employees');
   repData.prospects.forEach(prospect => {
     lines.push([
       `"${prospect.account_name}"`,
       prospect.account_id,
       prospect.tier,
-      prospect.inbound_count.toString(),
-      prospect.idr_count.toString(),
       prospect.employees.toString()
     ].join(','));
   });
@@ -191,8 +188,7 @@ export const generateMockRepData = (): RepSheetData => {
         arr: 850000,
         atr: 680000,
         renewal_date: '2024-06-15',
-        risk_level: 'Low',
-        expansion_score: 85
+        risk_level: 'Low'
       },
       {
         account_name: 'Tech Solutions Ltd',
@@ -200,8 +196,7 @@ export const generateMockRepData = (): RepSheetData => {
         arr: 420000,
         atr: 350000,
         renewal_date: '2024-09-30',
-        risk_level: 'Medium',
-        expansion_score: 72
+        risk_level: 'Medium'
       }
     ],
     prospects: [
@@ -209,16 +204,12 @@ export const generateMockRepData = (): RepSheetData => {
         account_name: 'Startup Innovations',
         account_id: 'ACC001236',
         tier: 'Tier 1',
-        inbound_count: 3,
-        idr_count: 5,
         employees: 250
       },
       {
         account_name: 'Growth Company Inc',
         account_id: 'ACC001237',
         tier: 'Tier 2',
-        inbound_count: 1,
-        idr_count: 2,
         employees: 150
       }
     ]

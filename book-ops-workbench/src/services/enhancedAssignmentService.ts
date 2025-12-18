@@ -1,6 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { resolveParentChildConflicts, ParentalAlignmentWarning } from './parentalAlignmentService';
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, calculateBalanceTarget, calculateBalanceMax } from '@/_domain';
 import { getPositionLabel } from '@/services/optimization';
 
 // ============= TYPE DEFINITIONS =============
@@ -639,11 +639,22 @@ export class EnhancedAssignmentService {
     const conditions = rule.conditions || {};
     
     const maxAccountsPerRep = conditions.maxAccountsPerRep || 15;
-    const maxARRPerRep = conditions.maxARRPerRep || 8000000;
     const maxVariance = conditions.maxVariance || 10;
     
+    // Calculate dynamic maxARRPerRep using SSOT formula from MASTER_LOGIC.mdc §12.1.1
+    // Formula: MAX(target × 1.5, largestAccount × 1.2)
+    // This ensures: (1) reasonable variance from average, (2) every account can fit somewhere
+    const totalARR = accounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
+    const targetARRPerRep = calculateBalanceTarget(totalARR, salesReps.length);
+    const largestAccountARR = accounts.length > 0 
+      ? Math.max(...accounts.map(a => getAccountARR(a)))
+      : 0;
+    const calculatedMaxARR = calculateBalanceMax(targetARRPerRep, largestAccountARR);
+    const maxARRPerRep = conditions.maxARRPerRep || calculatedMaxARR;
+    
     console.log(`[SMART_BALANCE] Processing ${accounts.length} accounts for balanced distribution`);
-    console.log(`[SMART_BALANCE] 🎯 Limits: max ${maxAccountsPerRep} accounts, max $${(maxARRPerRep/1000000).toFixed(1)}M ARR, ${maxVariance}% variance`);
+    console.log(`[SMART_BALANCE] 📊 Total ARR: $${(totalARR/1000000).toFixed(1)}M, Target/rep: $${(targetARRPerRep/1000000).toFixed(1)}M, Largest account: $${(largestAccountARR/1000000).toFixed(1)}M`);
+    console.log(`[SMART_BALANCE] 🎯 Limits: max ${maxAccountsPerRep} accounts, max $${(maxARRPerRep/1000000).toFixed(1)}M ARR (${conditions.maxARRPerRep ? 'configured' : 'calculated'}), ${maxVariance}% variance`);
 
     // Get current assignment state from database - use the build ID from the first account
     const buildId = (accounts[0] as any)?.build_id || this.extractBuildIdFromAccount(accounts[0]);

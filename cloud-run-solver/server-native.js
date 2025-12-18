@@ -3,25 +3,57 @@ const cors = require('cors');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ limit: '50mb', type: 'text/plain' }));
 
+// =============================================================================
+// SOLVER CONFIGURATION
+// =============================================================================
+// These options significantly impact solve time. Tuned for Book Builder workloads.
+
+const SOLVER_CONFIG = {
+  // MIP relative gap: stop when solution is within X% of optimal
+  // 0.01 = 1% gap (default, slower but more precise)
+  // 0.05 = 5% gap (faster, good enough for assignment problems)
+  mip_rel_gap: '0.02',  // 2% gap - good balance
+  
+  // Time limit in seconds (Cloud Run has 5 min max)
+  time_limit: '240',
+  
+  // Enable parallel solving (uses multiple threads)
+  parallel: 'on',
+  
+  // Number of threads (match Cloud Run CPU allocation)
+  threads: '2',
+  
+  // Presolve: simplify problem before solving
+  presolve: 'on',
+};
+
+// Use /dev/shm (RAM disk) for faster file I/O if available
+const TEMP_DIR = fs.existsSync('/dev/shm') ? '/dev/shm' : require('os').tmpdir();
+
 // Health check
 app.get('/', (req, res) => {
   res.json({ 
     status: 'ok', 
     solver: 'highs-native',
+    config: SOLVER_CONFIG,
+    tempDir: TEMP_DIR,
     timestamp: new Date().toISOString()
   });
 });
 
 // Health check for Cloud Run
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', solver: 'native-highs' });
+  res.json({ 
+    status: 'healthy', 
+    solver: 'native-highs',
+    config: SOLVER_CONFIG
+  });
 });
 
 // Solve endpoint using native HiGHS binary
@@ -43,12 +75,13 @@ app.post('/solve', async (req, res) => {
       });
     }
 
-    console.log(`[${requestId}] Received LP: ${lpString.length} chars, ${lpString.split('\n').length} lines`);
+    const lpSizeKB = Math.round(lpString.length / 1024);
+    const lpLines = lpString.split('\n').length;
+    console.log(`[${requestId}] Received LP: ${lpSizeKB}KB, ${lpLines} lines`);
 
-    // Write LP to temp file
-    const tempDir = os.tmpdir();
-    const lpFile = path.join(tempDir, `problem_${requestId}.lp`);
-    const solFile = path.join(tempDir, `solution_${requestId}.sol`);
+    // Write LP to temp file (use RAM disk if available for faster I/O)
+    const lpFile = path.join(TEMP_DIR, `problem_${requestId}.lp`);
+    const solFile = path.join(TEMP_DIR, `solution_${requestId}.sol`);
     
     fs.writeFileSync(lpFile, lpString);
     console.log(`[${requestId}] LP written to ${lpFile}`);
@@ -60,6 +93,9 @@ app.post('/solve', async (req, res) => {
     try {
       fs.unlinkSync(lpFile);
       if (fs.existsSync(solFile)) fs.unlinkSync(solFile);
+      // Also clean up options file
+      const optionsFile = path.join(TEMP_DIR, `options_${requestId}.txt`);
+      if (fs.existsSync(optionsFile)) fs.unlinkSync(optionsFile);
     } catch (e) {
       // Ignore cleanup errors
     }
@@ -87,16 +123,28 @@ app.post('/solve', async (req, res) => {
   }
 });
 
-// Run native HiGHS binary
+// Run native HiGHS binary with optimized settings
 function runHiGHS(lpFile, solFile, requestId) {
   return new Promise((resolve, reject) => {
-    // HiGHS CLI: minimal options, let it auto-detect settings
+    // Create options file for HiGHS (more reliable than CLI args)
+    const optionsFile = path.join(TEMP_DIR, `options_${requestId}.txt`);
+    const optionsContent = [
+      `mip_rel_gap = ${SOLVER_CONFIG.mip_rel_gap}`,
+      `time_limit = ${SOLVER_CONFIG.time_limit}`,
+      `parallel = ${SOLVER_CONFIG.parallel}`,
+      `threads = ${SOLVER_CONFIG.threads}`,
+      `presolve = ${SOLVER_CONFIG.presolve}`,
+    ].join('\n');
+    fs.writeFileSync(optionsFile, optionsContent);
+    
+    // HiGHS CLI with options file
     const args = [
+      '--options_file', optionsFile,
+      '--solution_file', solFile,
       lpFile,
-      '--solution_file', solFile
     ];
     
-    console.log(`[${requestId}] Running: highs ${args.join(' ')}`);
+    console.log(`[${requestId}] Running: highs with options file (mip_gap=${SOLVER_CONFIG.mip_rel_gap}, parallel=${SOLVER_CONFIG.parallel})`);
     
     const highs = spawn('highs', args);
     

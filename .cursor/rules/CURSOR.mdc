@@ -34,6 +34,8 @@ globs: **/*
 - **Geography rules**: Region hierarchy, territory mapping logic
 - **Constants**: Threshold values, scoring weights, defaults
 - **Normalization**: Data cleanup (region aliases, typos)
+- **Display logic rules**: When to show Sales Tools, how to format priority labels
+- **Solver parameters**: LP penalty values, scale limits, normalization strategies
 
 ### ❌ What does NOT belong in `_domain/`
 - React components (`*.tsx` with JSX)
@@ -46,34 +48,106 @@ globs: **/*
 **Rule**: `_domain/` answers "HOW should the app calculate/classify things?"
 It does NOT answer "HOW should the app render/fetch/store things?"
 
-### 🔒 MANDATORY RULES
+---
 
-#### ⚠️ THE SSOT FLOW (Single Source of Truth)
+## 🚨 SSOT FLOW - CRITICAL ENFORCEMENT
+
+### ⚠️ THE SSOT FLOW (Single Source of Truth)
+
+> **THIS IS THE MOST IMPORTANT RULE IN THE CODEBASE.**
+> Every business logic change MUST follow this exact order. No exceptions.
 
 **When adding or editing ANY reusable business logic, ALWAYS follow this order:**
 
 \`\`\`
-1. MASTER_LOGIC.mdc   →   Document the rule/formula first
-2. _domain/*.ts       →   Implement in the appropriate .ts file  
-3. Consumer files     →   Import from @/_domain and use
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 1: MASTER_LOGIC.mdc  →  Document the rule/formula FIRST  │
+│  STEP 2: _domain/*.ts      →  Implement in the appropriate file │
+│  STEP 3: Consumer files    →  Import from @/_domain and use     │
+└─────────────────────────────────────────────────────────────────┘
 \`\`\`
 
 **This flow is NON-NEGOTIABLE.** Never skip steps or go out of order.
 
-| Step | Action | Example |
-|------|--------|---------|
-| **1. Document** | Add/update in `MASTER_LOGIC.mdc` | "§12.1.1 Balance Max = MAX(avg × 1.5, largest × 1.2)" |
-| **2. Implement** | Add function/constant to `_domain/*.ts` | `export function calculateBalanceMax(...)` in `constants.ts` |
-| **3. Export** | Ensure exported from `_domain/index.ts` | Already auto-exports via `export * from './constants'` |
-| **4. Import** | Use in components/services/hooks | `import { calculateBalanceMax } from '@/_domain'` |
+### 📋 SSOT Pre-Implementation Checklist
 
-**Why this order?**
-- Documentation-first prevents logic drift
-- Single implementation prevents duplicates  
-- Centralized exports enable easy refactoring
-- Consumers stay clean and focused on their purpose
+**Before writing ANY business logic code, answer these questions:**
+
+- [ ] **Is this business logic?** (calculations, thresholds, classification rules, display rules)
+- [ ] **Have I documented it in `MASTER_LOGIC.mdc` first?** (with section number like §12.1.1)
+- [ ] **Does a function/constant already exist in `_domain/`?** (check before creating new)
+- [ ] **Am I importing from `@/_domain`?** (never inline the logic)
+
+### 📝 SSOT Implementation Steps
+
+| Step | Action | Example | Verify |
+|------|--------|---------|--------|
+| **1. Document** | Add/update in `MASTER_LOGIC.mdc` | "§12.1.1 Balance Max = MAX(avg × 1.5, largest × 1.2)" | Can find it by section number |
+| **2. Implement** | Add function/constant to `_domain/*.ts` | `export function calculateBalanceMax(...)` | Has `@see MASTER_LOGIC.mdc §X.X` JSDoc |
+| **3. Export** | Ensure exported from `_domain/index.ts` | Auto-exports via `export * from './constants'` | Can import from `@/_domain` |
+| **4. Import** | Use in components/services/hooks | `import { calculateBalanceMax } from '@/_domain'` | No inline logic in consumer |
+
+### 🏷️ SSOT Changelog Labeling
+
+**When you follow the SSOT flow, prefix your changelog entry with `SSOT:`**
+
+\`\`\`markdown
+## [2025-12-16] - SSOT: New Balance Threshold Calculation
+
+**Changes:**
+1. **Updated MASTER_LOGIC.mdc §12.1.1** - Documented new balance max formula
+2. **Added to _domain/constants.ts** - `calculateBalanceMax()` function
+3. **Updated consumers** - FullAssignmentConfig.tsx now imports from @/_domain
+\`\`\`
+
+This makes SSOT compliance **visible and auditable** in the changelog.
+
+### ✅ SSOT Compliance Examples
+
+**GOOD - Full SSOT Flow:**
+\`\`\`
+1. Add to MASTER_LOGIC.mdc §11.3: "LP_PENALTY.ALPHA = 0.001 for variance band"
+2. Add to constants.ts: export const LP_PENALTY = { ALPHA: 0.001, ... }
+3. Import in lpProblemBuilder.ts: import { LP_PENALTY } from '@/_domain'
+\`\`\`
+
+**BAD - Skipped Documentation:**
+\`\`\`
+1. ❌ Skipped MASTER_LOGIC.mdc
+2. Added to lpProblemBuilder.ts: const PENALTY = 0.001  // inline magic number!
+\`\`\`
+
+**BAD - Wrong Order:**
+\`\`\`
+1. ❌ Implemented in constants.ts first
+2. ❌ Then documented in MASTER_LOGIC.mdc after
+   (This causes docs to drift from reality)
+\`\`\`
+
+### 🔴 SSOT Violations to Watch For
+
+| Violation | Example | Fix |
+|-----------|---------|-----|
+| **Magic numbers** | `if (arr < 25000)` | Use `SALES_TOOLS_ARR_THRESHOLD` from `@/_domain` |
+| **Inline calculations** | `account.calculated_arr \|\| account.arr \|\| 0` | Use `getAccountARR(account)` from `@/_domain` |
+| **Undocumented constants** | `const MAX_ACCOUNTS = 3000` in service file | Add to `MASTER_LOGIC.mdc`, then `constants.ts` |
+| **Duplicate logic** | Same formula in 2+ files | Consolidate to `_domain/*.ts`, import everywhere |
+| **Bug fixes without docs** | Fix a calculation but don't update docs | Always update `MASTER_LOGIC.mdc` first |
+
+### 🛑 STOP AND ASK Before Proceeding
+
+**If you're about to add business logic and haven't updated `MASTER_LOGIC.mdc` first, STOP.**
+
+Ask yourself:
+1. "What section of MASTER_LOGIC.mdc does this belong in?"
+2. "What's the formula/rule I'm implementing?"
+3. "Is there an existing constant/function I should use instead?"
+
+**If unsure, ASK THE USER before implementing.**
 
 ---
+
+### 🔒 MANDATORY RULES
 
 1. **Always import from `@/_domain`** - Never hardcode business logic elsewhere
    \`\`\`typescript
@@ -109,6 +183,8 @@ When working on ANY file in the codebase:
    - Tier thresholds (magic numbers like `100`, `500`, `1500`)
    - Region/territory mappings
    - PE firm name handling
+   - LP solver parameters (penalties, scale limits)
+   - Display rules (when to show/hide UI elements based on business state)
 
 2. **Flag Discrepancies**: If you find hardcoded logic that **differs** from `src/_domain/`:
    - **STOP and ASK the user** before changing anything

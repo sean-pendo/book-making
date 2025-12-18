@@ -136,7 +136,7 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
           </DialogDescription>
         </DialogHeader>
 
-        {/* Compact Summary Row */}
+        {/* Compact Summary Row with Apply Button */}
         <div className="flex items-center justify-between gap-4 text-sm mb-4">
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">
@@ -156,6 +156,19 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
               </div>
             )}
           </div>
+          <Button 
+            onClick={onExecute} 
+            disabled={result.proposals.length === 0 || isExecuting}
+            className="bg-green-600 hover:bg-green-700"
+            size="sm"
+          >
+            {isExecuting ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <CheckCircle className="w-4 h-4 mr-2" />
+            )}
+            {isExecuting ? 'Applying...' : 'Apply Assignments'}
+          </Button>
         </div>
 
         {/* Rebalancing Warnings and Suggestions */}
@@ -255,7 +268,22 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                           {getConflictRiskBadge(proposal.conflictRisk)}
                         </TableCell>
                         <TableCell>
-                          <div className="text-sm">{proposal.assignmentReason}</div>
+                          {(proposal as any).warningDetails ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="text-sm cursor-help flex items-center gap-1">
+                                  {proposal.assignmentReason}
+                                  <AlertTriangle className="h-3 w-3 text-orange-500" />
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <p className="text-xs font-medium mb-1">Warning Details:</p>
+                                <p className="text-xs">{(proposal as any).warningDetails}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <div className="text-sm">{proposal.assignmentReason}</div>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

@@ -289,7 +289,7 @@ export const AssignmentRuleAdjustment: React.FC<AssignmentRuleAdjustmentProps> =
         </div>
         
         <div className="space-y-2">
-          <Label>Territory Assignment Priority</Label>
+          <Label>Book Assignment Priority</Label>
           <Select 
             value={conditions.priority || 'high'}
             onValueChange={(priority) => {

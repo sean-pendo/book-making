@@ -143,6 +143,9 @@ export interface LPSuccessMetrics {
   /** Account stability with current owner (0-1, % accounts with same owner) */
   continuityScore: number;
 
+  /** Detailed continuity breakdown with actual counts (optional for drill-down) */
+  continuityMetrics?: ContinuityMetrics;
+
   /** Weighted geo alignment score (0-1, based on GEO_SCORE_WEIGHTS) */
   geographyScore: number;
 
@@ -155,6 +158,35 @@ export interface LPSuccessMetrics {
 
   /** Average % of target load across all reps (can be null if no target set) */
   capacityUtilization: number | null;
+}
+
+// ============================================
+// CONTINUITY METRICS
+// ============================================
+
+/**
+ * Detailed continuity metrics for UI display
+ * 
+ * Provides actual counts (not just the percentage) so tooltips
+ * can show accurate "Retained: X / Changed: Y / Excluded: Z" breakdowns.
+ * 
+ * @see MASTER_LOGIC.mdc §13.7.1 - Continuity Metrics Structure
+ */
+export interface ContinuityMetrics {
+  /** The continuity score (0-1), same as retainedCount / eligibleCount */
+  score: number;
+  
+  /** Accounts staying with same owner (new_owner_id = owner_id OR new_owner_id IS NULL) */
+  retainedCount: number;
+  
+  /** Accounts moving to different owner (eligibleCount - retainedCount) */
+  changedCount: number;
+  
+  /** Total accounts eligible for continuity tracking (owner exists in reps, not backfill source) */
+  eligibleCount: number;
+  
+  /** Accounts excluded from tracking (owner not in reps file) */
+  excludedCount: number;
 }
 
 // ============================================
@@ -347,6 +379,8 @@ export interface RepDistributionData {
   childCustomers: number;
   parentProspects: number;
   childProspects: number;
+  // Strategic rep flag for distinct chart coloring
+  isStrategicRep?: boolean;
 }
 
 export type RepDistributionMetric = 'arr' | 'atr' | 'pipeline' | 'accounts';

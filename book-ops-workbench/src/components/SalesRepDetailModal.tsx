@@ -59,6 +59,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useProspectOpportunities, formatCloseDate, formatNetARR } from '@/hooks/useProspectOpportunities';
 import { RenewalQuarterBadge } from '@/components/ui/RenewalQuarterBadge';
+import { useInvalidateAnalytics } from '@/hooks/useInvalidateAnalytics';
 
 interface SalesRepDetailModalProps {
   open: boolean;
@@ -97,10 +98,11 @@ export const SalesRepDetailModal = ({
 
   // Fetch prospect opportunity data (Net ARR and Close Date)
   const { getNetARR, getCloseDate, getNetARRColorClass } = useProspectOpportunities(buildId);
+  const invalidateAnalytics = useInvalidateAnalytics();
 
 interface ExtendedAccountDetail extends AccountDetail {
   employees?: number;
-  industry?: string;
+  // DEPRECATED: industry - removed in v1.3.9
   geo?: string;
   expansion_tier?: string;
   initial_sale_tier?: string;
@@ -163,7 +165,7 @@ interface ExtendedAccountDetail extends AccountDetail {
         arr: getAccountARR(account),
         atr: getAccountATR(account),
         employees: account.employees,
-        industry: account.industry,
+        // DEPRECATED: industry - removed in v1.3.9
         geo: account.geo,
         expansion_tier: account.expansion_tier,
         initial_sale_tier: account.initial_sale_tier,
@@ -258,7 +260,7 @@ interface ExtendedAccountDetail extends AccountDetail {
             arr: getAccountARR(child),
             atr: getAccountATR(child),
             employees: child.employees,
-            industry: child.industry,
+            // DEPRECATED: industry - removed in v1.3.9
             geo: child.geo,
             expansion_tier: child.expansion_tier,
             initial_sale_tier: child.initial_sale_tier,
@@ -399,6 +401,11 @@ interface ExtendedAccountDetail extends AccountDetail {
         });
 
       if (assignmentError) throw assignmentError;
+
+      // Invalidate analytics queries so KPIs and charts update
+      if (buildId) {
+        await invalidateAnalytics(buildId);
+      }
 
       toast({
         title: "Success",
@@ -879,9 +886,7 @@ interface ExtendedAccountDetail extends AccountDetail {
                                                 {extChild.employees && (
                                                   <div><strong>Employees:</strong> {extChild.employees.toLocaleString()}</div>
                                                 )}
-                                                {extChild.industry && (
-                                                  <div><strong>Industry:</strong> {extChild.industry}</div>
-                                                )}
+                                                {/* DEPRECATED: industry - removed in v1.3.9 */}
                                                 {child.hq_country && (
                                                   <div><strong>HQ Country:</strong> {child.hq_country}</div>
                                                 )}

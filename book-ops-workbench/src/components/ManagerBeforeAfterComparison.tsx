@@ -1,13 +1,18 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Loader2, TrendingUp, TrendingDown, Download } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Loader2, TrendingUp, TrendingDown, Download, Users } from 'lucide-react';
 import { getAccountARR, getAccountATR } from '@/_domain';
 import { downloadFile } from '@/utils/exportUtils';
 import { toast } from '@/hooks/use-toast';
+import { BeforeAfterDistributionChart, type BeforeAfterRepData } from '@/components/balancing/BeforeAfterDistributionChart';
+import { BeforeAfterAccountChart, type BeforeAfterAccountData } from '@/components/balancing/BeforeAfterAccountChart';
+import { cn } from '@/lib/utils';
 
 interface ManagerBeforeAfterComparisonProps {
   buildId: string;
@@ -233,6 +238,54 @@ export default function ManagerBeforeAfterComparison({
     return acc;
   }, {} as Record<string, any>) : {};
 
+  // Transform comparison data for distribution chart
+  const distributionChartData: BeforeAfterRepData[] = useMemo(() => {
+    if (!comparisonData || !salesReps) return [];
+    
+    // Flatten all reps from all FLMs
+    const allReps = Object.values(comparisonData).flat();
+    
+    return allReps.map(({ rep, before, after }) => ({
+      repId: rep.rep_id,
+      repName: rep.name,
+      region: rep.region || '',
+      beforeArr: before.totalARR,
+      afterArr: after.totalARR,
+      beforeAtr: before.totalATR,
+      afterAtr: after.totalATR,
+      beforePipeline: 0, // Pipeline not tracked in manager comparison
+      afterPipeline: 0,
+      isStrategicRep: rep.is_strategic_rep ?? false,
+    }));
+  }, [comparisonData, salesReps]);
+
+  // Transform comparison data for account chart
+  const accountChartData: BeforeAfterAccountData[] = useMemo(() => {
+    if (!comparisonData || !salesReps) return [];
+    
+    // Flatten all reps from all FLMs
+    const allReps = Object.values(comparisonData).flat();
+    
+    return allReps.map(({ rep, before, after }) => ({
+      repId: rep.rep_id,
+      repName: rep.name,
+      region: rep.region || '',
+      beforeCustomers: before.customers,
+      beforeProspects: before.prospects,
+      beforeParentCustomers: before.customers, // No parent/child breakdown in this view
+      beforeChildCustomers: 0,
+      beforeParentProspects: before.prospects,
+      beforeChildProspects: 0,
+      afterCustomers: after.customers,
+      afterProspects: after.prospects,
+      afterParentCustomers: after.customers,
+      afterChildCustomers: 0,
+      afterParentProspects: after.prospects,
+      afterChildProspects: 0,
+      isStrategicRep: rep.is_strategic_rep ?? false,
+    }));
+  }, [comparisonData, salesReps]);
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -417,6 +470,21 @@ export default function ManagerBeforeAfterComparison({
         </div>
       )}
 
+      {/* Distribution Charts */}
+      {distributionChartData.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Financial Distribution (ARR/ATR) */}
+          <BeforeAfterDistributionChart
+            data={distributionChartData}
+          />
+
+          {/* Account Distribution */}
+          <BeforeAfterAccountChart
+            data={accountChartData}
+          />
+        </div>
+      )}
+
       {!comparisonData || Object.keys(comparisonData).length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
@@ -464,49 +532,91 @@ export default function ManagerBeforeAfterComparison({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {reps.map(({ rep, before, after }) => (
-                    <TableRow key={rep.rep_id}>
-                      <TableCell className="font-medium">{rep.name}</TableCell>
-                      {/* Before */}
-                      <TableCell className="text-right bg-muted/20">
-                        <div>
-                          <div className="font-medium">{before.totalAccounts}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {before.customers}C / {before.prospects}P
+                  {reps.map(({ rep, before, after }) => {
+                    const isStrategic = rep.is_strategic_rep ?? false;
+                    
+                    return (
+                      <TableRow 
+                        key={rep.rep_id}
+                        className={cn(
+                          isStrategic && "bg-purple-50/50 dark:bg-purple-950/20"
+                        )}
+                      >
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            {isStrategic && (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Users className="h-4 w-4 text-purple-500" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-sm">Strategic Rep - balanced separately</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                            <span className={cn(isStrategic && "text-purple-600 dark:text-purple-400")}>
+                              {rep.name}
+                            </span>
+                            {isStrategic && (
+                              <Badge variant="outline" className="text-xs border-purple-300 text-purple-600 dark:border-purple-700 dark:text-purple-400">
+                                Strategic
+                              </Badge>
+                            )}
                           </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right bg-muted/20">
-                        <div>
-                          <div className="font-medium">{formatCurrency(before.totalARR)}</div>
-                          <div className="text-xs text-muted-foreground">
-                            ATR: {formatCurrency(before.totalATR)}
+                        </TableCell>
+                        {/* Before */}
+                        <TableCell className={cn(
+                          "text-right",
+                          isStrategic ? "bg-purple-100/30 dark:bg-purple-900/20" : "bg-muted/20"
+                        )}>
+                          <div>
+                            <div className="font-medium">{before.totalAccounts}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {before.customers}C / {before.prospects}P
+                            </div>
                           </div>
-                        </div>
-                      </TableCell>
-                      {/* After */}
-                      <TableCell className="text-right bg-primary/5">
-                        <div>
-                          <div className="font-medium">{after.totalAccounts}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {after.customers}C / {after.prospects}P
+                        </TableCell>
+                        <TableCell className={cn(
+                          "text-right",
+                          isStrategic ? "bg-purple-100/30 dark:bg-purple-900/20" : "bg-muted/20"
+                        )}>
+                          <div>
+                            <div className="font-medium">{formatCurrency(before.totalARR)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              ATR: {formatCurrency(before.totalATR)}
+                            </div>
                           </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right bg-primary/5">
-                        <div>
-                          <div className="font-medium">{formatCurrency(after.totalARR)}</div>
-                          <div className="text-xs text-muted-foreground">
-                            ATR: {formatCurrency(after.totalATR)}
+                        </TableCell>
+                        {/* After */}
+                        <TableCell className={cn(
+                          "text-right",
+                          isStrategic ? "bg-purple-100/50 dark:bg-purple-900/30" : "bg-primary/5"
+                        )}>
+                          <div>
+                            <div className="font-medium">{after.totalAccounts}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {after.customers}C / {after.prospects}P
+                            </div>
                           </div>
-                        </div>
-                      </TableCell>
-                      {/* Change */}
-                      <TableCell className="text-center">
-                        <DifferenceIndicator before={before.totalARR} after={after.totalARR} />
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+                        <TableCell className={cn(
+                          "text-right",
+                          isStrategic ? "bg-purple-100/50 dark:bg-purple-900/30" : "bg-primary/5"
+                        )}>
+                          <div>
+                            <div className="font-medium">{formatCurrency(after.totalARR)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              ATR: {formatCurrency(after.totalATR)}
+                            </div>
+                          </div>
+                        </TableCell>
+                        {/* Change */}
+                        <TableCell className="text-center">
+                          <DifferenceIndicator before={before.totalARR} after={after.totalARR} />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>

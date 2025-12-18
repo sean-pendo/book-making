@@ -198,6 +198,7 @@ export type Database = {
           atr_min_override: number | null
           atr_target: number | null
           atr_variance: number | null
+          balance_intensity: string | null
           based_on_account_count: number | null
           based_on_rep_count: number | null
           build_id: string | null
@@ -287,6 +288,7 @@ export type Database = {
           atr_min_override?: number | null
           atr_target?: number | null
           atr_variance?: number | null
+          balance_intensity?: string | null
           based_on_account_count?: number | null
           based_on_rep_count?: number | null
           build_id?: string | null
@@ -376,6 +378,7 @@ export type Database = {
           atr_min_override?: number | null
           atr_target?: number | null
           atr_variance?: number | null
+          balance_intensity?: string | null
           based_on_account_count?: number | null
           based_on_rep_count?: number | null
           build_id?: string | null

@@ -37,6 +37,8 @@ export interface RepMetrics {
   customerARR: number;
   customerATR: number;
   prospectAccounts: number;
+  /** Sum of net_arr from opportunities on prospect accounts - used for pipeline distribution */
+  prospectNetARR: number;
   totalAccounts: number;
   totalRenewals: number;
   totalATR: number;
@@ -48,6 +50,8 @@ export interface RepMetrics {
   renewalsQ3: number;
   renewalsQ4: number;
   creCount: number;
+  /** Strategic rep flag - balanced separately from normal reps */
+  is_strategic_rep?: boolean;
 }
 
 interface EnhancedBalancingData {
@@ -81,6 +85,14 @@ interface EnhancedBalancingData {
     avgCustomerAccountsPerRep: number;
     avgProspectAccountsPerRep: number;
     maxArrVariance: number;
+    // Per-rep before metrics (based on owner_id, not new_owner_id)
+    repMetrics: Array<{
+      rep_id: string;
+      customerARR: number;
+      customerATR: number;
+      customerAccounts: number;
+      prospectAccounts: number;
+    }>;
   };
 }
 
@@ -181,7 +193,9 @@ export const useEnhancedBalancing = (buildId?: string) => {
             renewal_event_date,
             available_to_renew,
             cre_status,
-            opportunity_type
+            opportunity_type,
+            net_arr,
+            amount
           `)
           .eq('build_id', buildId),
         
@@ -374,6 +388,7 @@ export const useEnhancedBalancing = (buildId?: string) => {
           customerARR: enhancedMetrics.arr,
           customerATR: customerATR,
           prospectAccounts: prospectAccounts.length,
+          prospectNetARR: enhancedMetrics.prospectNetARR, // Pipeline value from prospect opportunities
           totalAccounts: enhancedMetrics.accounts.total,
           totalRenewals: enhancedMetrics.renewals.total,
           totalATR: enhancedMetrics.atr,
@@ -384,7 +399,8 @@ export const useEnhancedBalancing = (buildId?: string) => {
           renewalsQ2: enhancedMetrics.renewals.Q2,
           renewalsQ3: enhancedMetrics.renewals.Q3,
           renewalsQ4: enhancedMetrics.renewals.Q4,
-          creCount
+          creCount,
+          is_strategic_rep: rep.is_strategic_rep ?? false
         });
       });
 
@@ -455,10 +471,29 @@ export const useEnhancedBalancing = (buildId?: string) => {
       const beforeAvgCustomerAccountsPerRep = reps.length > 0 ? beforeCustomerAccounts.length / reps.length : 0;
       const beforeAvgProspectAccountsPerRep = reps.length > 0 ? beforeProspectAccounts.length / reps.length : 0;
 
-      // Calculate before variance
-      const beforeRepCustomerCounts = reps.map(rep => {
-        return beforeCustomerAccounts.filter(acc => acc.owner_id === rep.rep_id).length;
+      // Calculate per-rep before metrics (based on owner_id, not new_owner_id)
+      const beforeRepMetrics = reps.map(rep => {
+        const repCustomerAccounts = beforeCustomerAccounts.filter(acc => acc.owner_id === rep.rep_id);
+        const repProspectAccounts = beforeProspectAccounts.filter(acc => acc.owner_id === rep.rep_id);
+        const repCustomerARR = repCustomerAccounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
+        
+        // Calculate ATR for before state (from original owner)
+        const repOpportunities = allOpportunities.filter(o => o.owner_id === rep.rep_id);
+        const repCustomerATR = repOpportunities
+          .filter(o => isRenewalOpportunity(o) && repCustomerAccounts.some(acc => acc.sfdc_account_id === o.sfdc_account_id))
+          .reduce((sum, o) => sum + (o.available_to_renew || 0), 0);
+        
+        return {
+          rep_id: rep.rep_id,
+          customerARR: repCustomerARR,
+          customerATR: repCustomerATR,
+          customerAccounts: repCustomerAccounts.length,
+          prospectAccounts: repProspectAccounts.length,
+        };
       });
+
+      // Calculate before variance
+      const beforeRepCustomerCounts = beforeRepMetrics.map(r => r.customerAccounts);
       const beforeAvgAccounts = beforeRepCustomerCounts.length > 0 && beforeRepCustomerCounts.reduce((sum, count) => sum + count, 0) > 0
         ? beforeRepCustomerCounts.reduce((sum, count) => sum + count, 0) / beforeRepCustomerCounts.length
         : 0;
@@ -496,7 +531,8 @@ export const useEnhancedBalancing = (buildId?: string) => {
           avgCustomerARRPerRep: beforeAvgCustomerARRPerRep,
           avgCustomerAccountsPerRep: beforeAvgCustomerAccountsPerRep,
           avgProspectAccountsPerRep: beforeAvgProspectAccountsPerRep,
-          maxArrVariance: beforeMaxVariance
+          maxArrVariance: beforeMaxVariance,
+          repMetrics: beforeRepMetrics
         }
       };
     } catch (err) {

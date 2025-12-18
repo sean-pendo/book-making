@@ -46,7 +46,7 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
 
   const handleRefreshData = async () => {
     if (buildId) {
-      console.log('[Territory Balancing] Refreshing data and recalculating values...');
+      console.log('[Book Balancing] Refreshing data and recalculating values...');
       
       try {
         // First recalculate account values to ensure data accuracy
@@ -58,10 +58,10 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
         
         toast({
           title: "Data Refreshed",
-          description: "Territory balancing data has been recalculated and updated.",
+          description: "Book balancing data has been recalculated and updated.",
         });
       } catch (error) {
-        console.error('[Territory Balancing] Error during refresh:', error);
+        console.error('[Book Balancing] Error during refresh:', error);
         toast({
           title: "Refresh Failed",
           description: "There was an error refreshing the data. Please try again.",
@@ -74,12 +74,12 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
   // Process data for both customer and prospect views using enhanced metrics
   const processedData = useMemo(() => {
     if (!buildData?.enhancedMetrics) {
-      console.log('[Territory Balancing] No enhanced metrics found');
+      console.log('[Book Balancing] No enhanced metrics found');
       return { customers: {}, prospects: {} };
     }
     
-    console.log('[Territory Balancing] Processing enhanced metrics:', buildData.enhancedMetrics.length, 'reps');
-    console.log('[Territory Balancing] Sample enhanced metric:', buildData.enhancedMetrics[0]);
+    console.log('[Book Balancing] Processing enhanced metrics:', buildData.enhancedMetrics.length, 'reps');
+    console.log('[Book Balancing] Sample enhanced metric:', buildData.enhancedMetrics[0]);
     
     const territories = ['West', 'North East', 'South East', 'Central', 'Unassigned Region'];
     
@@ -104,7 +104,7 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
     
     const territoryData = groupRepsByTerritory(buildData.enhancedMetrics);
     
-    console.log('[Territory Balancing] Territory data:', territoryData);
+    console.log('[Book Balancing] Territory data:', territoryData);
     
     return { customers: territoryData, prospects: territoryData };
   }, [buildData]);

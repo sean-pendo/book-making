@@ -304,7 +304,7 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
       // Central territories
       const centralTerritories = [
         'CHICAGO', 'GREAT LAKES N-CA', 'GREAT LAKES N-US', 'GREAT LAKES S', 
-        'GREATER ONTARIO-CA', 'MID-WEST', 'MIDWEST', 'MOUNTAIN', 'SOUTHWEST'
+        'GREATER ONTARIO-CA', 'MID-WEST', 'MIDWEST', 'MOUNTAIN'
       ];
       if (centralTerritories.some(t => territoryUpper.includes(t))) {
         const match = repRegions.find(r => r.toLowerCase().includes('central'));
@@ -314,10 +314,10 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
         }
       }
       
-      // West territories
+      // West territories (includes Southwest - AZ, NM, NV, UT are part of West)
       const westTerritories = [
         'LOS ANGELES', 'NOR CAL', 'PAC NW-CA', 'PAC NW-US', 
-        'SAN FRANCISCO', 'SO CAL'
+        'SAN FRANCISCO', 'SO CAL', 'SOUTHWEST', 'SOUTH WEST'
       ];
       if (westTerritories.some(t => territoryUpper.includes(t))) {
         const match = repRegions.find(r => r.toLowerCase().includes('west'));

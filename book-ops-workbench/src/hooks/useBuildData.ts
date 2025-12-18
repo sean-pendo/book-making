@@ -179,23 +179,57 @@ export interface PriorityDistributionItem {
 }
 
 /**
+ * Default priority names when not parseable from rationale
+ * Used when rationale format doesn't include the friendly name
+ */
+const DEFAULT_PRIORITY_NAMES: Record<string, string> = {
+  'P0': 'Manual Holdover',
+  'P1': 'Sales Tools Bucket',
+  'P2': 'Stability Accounts',
+  'P3': 'Team Alignment',
+  'P4': 'Geography + Continuity',
+  'P5': 'Continuity',
+  'P6': 'Geography',
+  'P7': 'Residual',
+  'RO': 'Residual Optimization',
+};
+
+/**
  * Parse priority code and name from rationale string
  * 
  * Rationale formats:
  * - LP solver: "P1: Geography + Continuity → Rep Name (details)"
+ * - Double-prefix (bug): "P4: P4: Geography + Continuity → Rep Name"
  * - Legacy: "CONTINUITY: Reason text"
  * 
  * Returns { code: "P1", name: "Geography + Continuity" }
  */
 function parsePriorityFromRationale(rationale: string): { code: string; name: string } {
+  // First, handle the double-prefix bug: "P4: P4: Name → Rep"
+  // Strip the duplicate prefix if present
+  const doublePrefixMatch = rationale.match(/^(P\d+|RO):\s*\1:\s*/i);
+  if (doublePrefixMatch) {
+    // Remove the duplicate prefix and re-parse
+    rationale = rationale.slice(doublePrefixMatch[0].length - doublePrefixMatch[1].length - 2);
+    rationale = `${doublePrefixMatch[1]}: ${rationale}`;
+  }
+
   // Match LP solver format: "P1: Name → Rep (details)" or "RO: Name → Rep (details)"
   // The priority name is between the code and the arrow (→)
   const lpMatch = rationale.match(/^(P\d+|RO):\s*(.+?)\s*→/i);
   
   if (lpMatch) {
+    const name = lpMatch[2].trim();
+    // If name is just the code repeated, use default name
+    if (name.match(/^P\d+$/i) || name === 'RO') {
+      return {
+        code: lpMatch[1].toUpperCase(),
+        name: DEFAULT_PRIORITY_NAMES[lpMatch[1].toUpperCase()] || 'Unknown'
+      };
+    }
     return {
       code: lpMatch[1].toUpperCase(),
-      name: lpMatch[2].trim()
+      name: name
     };
   }
   
@@ -204,18 +238,26 @@ function parsePriorityFromRationale(rationale: string): { code: string; name: st
   const simpleMatch = rationale.match(/^(P\d+|RO):\s*(.+?)(?:\s*[-:(]|$)/i);
   
   if (simpleMatch) {
+    const name = simpleMatch[2].trim();
+    // If name is just the code repeated or empty, use default name
+    if (!name || name.match(/^P\d+$/i) || name === 'RO') {
+      return {
+        code: simpleMatch[1].toUpperCase(),
+        name: DEFAULT_PRIORITY_NAMES[simpleMatch[1].toUpperCase()] || 'Unknown'
+      };
+    }
     return {
       code: simpleMatch[1].toUpperCase(),
-      name: simpleMatch[2].trim()
+      name: name
     };
   }
   
-  // Fallback: try to at least get the code
+  // Fallback: try to at least get the code and use default name
   const codeMatch = rationale.match(/^(P\d+|RO):/i);
   if (codeMatch) {
     return {
       code: codeMatch[1].toUpperCase(),
-      name: 'Unknown'
+      name: DEFAULT_PRIORITY_NAMES[codeMatch[1].toUpperCase()] || 'Unknown'
     };
   }
   

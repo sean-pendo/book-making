@@ -153,14 +153,8 @@ export function ConstraintToggles({
           disabled={disabled}
         />
         
-        <ConstraintToggle
-          label="Capacity Hard Cap"
-          description="Enforce maximum ARR per rep"
-          icon={Shield}
-          checked={constraints.capacity_hard_cap_enabled}
-          onCheckedChange={(c) => onConstraintsChange({ ...constraints, capacity_hard_cap_enabled: c })}
-          disabled={disabled}
-        />
+        {/* NOTE: Capacity Hard Cap toggle removed - Big-M penalty system now handles 
+            capacity symmetrically via soft penalties. @see MASTER_LOGIC.mdc §11.3 */}
         
         <Separator className="my-4" />
         

@@ -48,8 +48,7 @@ interface AccountWithHierarchy {
   calculated_atr: number;
   hierarchy_bookings_arr_converted: number;
   cre_count: number;
-  industry: string | null;
-  account_type: string | null;
+  // DEPRECATED: industry, account_type - removed in v1.3.9
   geo: string | null;
   sales_territory: string | null;
   expansion_tier: string | null;
@@ -170,7 +169,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
       if (!rep) return null;
       const { data, error } = await supabase
         .from('sales_reps')
-        .select('id, is_backfill_source, is_backfill_target, backfill_target_rep_id, is_placeholder, include_in_assignments, region, team, flm, slm, sub_region, team_tier')
+        .select('id, is_backfill_source, is_backfill_target, backfill_target_rep_id, is_placeholder, include_in_assignments, region, team, flm, slm, team_tier')
         .eq('build_id', buildId)
         .eq('rep_id', rep.rep_id)
         .single();
@@ -204,7 +203,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
           team: repInfo.team,
           flm: repInfo.flm,
           slm: repInfo.slm,
-          sub_region: repInfo.sub_region,
+          // DEPRECATED: sub_region - removed in v1.3.9
           team_tier: repInfo.team_tier,
           is_active: true,
           include_in_assignments: true,
@@ -330,13 +329,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
       ],
       placeholder: 'All types'
     },
-    {
-      key: 'industry',
-      label: 'Industry',
-      type: 'select',
-      options: [], // Will be populated from data
-      placeholder: 'All industries'
-    },
+    // DEPRECATED: industry filter - removed in v1.3.9
     {
       key: 'geo',
       label: 'Region',
@@ -380,8 +373,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
             calculated_atr,
             hierarchy_bookings_arr_converted,
             cre_count,
-            industry,
-            account_type,
             geo,
             sales_territory,
             expansion_tier,
@@ -399,7 +390,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
           .or(`new_owner_id.eq.${rep.rep_id},and(owner_id.eq.${rep.rep_id},new_owner_id.is.null)`);
 
         if (searchTerm) {
-          accountsQuery = accountsQuery.or(`account_name.ilike.%${searchTerm}%,ultimate_parent_name.ilike.%${searchTerm}%,industry.ilike.%${searchTerm}%,account_type.ilike.%${searchTerm}%,geo.ilike.%${searchTerm}%,sales_territory.ilike.%${searchTerm}%`);
+          accountsQuery = accountsQuery.or(`account_name.ilike.%${searchTerm}%,ultimate_parent_name.ilike.%${searchTerm}%,geo.ilike.%${searchTerm}%,sales_territory.ilike.%${searchTerm}%`);
         }
 
         const { data: accounts, error: accountsError } = await accountsQuery.order('account_name');
@@ -492,8 +483,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
             calculated_atr: 0,
             hierarchy_bookings_arr_converted: 0,
             cre_count: 0,
-            industry: null,
-            account_type: null,
             geo: null,
             sales_territory: null,
             expansion_tier: null,
@@ -534,7 +523,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
               const customerStatus = getAccountCustomerStatus(account, accountsByParent);
               if (customerStatus !== filters.account_type) return false;
             }
-            if (filters.industry && account.industry !== filters.industry) return false;
+            // DEPRECATED: industry filter - removed in v1.3.9
             if (filters.geo && account.geo !== filters.geo) return false;
             if (filters.tier) {
               const tier = account.expansion_tier || account.initial_sale_tier;
@@ -595,7 +584,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
         return {
           accounts: accountsWithRationale,
           summary,
-          industries: [...new Set(accounts.map(a => a.industry).filter(Boolean))],
+          // DEPRECATED: industries - removed in v1.3.9
           geos: [...new Set(accounts.map(a => a.geo).filter(Boolean))],
           hierarchyOpportunities: opportunities || [],
           accountsByParent: accountsByParent
@@ -934,12 +923,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
               <TableFilters
                 title="Account Filters"
                 filters={filterConfigs.map(config => {
-                  if (config.key === 'industry') {
-                    return {
-                      ...config,
-                      options: repDetail?.industries.map(industry => ({ value: industry, label: industry })) || []
-                    };
-                  }
+                  // DEPRECATED: industry filter - removed in v1.3.9
                   if (config.key === 'geo') {
                     return {
                       ...config,
@@ -1036,7 +1020,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
                                   })()}
                                 </div>
                               </TableCell>
-                              <TableCell className="text-sm">{account.industry || '-'}</TableCell>
+                              {/* DEPRECATED: industry column - removed in v1.3.9 */}
                               <TableCell className="text-sm">{account.geo || '-'}</TableCell>
                               <TableCell>
                                 {getTierBadge(account.expansion_tier || account.initial_sale_tier)}
@@ -1138,7 +1122,7 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
                                     );
                                   })()}
                                  </TableCell>
-                                <TableCell className="text-sm">{child.industry || '-'}</TableCell>
+                                {/* DEPRECATED: industry column - removed in v1.3.9 */}
                                 <TableCell className="text-sm">{child.geo || '-'}</TableCell>
                                 <TableCell>
                                   {getTierBadge(child.expansion_tier || child.initial_sale_tier)}

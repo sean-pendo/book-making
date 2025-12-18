@@ -6,11 +6,13 @@ import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from '@/componen
 import { Info } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PriorityDistributionPie } from './PriorityDistributionPie';
-import type { GeoAlignmentMetrics } from '@/types/analytics';
+import type { GeoAlignmentMetrics, ContinuityMetrics } from '@/types/analytics';
 
 interface BalancingSuccessMetricsProps {
   buildId: string;
   continuityScore: number; // 0-1
+  /** Detailed continuity breakdown with actual counts */
+  continuityMetrics?: ContinuityMetrics;
   geoAlignment: GeoAlignmentMetrics | null;
   isLoading?: boolean;
 }
@@ -81,6 +83,7 @@ const GeoTooltip = ({ active, payload }: any) => {
 export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = ({
   buildId,
   continuityScore,
+  continuityMetrics,
   geoAlignment,
   isLoading = false,
 }) => {
@@ -97,11 +100,16 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
     return 'text-red-600 dark:text-red-400';
   };
 
-  // Calculate total accounts for continuity tooltip
+  // Use actual continuity counts from metrics (not derived from geo data)
+  const retainedAccounts = continuityMetrics?.retainedCount ?? 0;
+  const changedAccounts = continuityMetrics?.changedCount ?? 0;
+  const eligibleAccounts = continuityMetrics?.eligibleCount ?? 0;
+  const excludedAccounts = continuityMetrics?.excludedCount ?? 0;
+  
+  // Keep totalAccounts for geo chart calculations only
   const totalAccounts = geoAlignment 
     ? geoAlignment.aligned + geoAlignment.misaligned + geoAlignment.unassigned 
     : 0;
-  const retainedAccounts = Math.round(totalAccounts * continuityScore);
 
   // Prepare geo alignment data for pie chart - by region
   // Each region shows as a slice, colored by alignment status
@@ -161,9 +169,9 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 overflow-visible">
       {/* Continuity Card */}
-      <Card className="card-elevated card-glass">
+      <Card className="card-elevated card-glass overflow-visible relative z-10">
         <CardContent className="p-5">
           <div className="flex items-center gap-3 mb-3">
             <div className="p-2 bg-blue-500/20 rounded-lg">
@@ -188,12 +196,18 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
                     </div>
                     <div className="flex justify-between">
                       <span>Changed:</span>
-                      <span className="font-medium text-amber-500">{(totalAccounts - retainedAccounts).toLocaleString()}</span>
+                      <span className="font-medium text-amber-500">{changedAccounts.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between text-muted-foreground">
-                      <span>Total:</span>
-                      <span>{totalAccounts.toLocaleString()}</span>
+                      <span>Eligible:</span>
+                      <span>{eligibleAccounts.toLocaleString()}</span>
                     </div>
+                    {excludedAccounts > 0 && (
+                      <div className="flex justify-between text-muted-foreground/70 text-[10px] pt-1">
+                        <span>Excluded (owner missing):</span>
+                        <span>{excludedAccounts.toLocaleString()}</span>
+                      </div>
+                    )}
                   </div>
                 </TooltipContent>
               </UITooltip>
@@ -202,9 +216,57 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
           <div className={`text-3xl font-bold ${getContinuityColor(continuityScore)}`}>
             {(continuityScore * 100).toFixed(0)}%
           </div>
-          <p className="text-xs text-muted-foreground mt-1">
+          <p className="text-xs text-muted-foreground mt-1 mb-3">
             Accounts with same owner
           </p>
+          
+          {/* Horizontal bar showing retained vs changed */}
+          {eligibleAccounts > 0 && (
+            <UITooltip>
+              <TooltipTrigger asChild>
+                <div className="space-y-1.5 cursor-default">
+                  <div className="h-3 w-full bg-muted rounded-full overflow-hidden flex">
+                    <div 
+                      className="h-full bg-emerald-500 transition-all duration-500"
+                      style={{ width: `${(retainedAccounts / eligibleAccounts) * 100}%` }}
+                    />
+                    <div 
+                      className="h-full bg-amber-500 transition-all duration-500"
+                      style={{ width: `${(changedAccounts / eligibleAccounts) * 100}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      {retainedAccounts.toLocaleString()} retained
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      {changedAccounts.toLocaleString()} changed
+                    </span>
+                  </div>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={8} className="max-w-xs z-[9999]">
+                <div className="text-xs space-y-1">
+                  <div className="flex justify-between gap-4">
+                    <span className="text-emerald-500">● Retained:</span>
+                    <span className="font-medium">{retainedAccounts.toLocaleString()} ({((retainedAccounts / eligibleAccounts) * 100).toFixed(1)}%)</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-amber-500">● Changed:</span>
+                    <span className="font-medium">{changedAccounts.toLocaleString()} ({((changedAccounts / eligibleAccounts) * 100).toFixed(1)}%)</span>
+                  </div>
+                  {excludedAccounts > 0 && (
+                    <div className="flex justify-between gap-4 pt-1 border-t text-muted-foreground">
+                      <span>Excluded (owner missing):</span>
+                      <span>{excludedAccounts.toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
+              </TooltipContent>
+            </UITooltip>
+          )}
         </CardContent>
       </Card>
 

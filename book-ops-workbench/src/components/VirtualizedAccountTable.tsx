@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Edit, CheckCircle, UserX, Lock, Unlock, Info, Building2, GitBranch, ChevronUp, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { Edit, CheckCircle, UserX, Lock, Unlock, Info, Building2, GitBranch } from 'lucide-react';
 import { getAccountARR, getAccountATR, formatCurrency } from '@/_domain';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -31,9 +31,6 @@ interface Account {
   is_parent: boolean;
   risk_flag: boolean;
   cre_risk: boolean;
-  cre_status?: string;
-  cre_count?: number;
-  child_count?: number;
   expansion_score?: number;
   account_type?: string;
   industry?: string;
@@ -79,78 +76,6 @@ interface VirtualizedAccountTableProps {
   opportunities?: Opportunity[];
 }
 
-/**
- * Priority number to friendly name mapping
- * Used to display both the number AND the priority name
- */
-const PRIORITY_NAMES: Record<string, string> = {
-  'P0': 'Manual Holdover',
-  'P1': 'Stability',
-  'P2': 'Geography', 
-  'P3': 'Parental Alignment',
-  'P4': 'Tenure Balance',
-  'RO': 'Residual Optimization',
-  // Legacy IDs
-  'sales_tools_bucket': 'Sales Tools Bucket',
-  'manual_holdover': 'Manual Holdover',
-  'stability_accounts': 'Stability',
-  'geography_balance': 'Geography',
-  'parental_alignment': 'Parental Alignment',
-  'tenure_balance': 'Tenure Balance',
-  'arr_balance': 'Residual Optimization',
-};
-
-/**
- * Format rule display for consistent labeling
- * Shows priority number + name (e.g., "P1: Stability")
- * Handles new format (P0:, P1:, RO:), legacy IDs, and missing values
- */
-function formatRuleDisplay(ruleApplied: string | undefined | null): string {
-  if (!ruleApplied || ruleApplied === '-') return 'Unassigned';
-  
-  // Already formatted correctly with full name (e.g., "P1: Stability - Some Reason")
-  if (/^(P\d|RO):\s*\w/.test(ruleApplied)) {
-    // Extract just "P1: Reason" or "RO: Reason" - include priority name if not present
-    const match = ruleApplied.match(/^(P\d|RO):\s*(.+)$/);
-    if (match) {
-      const [, prefix, rest] = match;
-      const priorityName = PRIORITY_NAMES[prefix];
-      // If rest already contains the priority name, return as-is
-      if (rest.toLowerCase().includes(priorityName?.toLowerCase() || '')) {
-        return ruleApplied;
-      }
-      // Otherwise, insert the priority name
-      return `${prefix} ${priorityName}: ${rest}`;
-    }
-    return ruleApplied;
-  }
-  
-  // Just priority code without details (e.g., "P1" or "RO")
-  if (/^(P\d|RO)$/.test(ruleApplied)) {
-    const priorityName = PRIORITY_NAMES[ruleApplied];
-    return priorityName ? `${ruleApplied}: ${priorityName}` : ruleApplied;
-  }
-  
-  // Legacy backend IDs - convert to friendly names with priority prefix
-  const legacyToPriority: Record<string, string> = {
-    'sales_tools_bucket': 'P1: Sales Tools Bucket',
-    'manual_holdover': 'P0: Manual Holdover',
-    'stability_accounts': 'P1: Stability',
-    'geography_balance': 'P2: Geography',
-    'parental_alignment': 'P3: Parental Alignment',
-    'tenure_balance': 'P4: Tenure Balance',
-    'arr_balance': 'RO: Residual Optimization',
-    'CONTINUITY': 'P1: Stability',
-    'GEO_FIRST': 'P2: Geography',
-    'ROUND_ROBIN': 'RO: Round Robin',
-    'TIER_BALANCE': 'Tier Balance',
-    'MIN_MAX_THRESHOLDS': 'Threshold Enforcement',
-    'CAPACITY_OVERFLOW': 'RO: Capacity Overflow',
-  };
-  
-  return legacyToPriority[ruleApplied] || ruleApplied;
-}
-
 export const VirtualizedAccountTable = ({ 
   accounts, 
   onReassign, 
@@ -170,64 +95,6 @@ export const VirtualizedAccountTable = ({
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingLocks, setPendingLocks] = useState<Set<string>>(new Set());
-  const [sortField, setSortField] = useState<keyof Account | 'net_arr' | null>(null);
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [childrenData, setChildrenData] = useState<Map<string, Account[]>>(new Map());
-  const [loadingChildren, setLoadingChildren] = useState<Set<string>>(new Set());
-
-  const toggleExpand = useCallback(async (parentId: string) => {
-    const newExpanded = new Set(expandedRows);
-    
-    if (newExpanded.has(parentId)) {
-      // Collapse
-      newExpanded.delete(parentId);
-      setExpandedRows(newExpanded);
-    } else {
-      // Expand - fetch children if not already loaded
-      newExpanded.add(parentId);
-      setExpandedRows(newExpanded);
-      
-      if (!childrenData.has(parentId) && buildId) {
-        setLoadingChildren(prev => new Set(prev).add(parentId));
-        
-        const { data, error } = await supabase
-          .from('accounts')
-          .select('*')
-          .eq('build_id', buildId)
-          .eq('ultimate_parent_id', parentId)
-          .neq('sfdc_account_id', parentId)
-          .order('account_name');
-        
-        setLoadingChildren(prev => {
-          const next = new Set(prev);
-          next.delete(parentId);
-          return next;
-        });
-        
-        if (!error && data) {
-          setChildrenData(prev => new Map(prev).set(parentId, data as Account[]));
-        }
-      }
-    }
-  }, [expandedRows, childrenData, buildId]);
-
-  const handleSort = useCallback((field: keyof Account | 'net_arr') => {
-    if (sortField === field) {
-      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDirection('asc');
-    }
-    setCurrentPage(1); // Reset to first page when sorting
-  }, [sortField]);
-
-  const SortIcon = ({ field }: { field: keyof Account | 'net_arr' }) => {
-    if (sortField !== field) return <ChevronUp className="h-3 w-3 opacity-30" />;
-    return sortDirection === 'asc' 
-      ? <ChevronUp className="h-3 w-3" /> 
-      : <ChevronDown className="h-3 w-3" />;
-  };
   
   const toggleExclusionMutation = useMutation({
     mutationFn: async ({ accountId, currentValue, account }: { accountId: string; currentValue: boolean; account: Account }) => {
@@ -258,38 +125,41 @@ export const VirtualizedAccountTable = ({
       if (error) throw error;
     },
     onMutate: async ({ accountId, currentValue, account }) => {
-      // Cancel outgoing refetches for the correct query key
-      await queryClient.cancelQueries({ queryKey: ['build-parent-accounts-optimized', buildId] });
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['build-data', buildId] });
       
       // Snapshot previous value
-      const previousData = queryClient.getQueryData(['build-parent-accounts-optimized', buildId]);
+      const previousData = queryClient.getQueryData(['build-data', buildId]);
       
       const isLocking = !currentValue;
       
-      // Optimistically update the accounts array directly
-      queryClient.setQueryData(['build-parent-accounts-optimized', buildId], (old: Account[] | undefined) => {
+      // Optimistically update ALL related queries
+      queryClient.setQueriesData({ queryKey: ['build-data'] }, (old: any) => {
         if (!old) return old;
         
-        return old.map((acc: Account) => {
-          if (acc.sfdc_account_id === accountId) {
-            if (isLocking && acc.owner_id) {
-              return { 
-                ...acc, 
-                exclude_from_reassignment: true,
-                new_owner_id: acc.owner_id,
-                new_owner_name: acc.owner_name
-              };
-            } else {
-              return { 
-                ...acc, 
-                exclude_from_reassignment: false,
-                new_owner_id: null,
-                new_owner_name: null
-              };
+        return {
+          ...old,
+          accounts: old.accounts?.map((acc: Account) => {
+            if (acc.sfdc_account_id === accountId) {
+              if (isLocking && acc.owner_id) {
+                return { 
+                  ...acc, 
+                  exclude_from_reassignment: true,
+                  new_owner_id: acc.owner_id,
+                  new_owner_name: acc.owner_name
+                };
+              } else {
+                return { 
+                  ...acc, 
+                  exclude_from_reassignment: false,
+                  new_owner_id: null,
+                  new_owner_name: null
+                };
+              }
             }
-          }
-          return acc;
-        });
+            return acc;
+          }),
+        };
       });
       
       return { previousData };
@@ -302,7 +172,7 @@ export const VirtualizedAccountTable = ({
       
       // Rollback on error
       if (context?.previousData) {
-        queryClient.setQueryData(['build-parent-accounts-optimized', buildId], context.previousData);
+        queryClient.setQueryData(['build-data', buildId], context.previousData);
       }
       console.error('Error toggling exclusion:', error);
       toast({
@@ -312,24 +182,23 @@ export const VirtualizedAccountTable = ({
       });
     },
     onSuccess: (_, variables) => {
-      // Remove from pending locks on success - keep the optimistic update, don't refetch
+      // Remove from pending locks on success
       const newPending = new Set(pendingLocks);
       newPending.delete(variables.accountId);
       setPendingLocks(newPending);
       
-      // Don't invalidate - the optimistic update is already correct
-      // Only invalidate other dependent queries
+      queryClient.invalidateQueries({ queryKey: ['build-data'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-detail'] });
       toast({
         title: "Success",
-        description: variables.currentValue ? "Account unlocked" : "Account locked to current owner",
+        description: "Account exclusion status updated",
       });
     },
   });
   
-  // Filter and sort accounts
+  // Filter and paginate accounts
   const filteredAccounts = useMemo(() => {
-    let result = accounts.filter(account => {
+    return accounts.filter(account => {
       // Search term filter
       if (searchTerm) {
         const searchLower = searchTerm.toLowerCase();
@@ -366,50 +235,7 @@ export const VirtualizedAccountTable = ({
       
       return true;
     });
-
-    // Apply sorting
-    if (sortField) {
-      result = [...result].sort((a, b) => {
-        let aVal: any = sortField !== 'net_arr' ? a[sortField as keyof Account] : null;
-        let bVal: any = sortField !== 'net_arr' ? b[sortField as keyof Account] : null;
-        
-        // Handle special cases for calculated values
-        if (sortField === 'arr') {
-          aVal = getAccountARR(a);
-          bVal = getAccountARR(b);
-        } else if (sortField === 'calculated_atr') {
-          aVal = getAccountATR(a);
-          bVal = getAccountATR(b);
-        } else if (sortField === 'net_arr') {
-          // Calculate Net ARR from opportunities inline
-          aVal = opportunities?.filter(opp => opp.sfdc_account_id === a.sfdc_account_id)
-            .reduce((sum, opp) => sum + (opp.net_arr || 0), 0) || 0;
-          bVal = opportunities?.filter(opp => opp.sfdc_account_id === b.sfdc_account_id)
-            .reduce((sum, opp) => sum + (opp.net_arr || 0), 0) || 0;
-        }
-        
-        // Handle nulls
-        if (aVal == null && bVal == null) return 0;
-        if (aVal == null) return sortDirection === 'asc' ? 1 : -1;
-        if (bVal == null) return sortDirection === 'asc' ? -1 : 1;
-        
-        // Compare
-        if (typeof aVal === 'string' && typeof bVal === 'string') {
-          return sortDirection === 'asc' 
-            ? aVal.localeCompare(bVal) 
-            : bVal.localeCompare(aVal);
-        }
-        
-        if (typeof aVal === 'number' && typeof bVal === 'number') {
-          return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
-        }
-        
-        return 0;
-      });
-    }
-
-    return result;
-  }, [accounts, searchTerm, currentOwnerFilter, newOwnerFilter, lockStatusFilter, assignmentProposals, sortField, sortDirection, opportunities]);
+  }, [accounts, searchTerm, currentOwnerFilter, newOwnerFilter, lockStatusFilter, assignmentProposals]);
 
   // Memoized pagination calculation
   const paginatedData = useMemo(() => {
@@ -443,69 +269,15 @@ export const VirtualizedAccountTable = ({
   }, [opportunities]);
 
   const getContinuityRiskBadge = useCallback((account: Account) => {
-    // CRE Risk - different from Assignment Risk!
-    // This is about customer churn/retention risk from renewal events
+    // Enhanced risk calculation based on CRE count from opportunities
+    const creCount = (account as any).cre_count || 0;
     
-    const wrapWithTooltip = (badge: React.ReactNode, description: string) => (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="cursor-help">{badge}</span>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-[250px]">
-          <p className="font-semibold mb-1">CRE Risk (Customer Retention)</p>
-          <p className="text-xs text-muted-foreground">{description}</p>
-        </TooltipContent>
-      </Tooltip>
-    );
-    
-    // Use cre_status if available (rolled up from opportunities)
-    if (account.cre_status) {
-      switch (account.cre_status) {
-        case 'Confirmed Churn':
-          return wrapWithTooltip(
-            <Badge variant="destructive">Confirmed Churn</Badge>,
-            'Customer has confirmed they are leaving. Immediate attention required.'
-          );
-        case 'At Risk':
-          return wrapWithTooltip(
-            <Badge variant="destructive">At Risk</Badge>,
-            'Customer shows signs of churn. Active CRE engagement ongoing.'
-          );
-        case 'Monitoring':
-          return wrapWithTooltip(
-            <Badge className="bg-amber-500">Monitoring</Badge>,
-            'Customer is being monitored for potential risk signals.'
-          );
-        case 'Pre-Risk Discovery':
-          return wrapWithTooltip(
-            <Badge variant="outline" className="border-amber-400 text-amber-600">Pre-Risk</Badge>,
-            'Early warning signs detected. Investigation in progress.'
-          );
-        case 'Closed':
-          return wrapWithTooltip(
-            <Badge variant="secondary">Closed</Badge>,
-            'CRE case was resolved. No current retention concerns.'
-          );
-      }
-    }
-    
-    // Fallback to CRE count if no status
-    const creCount = account.cre_count || 0;
     if (creCount === 0) {
-      return wrapWithTooltip(
-        <Badge variant="outline">No Risk</Badge>,
-        'No active CRE cases. Customer retention appears healthy.'
-      );
+      return <Badge variant="outline">No Risk</Badge>;
     } else if (creCount <= 2) {
-      return wrapWithTooltip(
-        <Badge className="bg-amber-500">{creCount} CRE</Badge>,
-        `${creCount} active CRE case(s). Customer may have retention concerns.`
-      );
+      return <Badge className="bg-orange-500">Medium Risk</Badge>;
     } else {
-      return wrapWithTooltip(
-        <Badge variant="destructive">{creCount} CRE</Badge>,
-        `${creCount} active CRE cases. High churn risk - requires attention.`
-      );
+      return <Badge variant="destructive">High Risk</Badge>;
     }
   }, []);
 
@@ -560,15 +332,7 @@ export const VirtualizedAccountTable = ({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead 
-                className="min-w-[200px] cursor-pointer hover:bg-muted/50"
-                onClick={() => handleSort('account_name')}
-              >
-                <div className="flex items-center gap-1">
-                  Account Details
-                  <SortIcon field="account_name" />
-                </div>
-              </TableHead>
+              <TableHead className="min-w-[200px]">Account Details</TableHead>
               <TableHead className="min-w-[80px]">
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -587,103 +351,19 @@ export const VirtualizedAccountTable = ({
                   </TooltipContent>
                 </Tooltip>
               </TableHead>
-              <TableHead 
-                className="min-w-[120px] cursor-pointer hover:bg-muted/50"
-                onClick={() => handleSort('sales_territory')}
-              >
-                <div className="flex items-center gap-1">
-                  Location
-                  <SortIcon field="sales_territory" />
-                </div>
-              </TableHead>
-              <TableHead 
-                className="min-w-[100px] cursor-pointer hover:bg-muted/50"
-                onClick={() => handleSort('expansion_tier')}
-              >
-                <div className="flex items-center gap-1">
-                  Tier
-                  <SortIcon field="expansion_tier" />
-                </div>
-              </TableHead>
+              <TableHead className="min-w-[120px]">Location</TableHead>
+              <TableHead className="min-w-[100px]">Tier</TableHead>
               {accountType === 'prospect' ? (
-                <TableHead 
-                  className="min-w-[120px] cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort('net_arr')}
-                >
-                  <div className="flex items-center gap-1">
-                    Net ARR
-                    <SortIcon field="net_arr" />
-                  </div>
-                </TableHead>
+                <TableHead className="min-w-[120px]">Net ARR</TableHead>
               ) : (
                 <>
-                  <TableHead 
-                    className="min-w-[100px] cursor-pointer hover:bg-muted/50"
-                    onClick={() => handleSort('arr')}
-                  >
-                    <div className="flex items-center gap-1">
-                      ARR
-                      <SortIcon field="arr" />
-                    </div>
-                  </TableHead>
-                  <TableHead 
-                    className="min-w-[100px] cursor-pointer hover:bg-muted/50"
-                    onClick={() => handleSort('calculated_atr')}
-                  >
-                    <div className="flex items-center gap-1">
-                      ATR
-                      <SortIcon field="calculated_atr" />
-                    </div>
-                  </TableHead>
-                  <TableHead 
-                    className="min-w-[70px] cursor-pointer hover:bg-muted/50"
-                    onClick={() => handleSort('child_count')}
-                  >
-                    <div className="flex items-center gap-1">
-                      Children
-                      <SortIcon field="child_count" />
-                    </div>
-                  </TableHead>
+                  <TableHead className="min-w-[100px]">ARR</TableHead>
+                  <TableHead className="min-w-[100px]">ATR</TableHead>
                 </>
               )}
-              <TableHead 
-                className="min-w-[180px] cursor-pointer hover:bg-muted/50"
-                onClick={() => handleSort('owner_name')}
-              >
-                <div className="flex items-center gap-1">
-                  Owner Assignment
-                  <SortIcon field="owner_name" />
-                </div>
-              </TableHead>
+              <TableHead className="min-w-[180px]">Owner Assignment</TableHead>
               <TableHead className="min-w-[180px]">Rule Applied</TableHead>
-              <TableHead 
-                className="min-w-[120px] cursor-pointer hover:bg-muted/50"
-                onClick={() => handleSort('cre_status')}
-              >
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="flex items-center gap-1 cursor-help">
-                      Risk
-                      <SortIcon field="cre_status" />
-                      <Info className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-[320px]" side="bottom">
-                    <p className="font-semibold mb-1">Assignment Risk</p>
-                    <p className="text-xs text-muted-foreground mb-2">
-                      Indicates how risky it is to change this account's owner:
-                    </p>
-                    <ul className="text-xs space-y-1">
-                      <li><strong className="text-red-500">High Risk:</strong> Reassigning an existing customer (relationship disruption)</li>
-                      <li><strong className="text-orange-500">Medium Risk:</strong> High-value account (ARR &gt; $100K) or has risk flag</li>
-                      <li><strong className="text-green-500">Low Risk:</strong> Safe to reassign (typically prospects or low-value)</li>
-                    </ul>
-                    <p className="text-xs text-muted-foreground mt-2 pt-2 border-t">
-                      <em>Note: This is different from CRE Risk, which measures customer churn probability based on renewal events.</em>
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </TableHead>
+              <TableHead className="min-w-[120px]">Risk</TableHead>
               <TableHead className="min-w-[250px]">Reason</TableHead>
               <TableHead className="min-w-[100px]">Status</TableHead>
               <TableHead className="min-w-[100px]">Actions</TableHead>
@@ -691,47 +371,25 @@ export const VirtualizedAccountTable = ({
           </TableHeader>
           <TableBody>
             {paginatedData.map((account) => (
-              <React.Fragment key={account.sfdc_account_id}>
-              <TableRow>
+              <TableRow key={account.sfdc_account_id}>
                 <TableCell>
-                  <div className="flex items-start gap-1">
-                    {/* Expand button for parents with children */}
-                    {account.child_count && account.child_count > 0 ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 shrink-0"
-                        onClick={() => toggleExpand(account.sfdc_account_id)}
-                      >
-                        {loadingChildren.has(account.sfdc_account_id) ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : expandedRows.has(account.sfdc_account_id) ? (
-                          <ChevronDown className="h-4 w-4" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4" />
-                        )}
-                      </Button>
-                    ) : (
-                      <div className="w-6" /> 
-                    )}
-                    <div>
-                      <div className="font-medium flex items-center gap-2">
-                        {account.account_name}
-                        {account.is_parent ? (
-                          <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800">
-                            <Building2 className="h-3 w-3 mr-1" />
-                            Parent
-                          </Badge>
-                        ) : account.ultimate_parent_id ? (
-                          <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-950/50 dark:text-slate-400 dark:border-slate-700">
-                            <GitBranch className="h-3 w-3 mr-1" />
-                            Child
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <div className="text-sm text-muted-foreground">
-                        {account.sfdc_account_id}
-                      </div>
+                  <div>
+                    <div className="font-medium flex items-center gap-2">
+                      {account.account_name}
+                      {account.is_parent ? (
+                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800">
+                          <Building2 className="h-3 w-3 mr-1" />
+                          Parent
+                        </Badge>
+                      ) : account.ultimate_parent_id ? (
+                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-950/50 dark:text-slate-400 dark:border-slate-700">
+                          <GitBranch className="h-3 w-3 mr-1" />
+                          Child
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {account.sfdc_account_id}
                     </div>
                   </div>
                 </TableCell>
@@ -784,13 +442,6 @@ export const VirtualizedAccountTable = ({
                   <>
                     <TableCell>{formatCurrency(getDisplayARR(account))}</TableCell>
                     <TableCell>{formatCurrency(getAccountATR(account))}</TableCell>
-                    <TableCell className="text-center">
-                      {account.child_count && account.child_count > 0 ? (
-                        <Badge variant="outline">{account.child_count}</Badge>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
                   </>
                 )}
                 <TableCell>
@@ -839,11 +490,10 @@ export const VirtualizedAccountTable = ({
                     const reasonData = assignmentReasons.find(r => r.accountId === account.sfdc_account_id);
                     const proposal = assignmentProposals.find(p => p.accountId === account.sfdc_account_id);
                     
-                    const rawRule = proposal?.ruleApplied || (reasonData?.reason?.split(':')[0]?.trim()) || null;
-                    const ruleApplied = formatRuleDisplay(rawRule);
+                    const ruleApplied = proposal?.ruleApplied || (reasonData?.reason?.split(':')[0]?.trim()) || '-';
                     
-                    if (ruleApplied === 'Unassigned') {
-                      return <span className="text-muted-foreground text-sm italic">Unassigned</span>;
+                    if (ruleApplied === '-') {
+                      return <span className="text-muted-foreground text-sm">-</span>;
                     }
                     
                     return (
@@ -855,49 +505,21 @@ export const VirtualizedAccountTable = ({
                 </TableCell>
                 <TableCell>
                   {(() => {
-                    // Use conflict risk from proposal if available (Assignment Risk)
+                    // Use conflict risk from proposal if available
                     const proposal = assignmentProposals.find(p => p.accountId === account.sfdc_account_id);
                     
                     if (proposal?.conflictRisk) {
                       const risk = proposal.conflictRisk;
-                      const riskInfo = {
-                        LOW: {
-                          label: 'Low Risk',
-                          className: 'bg-green-500 text-white',
-                          description: 'Safe to reassign. Typically a prospect or low-value account.'
-                        },
-                        MEDIUM: {
-                          label: 'Medium Risk',
-                          className: 'bg-orange-500 text-white',
-                          description: 'High-value account (ARR > $100K) or has a risk flag. Review before approving.'
-                        },
-                        HIGH: {
-                          label: 'High Risk',
-                          className: '',
-                          variant: 'destructive' as const,
-                          description: 'Reassigning an existing customer. May disrupt established relationships.'
-                        }
-                      };
-                      const info = riskInfo[risk];
-                      return (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Badge 
-                              variant={risk === 'HIGH' ? 'destructive' : 'default'} 
-                              className={`${info.className} cursor-help`}
-                            >
-                              {info.label}
-                            </Badge>
-                          </TooltipTrigger>
-                          <TooltipContent className="max-w-[250px]">
-                            <p className="font-semibold mb-1">Assignment Risk</p>
-                            <p className="text-xs text-muted-foreground">{info.description}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      );
+                      if (risk === 'LOW') {
+                        return <Badge className="bg-green-500 text-white">Low Risk</Badge>;
+                      } else if (risk === 'MEDIUM') {
+                        return <Badge className="bg-orange-500 text-white">Medium Risk</Badge>;
+                      } else if (risk === 'HIGH') {
+                        return <Badge variant="destructive">High Risk</Badge>;
+                      }
                     }
                     
-                    // Fallback to CRE-based risk if no proposal (different concept!)
+                    // Fallback to CRE-based risk if no proposal
                     return getContinuityRiskBadge(account);
                   })()}
                 </TableCell>
@@ -935,44 +557,6 @@ export const VirtualizedAccountTable = ({
                   </Button>
                 </TableCell>
               </TableRow>
-              
-              {/* Render child rows when expanded */}
-              {expandedRows.has(account.sfdc_account_id) && childrenData.get(account.sfdc_account_id)?.map((child) => (
-                <TableRow key={child.sfdc_account_id} className="bg-muted/30">
-                  <TableCell className="pl-10">
-                    <div className="flex items-center gap-2">
-                      <GitBranch className="h-3 w-3 text-muted-foreground" />
-                      <div>
-                        <div className="font-medium text-sm">{child.account_name}</div>
-                        <div className="text-xs text-muted-foreground">{child.sfdc_account_id}</div>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>-</TableCell>
-                  <TableCell className="text-sm">{child.sales_territory || child.geo || '-'}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary" className="text-xs">
-                      {child.expansion_tier || child.initial_sale_tier || '-'}
-                    </Badge>
-                  </TableCell>
-                  {accountType === 'prospect' ? (
-                    <TableCell className="text-sm">{formatCurrency(child.arr || 0)}</TableCell>
-                  ) : (
-                    <>
-                      <TableCell className="text-sm">{formatCurrency(getAccountARR(child))}</TableCell>
-                      <TableCell className="text-sm">{formatCurrency(child.calculated_atr || 0)}</TableCell>
-                      <TableCell className="text-center text-muted-foreground">-</TableCell>
-                    </>
-                  )}
-                  <TableCell className="text-sm text-muted-foreground">{child.owner_name || '-'}</TableCell>
-                  <TableCell>-</TableCell>
-                  <TableCell>{getContinuityRiskBadge(child)}</TableCell>
-                  <TableCell>-</TableCell>
-                  <TableCell>-</TableCell>
-                  <TableCell>-</TableCell>
-                </TableRow>
-              ))}
-              </React.Fragment>
             ))}
           </TableBody>
         </Table>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { SALES_TOOLS_ARR_THRESHOLD, formatCurrency } from '@/_domain';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -149,8 +150,8 @@ export const ClashDetector = () => {
     {
       id: 'AR004',
       name: 'Commercial Threshold',
-      description: 'Commercial accounts <$25K assigned to region with operational presence',
-      condition: 'tier = commercial AND total_arr < 25000',
+      description: `Commercial accounts <${formatCurrency(SALES_TOOLS_ARR_THRESHOLD)} assigned to region with operational presence`,
+      condition: `tier = commercial AND total_arr < ${SALES_TOOLS_ARR_THRESHOLD}`,
       action: 'assign_to_operational_region',
       enabled: false,
       matches_count: 5

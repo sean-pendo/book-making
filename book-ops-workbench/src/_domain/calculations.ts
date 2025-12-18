@@ -311,6 +311,28 @@ export function isExpansionOpportunity(opportunity: OpportunityData): boolean {
 }
 
 /**
+ * IS PIPELINE OPPORTUNITY (for Customer Accounts)
+ * ------------------------------------------------
+ * Checks if an opportunity from a CUSTOMER account should count toward pipeline.
+ * 
+ * Only these types count as pipeline on customer accounts:
+ * - Expansion: Growing existing product usage
+ * - New Subscription: Customer buying a new product line
+ * 
+ * Renewals do NOT count (they go to ATR instead).
+ * Blanks/Other do NOT count.
+ * 
+ * Note: For PROSPECT accounts, ALL opportunities count toward pipeline.
+ * This function is only needed when filtering customer account opportunities.
+ * 
+ * @see MASTER_LOGIC.mdc §2.3
+ */
+export function isPipelineOpportunity(opportunity: OpportunityData): boolean {
+  const oppType = opportunity.opportunity_type?.toLowerCase().trim();
+  return oppType === 'expansion' || oppType === 'new subscription';
+}
+
+/**
  * CALCULATE PIPELINE FROM OPPORTUNITIES
  * -------------------------------------
  * Sums up pipeline value from all opportunities.
@@ -331,11 +353,11 @@ export function calculatePipelineFromOpportunities(opportunities: OpportunityDat
 /**
  * CALCULATE PIPELINE WITH EXPANSION
  * ---------------------------------
- * Enhanced pipeline calculation that includes expansion opportunities
+ * Enhanced pipeline calculation that includes pipeline opportunities
  * from customer accounts in addition to all prospect opportunities.
  * 
  * @param prospectOpportunities - Opportunities from prospect accounts (all count)
- * @param customerOpportunities - Opportunities from customer accounts (only expansion counts)
+ * @param customerOpportunities - Opportunities from customer accounts (only Expansion + New Subscription count)
  * 
  * @see MASTER_LOGIC.mdc §2.3
  */
@@ -346,12 +368,12 @@ export function calculatePipelineWithExpansion(
   // All prospect opportunities count
   const prospectPipeline = calculatePipelineFromOpportunities(prospectOpportunities);
   
-  // Only expansion opportunities from customers count
-  const expansionPipeline = customerOpportunities
-    .filter(isExpansionOpportunity)
+  // Only Expansion + New Subscription opportunities from customers count (not Renewals)
+  const customerPipeline = customerOpportunities
+    .filter(isPipelineOpportunity)
     .reduce((sum, opp) => sum + getOpportunityPipelineValue(opp), 0);
   
-  return prospectPipeline + expansionPipeline;
+  return prospectPipeline + customerPipeline;
 }
 
 // =============================================================================
@@ -401,6 +423,48 @@ export function calculateBalanceRange(
   };
 }
 
+/**
+ * CALCULATE BALANCE MAX
+ * ---------------------
+ * Determines the maximum value a rep should hold for balanced distribution.
+ * 
+ * Formula: MAX(target × 1.5, largestAccountValue × 1.2)
+ * 
+ * WHY THIS FORMULA:
+ * - `target × 1.5` allows 50% variance from the average
+ * - `largestAccount × 1.2` ensures every account can fit somewhere
+ *   (if max < largest account, that account could never be assigned)
+ * 
+ * The larger of the two is used to handle edge cases:
+ * - Small books: largest account may dominate, so use that
+ * - Large books: average-based limit is more meaningful
+ * 
+ * @param target - The target value per rep (totalValue / repCount)
+ * @param largestAccountValue - The largest single account's value
+ * @param targetMultiplier - Multiplier for target (default 1.5 = 50% over average)
+ * @param largestMultiplier - Multiplier for largest account (default 1.2 = 20% buffer)
+ * 
+ * @see MASTER_LOGIC.mdc §12.1.1
+ * 
+ * @example
+ * const target = calculateBalanceTarget(totalARR, repCount);
+ * const largestARR = Math.max(...accounts.map(a => getAccountARR(a)));
+ * const maxARRPerRep = calculateBalanceMax(target, largestARR);
+ * // If target=$1M and largest=$2M: MAX($1.5M, $2.4M) = $2.4M
+ * // If target=$5M and largest=$1M: MAX($7.5M, $1.2M) = $7.5M
+ */
+export function calculateBalanceMax(
+  target: number,
+  largestAccountValue: number,
+  targetMultiplier: number = 1.5,
+  largestMultiplier: number = 1.2
+): number {
+  return Math.max(
+    target * targetMultiplier,
+    largestAccountValue * largestMultiplier
+  );
+}
+
 // =============================================================================
 // FORMATTING UTILITIES
 // =============================================================================
@@ -448,4 +512,68 @@ export function formatCurrencyCompact(value: number | null | undefined): string 
     return `$${(value / 1_000).toFixed(0)}K`;
   }
   return `$${value.toFixed(0)}`;
+}
+
+// =============================================================================
+// CONTINUITY TRACKING
+// =============================================================================
+
+/**
+ * GET VALID REP IDS FOR CONTINUITY
+ * --------------------------------
+ * Builds a set of rep IDs eligible for continuity tracking.
+ * 
+ * Excludes backfill sources because they are leaving - accounts can't be
+ * "retained" with a rep who is departing.
+ * 
+ * WHY THIS MATTERS:
+ * Accounts whose past owner isn't in the current reps list (or is leaving)
+ * can never have continuity. Including them in the denominator artificially
+ * deflates the continuity percentage. By filtering to only eligible accounts,
+ * we get an accurate measure of retention for preservable relationships.
+ * 
+ * @example
+ * const validRepIds = getValidRepIdsForContinuity(salesReps);
+ * const eligible = accounts.filter(a => validRepIds.has(a.owner_id));
+ * 
+ * @see MASTER_LOGIC.mdc §13.4 (Continuity Eligibility)
+ */
+export function getValidRepIdsForContinuity(
+  salesReps: { rep_id: string; is_backfill_source?: boolean }[]
+): Set<string> {
+  return new Set(
+    salesReps
+      .filter(r => !r.is_backfill_source)
+      .map(r => r.rep_id)
+  );
+}
+
+/**
+ * IS ELIGIBLE FOR CONTINUITY TRACKING
+ * -----------------------------------
+ * Checks if an account's original owner is eligible for continuity tracking.
+ * 
+ * Returns false if:
+ * - owner_id is null/undefined (no original owner)
+ * - owner_id is not in the current reps list (owner left company)
+ * - owner is a backfill source (leaving the team)
+ * 
+ * USE THIS to filter accounts before calculating continuity percentage.
+ * Only accounts that COULD be retained should count in the denominator.
+ * 
+ * @example
+ * const validRepIds = getValidRepIdsForContinuity(salesReps);
+ * const eligibleAccounts = accounts.filter(a => 
+ *   isEligibleForContinuityTracking(a.owner_id, validRepIds)
+ * );
+ * const continuity = retained.length / eligibleAccounts.length;
+ * 
+ * @see MASTER_LOGIC.mdc §13.4 (Continuity Eligibility)
+ */
+export function isEligibleForContinuityTracking(
+  ownerId: string | null | undefined,
+  validRepIds: Set<string>
+): boolean {
+  if (!ownerId) return false;
+  return validRepIds.has(ownerId);
 }

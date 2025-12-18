@@ -117,7 +117,7 @@ export const EnhancedBalancingDashboard = ({ buildId }: EnhancedBalancingDashboa
             <strong>No Assignment Data Available</strong>
             <p className="mt-2 text-sm">
               No balanced assignments have been generated yet for this build. 
-              Please navigate to the Assignment Engine to generate territory assignments.
+              Please navigate to the Assignment Engine to generate book assignments.
             </p>
           </AlertDescription>
         </Alert>

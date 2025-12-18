@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { supabase } from '@/integrations/supabase/client';
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, DEFAULT_MAX_ARR_PER_REP } from '@/_domain';
 import { useToast } from '@/hooks/use-toast';
 import { 
   Bug, 
@@ -53,7 +53,7 @@ export const EnhancedAssignmentDebugger: React.FC<EnhancedAssignmentDebuggerProp
 }) => {
   const [debugLogs, setDebugLogs] = useState<DebugInfo[]>([]);
   const [repWorkloads, setRepWorkloads] = useState<RepWorkloadDebug[]>([]);
-  const [hardCutoff, setHardCutoff] = useState<number>(2500000);
+  const [hardCutoff, setHardCutoff] = useState<number>(DEFAULT_MAX_ARR_PER_REP);
   const [validationResults, setValidationResults] = useState<any>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -72,7 +72,7 @@ export const EnhancedAssignmentDebugger: React.FC<EnhancedAssignmentDebuggerProp
 
       if (error) throw error;
       
-      const cutoff = (data?.conditions as any)?.minCustomerARR || 2500000;
+      const cutoff = (data?.conditions as any)?.minCustomerARR || DEFAULT_MAX_ARR_PER_REP;
       setHardCutoff(cutoff);
       
       addDebugLog('info', 'Hard Cutoff Detection', `Current hard cutoff: $${(cutoff/1000000).toFixed(1)}M ARR`);

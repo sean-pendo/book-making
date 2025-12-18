@@ -270,7 +270,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       const currentOwnerId = account.new_owner_id || account.owner_id;
       const currentOwnerRep = salesRepsMap.get(currentOwnerId);
       const slm = currentOwnerRep?.slm || 'Unassigned SLM';
-      const flm = currentOwnerRep?.flm || currentOwnerRep?.manager || 'Unassigned FLM';
+      // DEPRECATED: manager fallback removed in v1.3.9 - use flm only
+      const flm = currentOwnerRep?.flm || 'Unassigned FLM';
       
       if (!acc[slm]) {
         acc[slm] = {};
@@ -376,7 +377,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       if (childOwnerId !== parentOwnerId) {
         const childOwnerRep = salesRepsMap.get(childOwnerId);
         const slm = childOwnerRep?.slm || 'Unassigned SLM';
-        const flm = childOwnerRep?.flm || childOwnerRep?.manager || 'Unassigned FLM';
+        // DEPRECATED: manager fallback removed in v1.3.9 - use flm only
+        const flm = childOwnerRep?.flm || 'Unassigned FLM';
         
         if (portfoliosBySLM[slm]?.[flm]) {
           const childARR = getAccountARR(childAccount);
@@ -441,7 +443,8 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       const currentOwnerId = account.new_owner_id || account.owner_id;
       const currentOwnerRep = salesRepsMap.get(currentOwnerId);
       const slm = currentOwnerRep?.slm || 'Unassigned SLM';
-      const flm = currentOwnerRep?.flm || currentOwnerRep?.manager || 'Unassigned FLM';
+      // DEPRECATED: manager fallback removed in v1.3.9 - use flm only
+      const flm = currentOwnerRep?.flm || 'Unassigned FLM';
       
       if (!acc[slm]) {
         acc[slm] = {};
@@ -755,7 +758,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Comprehensive Review</h1>
           <p className="text-muted-foreground">
-            Review and validate territory assignment changes before finalization
+            Review and validate book assignment changes before finalization
           </p>
         </div>
         <div className="flex gap-2">

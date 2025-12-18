@@ -81,6 +81,7 @@ export const BeforeAfterTab: React.FC<BeforeAfterTabProps> = ({ buildId }) => {
         afterAtr: afterRep.atr,
         beforePipeline: beforeRep?.pipeline || 0,
         afterPipeline: afterRep.pipeline,
+        isStrategicRep: afterRep.isStrategicRep,
       };
     });
   }, [comparison]);
@@ -114,6 +115,7 @@ export const BeforeAfterTab: React.FC<BeforeAfterTabProps> = ({ buildId }) => {
         afterChildCustomers: afterRep.childCustomers,
         afterParentProspects: afterRep.parentProspects,
         afterChildProspects: afterRep.childProspects,
+        isStrategicRep: afterRep.isStrategicRep,
       };
     });
   }, [comparison]);

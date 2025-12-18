@@ -682,22 +682,18 @@ export const transformAccountData = (mappedData: any[], buildId: string) => {
        sales_territory: row.sales_territory || null,
        geo: row.geo || (row.sales_territory ? autoMapTerritoryToRegion(row.sales_territory) : null),
       employees: toNumber(row.employees),
-      ultimate_parent_employee_size: toNumber(row.ultimate_parent_employee_size),
+      // DEPRECATED: ultimate_parent_employee_size - removed in v1.3.9
       is_customer: toBoolean(row.is_customer),
       arr: toNumber(row.arr),
       atr: toNumber(row.atr),
       renewal_date: toDateString(row.renewal_date),
       owner_change_date: toDateString(row.owner_change_date) || toDateString(row.edit_date) || null,
       expansion_tier: row.expansion_tier || null,
-      account_type: row.account_type || null,
+      // DEPRECATED: account_type, industry, expansion_score, initial_sale_score - removed in v1.3.9
       enterprise_vs_commercial: row.enterprise_vs_commercial || null,
-      industry: row.industry || null,
       initial_sale_tier: row.initial_sale_tier || null,
-      expansion_score: toNumber(row.expansion_score),
-      initial_sale_score: toNumber(row.initial_sale_score),
       has_customer_hierarchy: toBoolean(row.has_customer_hierarchy),
-      in_customer_hierarchy: toBoolean(row.in_customer_hierarchy),
-      include_in_emea: toBoolean(row.include_in_emea),
+      // DEPRECATED: in_customer_hierarchy, include_in_emea - removed in v1.3.9
        // Calculate is_parent based on ultimate_parent_id (accounting for self-referencing pattern)
        // Parent accounts are: (1) ultimate_parent_id is NULL/empty OR (2) Self-referencing (sfdc_account_id = ultimate_parent_id)
        is_parent: (() => {
@@ -707,10 +703,8 @@ export const transformAccountData = (mappedData: any[], buildId: string) => {
          const isSelfReferencing = ultimateParentId && sfdcAccountId && ultimateParentId === sfdcAccountId;
          return isNullOrEmpty || isSelfReferencing;
        })(),
-      is_2_0: toBoolean(row.is_2_0),
+      // DEPRECATED: is_2_0, inbound_count, idr_count - removed in v1.3.9
       owners_lifetime_count: toNumber(row.owners_lifetime_count),
-      inbound_count: toNumber(row.inbound_count),
-      idr_count: toNumber(row.idr_count),
       risk_flag: toBoolean(row.risk_flag),
       cre_risk: toBoolean(row.cre_risk),
       hierarchy_bookings_arr_converted: toNumber(row.hierarchy_bookings_arr_converted),
@@ -775,15 +769,13 @@ export const transformOpportunityData = (mappedData: any[], buildId: string) => 
     };
     
     // The data is already transformed through field mapping, so use it directly
+    // DEPRECATED: stage, close_date, created_date - removed in v1.3.9
     return {
       sfdc_opportunity_id: row.sfdc_opportunity_id,
       sfdc_account_id: row.sfdc_account_id,
       opportunity_name: row.opportunity_name || null,
       opportunity_type: row.opportunity_type || null,
-      stage: row.stage || null,
       available_to_renew: toNumber(row.available_to_renew),
-      close_date: toDateString(row.close_date),
-      created_date: toDateString(row.created_date),
       owner_id: row.owner_id || null,
       owner_name: row.owner_name || null,
       cre_status: row.cre_status || null,
@@ -824,10 +816,10 @@ export const transformSalesRepData = (mappedData: any[], buildId: string) => {
   return mappedData.map(row => {
     console.log('Transform sales rep row:', row); // Debug logging
     // The data is already transformed through field mapping, so use it directly
+    // DEPRECATED: manager - removed in v1.3.9, use flm/slm instead
     return {
       rep_id: row.rep_id,
       name: row.name,
-      manager: row.manager || null,
       team: row.team || null,
       region: row.region || null,
       flm: row.flm || null,

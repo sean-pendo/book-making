@@ -119,16 +119,7 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
       patterns: [/.*employee.*count.*/i, /.*employees.*/i, /.*headcount.*/i],
       required: false
     },
-  {
-    schemaField: 'ultimate_parent_employee_size',
-    aliases: [
-      'Ultimate_Parent_Employee_Count', 'Parent_Employee_Count', 'Global_Employee_Count', 'Employee Count (Ultimate Parent)',
-      'ultimate_parent_employee_count', 'parent_employee_count', 'global_employee_count',
-      'corporate_employee_count', 'total_employee_count', 'ultimate_parent_employee_size'
-    ],
-    patterns: [/.*parent.*employee.*/i, /.*ultimate.*employee.*/i, /.*global.*employee.*/i],
-    required: false
-  },
+  // DEPRECATED: ultimate_parent_employee_size - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'is_customer',
     aliases: [
@@ -170,36 +161,7 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
       patterns: [/^expansion.*prioritization.*tier$/i, /^expansion.*tier$/i],
       required: false
     },
-  {
-    schemaField: 'account_type',
-    aliases: [
-      'Type', 'Account_Type', 'Customer_Type', 'Account_Category', 'Account Type',
-      'type', 'account_type', 'customer_type', 'account_category',
-      'classification', 'Category', 'category'
-    ],
-    patterns: [/^type$/i, /.*account.*type.*/i, /.*customer.*type.*/i],
-    required: false
-  },
-  {
-    schemaField: 'industry',
-    aliases: [
-      'Primary Industry', 'Industry', 'Sector', 'Vertical', 'Business_Category', 'Market_Vertical',
-      'industry', 'sector', 'vertical', 'business_category', 'market_vertical',
-      'Industry_Type', 'industry_type', 'Business_Sector', 'business_sector',
-      'Industry_Category', 'industry_category', 'Ultimate Parent Industry'
-    ],
-    patterns: [/.*industry.*/i, /.*sector.*/i, /.*vertical.*/i, /.*business.*category.*/i],
-    required: false
-  },
-  {
-    schemaField: 'expansion_score',
-    aliases: [
-      'Expansion Score', 'Expansion Prioritization Score', 'Expansion Priority',
-      'expansion_score', 'expansion_prioritization_score', 'expansion_priority'
-    ],
-    patterns: [/.*expansion.*score.*/i, /.*expansion.*priority.*/i],
-    required: false
-  },
+  // DEPRECATED: account_type, industry, expansion_score - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
     {
       schemaField: 'initial_sale_tier',
       aliases: [
@@ -210,15 +172,7 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
       patterns: [/^initial.*sale.*prioritization.*tier$/i, /^initial.*sale.*tier$/i],
       required: false
     },
-  {
-    schemaField: 'initial_sale_score', 
-    aliases: [
-      'Initial Sale Score', 'Initial Sale Prioritization Score', 'Initial Priority Score',
-      'initial_sale_score', 'initial_sale_prioritization_score', 'initial_priority_score'
-    ],
-    patterns: [/.*initial.*sale.*score.*/i, /.*initial.*priority.*score.*/i],
-    required: false
-  },
+  // DEPRECATED: initial_sale_score - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'parent_id',
     aliases: [
@@ -255,24 +209,7 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*customer.*hierarchy.*/i, /.*has.*hierarchy.*/i],
     required: false
   },
-  {
-    schemaField: 'in_customer_hierarchy',
-    aliases: [
-      'In_Customer_Hierarchy', 'Part_Of_Hierarchy', 'In Customer Hierarchy', 'In Hierarchy',
-      'in_customer_hierarchy', 'part_of_hierarchy', 'in_hierarchy'
-    ],
-    patterns: [/.*in.*customer.*hierarchy.*/i, /.*part.*hierarchy.*/i],
-    required: false
-  },
-  {
-    schemaField: 'include_in_emea',
-    aliases: [
-      'Include_In_EMEA', 'EMEA_Include', 'Include in EMEA', 'EMEA Flag',
-      'include_in_emea', 'emea_include', 'emea_flag'
-    ],
-    patterns: [/.*include.*emea.*/i, /.*emea.*include.*/i],
-    required: false
-  },
+  // DEPRECATED: in_customer_hierarchy, include_in_emea - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'is_parent',
     aliases: [
@@ -282,15 +219,7 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*is.*parent.*/i, /.*parent.*flag.*/i],
     required: false
   },
-  {
-    schemaField: 'is_2_0',
-    aliases: [
-      'Is_2_0', 'Version_2_0', 'Is 2.0', 'Version 2.0', 'V2',
-      'is_2_0', 'version_2_0', 'v2', 'is_v2'
-    ],
-    patterns: [/.*is.*2\.?0.*/i, /.*version.*2\.?0.*/i, /^v2$/i],
-    required: false
-  },
+  // DEPRECATED: is_2_0 - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'owners_lifetime_count',
     aliases: [
@@ -300,24 +229,7 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*owners.*lifetime.*/i, /.*lifetime.*owners.*/i],
     required: false
   },
-  {
-    schemaField: 'inbound_count',
-    aliases: [
-      'Inbound_Count', 'Inbound_Leads', 'Inbound Count', 'Inbound Leads',
-      'inbound_count', 'inbound_leads', 'inbound_lead_count'
-    ],
-    patterns: [/.*inbound.*count.*/i, /.*inbound.*leads?.*/i],
-    required: false
-  },
-  {
-    schemaField: 'idr_count',
-    aliases: [
-      'IDR_Count', 'SDR_Count', 'Inside_Sales_Count', 'IDR Count', 'SDR Count',
-      'idr_count', 'sdr_count', 'inside_sales_count'
-    ],
-    patterns: [/.*idr.*count.*/i, /.*sdr.*count.*/i],
-    required: false
-  },
+  // DEPRECATED: inbound_count, idr_count - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'risk_flag',
     aliases: [
@@ -387,42 +299,7 @@ export const OPPORTUNITY_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*account.*id.*/i],
     required: true
   },
-  {
-    schemaField: 'stage',
-    aliases: [
-      'Stage', 'Opportunity_Stage', 'Sales_Stage', 'Pipeline_Stage',
-      'stage', 'opportunity_stage', 'sales_stage', 'pipeline_stage'
-    ],
-    patterns: [/.*stage.*/i],
-    required: false
-  },
-  {
-    schemaField: 'amount',
-    aliases: [
-      'Amount', 'Opportunity_Amount', 'Deal_Size', 'Value',
-      'amount', 'opportunity_amount', 'deal_size', 'value'
-    ],
-    patterns: [/.*amount.*/i, /.*value.*/i],
-    required: false
-  },
-  {
-    schemaField: 'close_date',
-    aliases: [
-      'Close_Date', 'CloseDate', 'Expected_Close_Date', 'Target_Close_Date',
-      'close_date', 'expected_close_date', 'target_close_date'
-    ],
-    patterns: [/.*close.*date.*/i],
-    required: false
-  },
-  {
-    schemaField: 'created_date',
-    aliases: [
-      'Created_Date', 'CreatedDate', 'Opportunity_Created_Date', 'Creation_Date',
-      'created_date', 'opportunity_created_date', 'creation_date'
-    ],
-    patterns: [/.*created.*date.*/i, /.*creation.*date.*/i],
-    required: false
-  },
+  // DEPRECATED: stage, amount, close_date, created_date - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
     {
       schemaField: 'owner_id',
       aliases: [
@@ -514,21 +391,13 @@ export const SALES_REP_FIELD_ALIASES: FieldAlias[] = [
   {
     schemaField: 'name',
     aliases: [
-      'Name', 'Rep_Name', 'Full_Name', 'Sales_Rep_Name', 'Employee_Name',
-      'name', 'rep_name', 'full_name', 'sales_rep_name', 'employee_name'
+      'Name', 'Rep_Name', 'Full_Name', 'Sales_Rep_Name', 'Employee_Name', 'REP',
+      'name', 'rep_name', 'full_name', 'sales_rep_name', 'employee_name', 'rep'
     ],
-    patterns: [/.*name.*/i],
+    patterns: [/.*name.*/i, /^rep$/i],
     required: true
   },
-  {
-    schemaField: 'manager',
-    aliases: [
-      'Manager', 'Sales_Manager', 'Manager_Name', 'Reporting_Manager',
-      'manager', 'sales_manager', 'manager_name', 'reporting_manager'
-    ],
-    patterns: [/.*manager.*/i],
-    required: false
-  },
+  // DEPRECATED: manager - removed in v1.3.9, use flm/slm instead. See MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'team',
     aliases: [

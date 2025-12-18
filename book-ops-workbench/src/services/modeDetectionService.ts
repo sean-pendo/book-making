@@ -22,10 +22,9 @@ interface BuildInfo {
 }
 
 interface DataCharacteristics {
-  hasRenewalSpecialists: boolean;
+  // DEPRECATED: hasRenewalSpecialists, renewalSpecialistCount - removed in v1.3.9
   hasPEAccounts: boolean;
   hasTeamAlignmentData: boolean;  // employees in accounts + team tier values in reps
-  renewalSpecialistCount: number;
   peAccountCount: number;
   teamAlignmentAccountCount: number;
   teamAlignmentRepCount: number;
@@ -66,16 +65,12 @@ export async function detectAssignmentMode(buildId: string): Promise<ModeDetecti
       return { suggestedMode, confidence, reasons };
     }
 
-    // COMMERCIAL: Team Alignment data exists OR RS reps exist OR PE accounts exist
-    if (dataChars.hasTeamAlignmentData || dataChars.hasRenewalSpecialists || dataChars.hasPEAccounts) {
+    // COMMERCIAL: Team Alignment data exists OR PE accounts exist
+    if (dataChars.hasTeamAlignmentData || dataChars.hasPEAccounts) {
       suggestedMode = 'COMMERCIAL';
       
       if (dataChars.hasTeamAlignmentData) {
         reasons.push(`Team Alignment data found: ${dataChars.teamAlignmentAccountCount} accounts with employees, ${dataChars.teamAlignmentRepCount} reps with team tier`);
-      }
-      
-      if (dataChars.hasRenewalSpecialists) {
-        reasons.push(`${dataChars.renewalSpecialistCount} Renewal Specialist reps found`);
       }
       
       if (dataChars.hasPEAccounts) {
@@ -84,8 +79,6 @@ export async function detectAssignmentMode(buildId: string): Promise<ModeDetecti
       
       // High confidence if team alignment data present (strongest signal)
       if (dataChars.hasTeamAlignmentData) {
-        confidence = 'high';
-      } else if (dataChars.hasRenewalSpecialists && dataChars.hasPEAccounts) {
         confidence = 'high';
       } else {
         confidence = 'medium';
@@ -138,14 +131,8 @@ async function getBuildInfo(buildId: string): Promise<BuildInfo> {
  */
 async function getDataCharacteristics(buildId: string): Promise<DataCharacteristics> {
   // Run all checks in parallel for performance
-  const [rsResult, peResult, employeesResult, teamResult] = await Promise.all([
-    // Check for Renewal Specialists
-    supabase
-      .from('sales_reps')
-      .select('*', { count: 'exact', head: true })
-      .eq('build_id', buildId)
-      .eq('is_renewal_specialist', true),
-    
+  // DEPRECATED: is_renewal_specialist check removed in v1.3.9
+  const [peResult, employeesResult, teamResult] = await Promise.all([
     // Check for PE accounts
     supabase
       .from('accounts')
@@ -171,7 +158,6 @@ async function getDataCharacteristics(buildId: string): Promise<DataCharacterist
       .in('team', ['SMB', 'Growth', 'MM', 'ENT'])
   ]);
 
-  const rsCount = rsResult.count || 0;
   const peCount = peResult.count || 0;
   const employeesCount = employeesResult.count || 0;
   const teamCount = teamResult.count || 0;
@@ -180,10 +166,9 @@ async function getDataCharacteristics(buildId: string): Promise<DataCharacterist
   const hasTeamAlignmentData = employeesCount > 0 && teamCount > 0;
 
   return {
-    hasRenewalSpecialists: rsCount > 0,
+    // DEPRECATED: hasRenewalSpecialists, renewalSpecialistCount - removed in v1.3.9
     hasPEAccounts: peCount > 0,
     hasTeamAlignmentData,
-    renewalSpecialistCount: rsCount,
     peAccountCount: peCount,
     teamAlignmentAccountCount: employeesCount,
     teamAlignmentRepCount: teamCount

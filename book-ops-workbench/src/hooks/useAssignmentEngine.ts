@@ -4,7 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { assignmentService } from '@/services/assignmentService';
 import { EnhancedAssignmentService } from '@/services/enhancedAssignmentService';
 import { RebalancingAssignmentService } from '@/services/rebalancingAssignmentService';
-import { generateSimplifiedAssignments } from '@/services/simplifiedAssignmentEngine';
+import { generateSimplifiedAssignments, type WaterfallProgress } from '@/services/simplifiedAssignmentEngine';
 import { buildDataService } from '@/services/buildDataService';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
@@ -13,6 +13,39 @@ import type { AssignmentResult, AssignmentProgress } from '@/services/rebalancin
 import { createAssignmentStages } from '@/components/AssignmentProgressDialog';
 import { runPureOptimization, type LPSolveResult, type LPProgress } from '@/services/optimization';
 import { getAccountARR } from '@/_domain';
+
+/**
+ * Convert WaterfallProgress to AssignmentProgress for UI display
+ * Maps the engine's internal progress to the dialog's expected format
+ */
+function waterfallToAssignmentProgress(
+  wp: WaterfallProgress,
+  baseOffset: number = 0,
+  scale: number = 1
+): AssignmentProgress {
+  // Map waterfall stages to assignment stages
+  const stageMap: Record<WaterfallProgress['stage'], AssignmentProgress['stage']> = {
+    'initializing': 'initializing',
+    'loading': 'loading',
+    'priority': 'assigning',
+    'solving': 'assigning',
+    'finalizing': 'finalizing',
+    'complete': 'finalizing'
+  };
+  
+  return {
+    stage: stageMap[wp.stage] || 'assigning',
+    status: wp.status,
+    progress: baseOffset + (wp.progress * scale),
+    currentRule: wp.currentPriority,
+    rulesCompleted: wp.priorityIndex || 0,
+    totalRules: wp.totalPriorities || 0,
+    accountsProcessed: wp.accountsProcessed || 0,
+    totalAccounts: wp.totalAccounts || 0,
+    assignmentsMade: wp.assignmentsMade || 0,
+    conflicts: 0
+  };
+}
 
 interface Account {
   sfdc_account_id: string;
@@ -579,12 +612,12 @@ export const useAssignmentEngine = (buildId?: string) => {
           prospects: prospectAccounts.length
         });
 
-        // Generate customer assignments first
+        // Generate customer assignments first (progress 10-50%)
         if (customerAccounts.length > 0) {
           setAssignmentProgress({
-            stage: 'scoring',
+            stage: 'assigning',
             status: 'Generating customer assignments...',
-            progress: 30,
+            progress: 10,
             rulesCompleted: 0,
             totalRules: 4,
             accountsProcessed: 0,
@@ -592,6 +625,11 @@ export const useAssignmentEngine = (buildId?: string) => {
             assignmentsMade: 0,
             conflicts: 0
           });
+
+          // Create progress callback for customer assignments (maps 0-100 to 10-50)
+          const customerProgressCallback = (wp: WaterfallProgress) => {
+            setAssignmentProgress(waterfallToAssignmentProgress(wp, 10, 0.4));
+          };
 
           const customerResult = await generateSimplifiedAssignments(
             buildId,
@@ -601,19 +639,21 @@ export const useAssignmentEngine = (buildId?: string) => {
             {
               ...configData,
               territory_mappings: configData.territory_mappings as Record<string, string> | null
-            }
+            },
+            undefined, // no opportunities for customers
+            customerProgressCallback
           );
           proposals.push(...customerResult.proposals);
           warnings.push(...customerResult.warnings);
           console.log(`✅ Customer assignments: ${customerResult.proposals.length} proposals`);
         }
 
-        // Then generate prospect assignments
+        // Then generate prospect assignments (progress 50-90%)
         if (prospectAccounts.length > 0) {
           setAssignmentProgress({
-            stage: 'scoring',
+            stage: 'assigning',
             status: 'Generating prospect assignments...',
-            progress: 55,
+            progress: 50,
             rulesCompleted: 2,
             totalRules: 4,
             accountsProcessed: customerAccounts.length,
@@ -621,6 +661,14 @@ export const useAssignmentEngine = (buildId?: string) => {
             assignmentsMade: proposals.length,
             conflicts: 0
           });
+
+          // Create progress callback for prospect assignments (maps 0-100 to 50-90)
+          const prospectProgressCallback = (wp: WaterfallProgress) => {
+            setAssignmentProgress({
+              ...waterfallToAssignmentProgress(wp, 50, 0.4),
+              assignmentsMade: proposals.length + (wp.assignmentsMade || 0)
+            });
+          };
 
           const prospectResult = await generateSimplifiedAssignments(
             buildId,
@@ -631,7 +679,8 @@ export const useAssignmentEngine = (buildId?: string) => {
               ...configData,
               territory_mappings: configData.territory_mappings as Record<string, string> | null
             },
-            opportunitiesData
+            opportunitiesData,
+            prospectProgressCallback
           );
           proposals.push(...prospectResult.proposals);
           warnings.push(...prospectResult.warnings);
@@ -641,6 +690,11 @@ export const useAssignmentEngine = (buildId?: string) => {
         console.log(`✅ Total ALL assignments: ${proposals.length} proposals, ${warnings.length} warnings`);
       } else {
         // Single type generation (customers or prospects only)
+        // Progress callback maps 0-100 to 10-90
+        const progressCallback = (wp: WaterfallProgress) => {
+          setAssignmentProgress(waterfallToAssignmentProgress(wp, 10, 0.8));
+        };
+
         const result = await generateSimplifiedAssignments(
           buildId,
           accountType === 'customers' ? 'customer' : 'prospect',
@@ -650,7 +704,8 @@ export const useAssignmentEngine = (buildId?: string) => {
             ...configData,
             territory_mappings: configData.territory_mappings as Record<string, string> | null
           },
-          opportunitiesData
+          opportunitiesData,
+          progressCallback
         );
         proposals = result.proposals;
         warnings = result.warnings;
@@ -695,9 +750,10 @@ export const useAssignmentEngine = (buildId?: string) => {
           proposedOwnerId: p.proposedRep.rep_id,
           proposedOwnerName: p.proposedRep.name,
           proposedOwnerRegion: p.proposedRep.region || undefined,
-          assignmentReason: p.warnings.length > 0 
+          assignmentReason: p.rationale,
+          warningDetails: p.warnings.length > 0 
             ? p.warnings.map(w => `${w.reason}${w.details ? `: ${w.details}` : ''}`).join('; ')
-            : p.rationale,
+            : undefined,
           ruleApplied: p.ruleApplied,
           conflictRisk: p.warnings.some(w => w.severity === 'high') ? 'HIGH' : 
                         p.warnings.some(w => w.severity === 'medium') ? 'MEDIUM' : 'LOW'
@@ -734,7 +790,8 @@ export const useAssignmentEngine = (buildId?: string) => {
       
       setAssignmentResult(result);
       
-      // Set progress to 100% before clearing
+      // Set progress to 100% - keep it visible until dialog closes
+      // Don't clear to null here - let the UI handle the transition
       setAssignmentProgress({
         stage: 'finalizing',
         status: 'Assignment generation complete!',
@@ -746,10 +803,6 @@ export const useAssignmentEngine = (buildId?: string) => {
         assignmentsMade: proposals.length,
         conflicts: proposals.filter(p => p.warnings.length > 0).length
       });
-      
-      // Small delay before clearing so user sees 100%
-      await new Promise(resolve => setTimeout(resolve, 500));
-      setAssignmentProgress(null);
       
       return result;
     } catch (error) {
@@ -844,16 +897,7 @@ export const useAssignmentEngine = (buildId?: string) => {
         const maxRepEntry = Array.from(repARRMap.entries()).find(([_, arr]) => arr === maxARR);
         const maxRepName = owners.find(o => o.rep_id === maxRepEntry?.[0])?.name || 'Unknown';
         
-        // Check if any rep is >30% over target - show warning toast but continue applying
-        if (maxARR / avgARR > 1.3) {
-          const overloadPercent = Math.round((maxARR / avgARR - 1) * 100);
-          toast({
-            title: "⚠️ Imbalanced Assignment",
-            description: `${maxRepName} is ${overloadPercent}% over target ARR. Consider adjusting thresholds after applying.`,
-            variant: "default",
-          });
-          // Continue applying - no blocking dialog
-        }
+        // Previously showed imbalance warning here - removed as it adds noise without blocking action
       }
     }
 
@@ -1053,21 +1097,37 @@ export const useAssignmentEngine = (buildId?: string) => {
     // Map accountType to LP engine format
     const lpAccountType = accountType === 'customers' ? 'customer' : 'prospect';
 
-    // Progress callback to update UI
+    // Track batch info for progress calculation
+    let currentBatch = 0;
+    let totalBatches = accountType === 'all' ? 2 : 1; // customers + prospects = 2 batches
+    
+    // Progress callback to update UI with batch-aware progress
     const onLPProgress = (progress: LPProgress) => {
+      // Scale progress within batch: each batch gets 0-50% of total progress
+      // Batch 1 (customers): 0-50%, Batch 2 (prospects): 50-100%
+      const batchProgressRange = 100 / totalBatches;
+      const scaledProgress = (currentBatch * batchProgressRange) + (progress.progress * batchProgressRange / 100);
+      
       setAssignmentProgress({
         stage: progress.stage === 'solving' ? 'analyzing' :
                progress.stage === 'postprocessing' ? 'finalizing' :
                progress.stage as any,
-        status: progress.status,
-        progress: progress.progress,
-        rulesCompleted: 0,
-        totalRules: 1, // LP is a single solve
+        status: totalBatches > 1 
+          ? `[${currentBatch + 1}/${totalBatches}] ${progress.status}`
+          : progress.status,
+        progress: Math.round(scaledProgress),
+        rulesCompleted: currentBatch,
+        totalRules: totalBatches,
         accountsProcessed: progress.accountsProcessed || 0,
         totalAccounts: progress.totalAccounts || filteredAccounts.length,
         assignmentsMade: 0,
         conflicts: 0
       });
+    };
+    
+    // Helper to advance to next batch
+    const advanceBatch = () => {
+      currentBatch++;
     };
 
     let allProposals: LPSolveResult['proposals'] = [];
@@ -1140,13 +1200,19 @@ export const useAssignmentEngine = (buildId?: string) => {
         };
       });
 
-      // Run waterfall engine
+      // Run waterfall engine with progress callback
+      const waterfallProgressCallback = (wp: WaterfallProgress) => {
+        setAssignmentProgress(waterfallToAssignmentProgress(wp, 10, 0.8));
+      };
+
       const waterfallResult = await generateSimplifiedAssignments(
         buildId,
         type,
         accountsForType as any,
         repsForEngine,
-        { ...configData, territory_mappings: configData.territory_mappings as Record<string, string> | null }
+        { ...configData, territory_mappings: configData.territory_mappings as Record<string, string> | null },
+        undefined, // opportunities
+        waterfallProgressCallback
       );
 
       // Transform waterfall proposals to LP format
@@ -1177,14 +1243,17 @@ export const useAssignmentEngine = (buildId?: string) => {
       const customerAccounts = filteredAccounts.filter(a => a.is_customer);
       const prospectAccounts = filteredAccounts.filter(a => !a.is_customer);
 
-      console.log(`[PureOptimization] Running customer solve...`);
+      console.log(`[PureOptimization] Running customer solve (batch 1/${totalBatches})...`);
       const customerResult = await runLPWithFallback('customer', customerAccounts);
       allProposals.push(...customerResult.proposals);
       allWarnings.push(...customerResult.warnings);
       combinedMetrics = customerResult.metrics;
       if (customerResult.usedFallback) usedFallback = true;
 
-      console.log(`[PureOptimization] Running prospect solve...`);
+      // Advance to next batch before prospect solve
+      advanceBatch();
+      
+      console.log(`[PureOptimization] Running prospect solve (batch 2/${totalBatches})...`);
       const prospectResult = await runLPWithFallback('prospect', prospectAccounts);
       allProposals.push(...prospectResult.proposals);
       allWarnings.push(...prospectResult.warnings);
@@ -1275,7 +1344,19 @@ export const useAssignmentEngine = (buildId?: string) => {
     }
     
     setAssignmentResult(result);
-    setAssignmentProgress(null);
+    
+    // Set progress to 100% complete - don't clear to null, let UI handle transition
+    setAssignmentProgress({
+      stage: 'finalizing',
+      status: 'Optimization complete!',
+      progress: 100,
+      rulesCompleted: 4,
+      totalRules: 4,
+      accountsProcessed: allProposals.length,
+      totalAccounts: filteredAccounts.length,
+      assignmentsMade: allProposals.length,
+      conflicts: 0
+    });
     
     return result;
   };
@@ -1298,6 +1379,23 @@ export const useAssignmentEngine = (buildId?: string) => {
     });
   };
 
+  // Cancel the current generation process
+  const cancelGeneration = () => {
+    try {
+      const service = EnhancedAssignmentService.getInstance();
+      service.cancelGeneration();
+    } catch (error) {
+      console.warn('[useAssignmentEngine] Could not cancel service:', error);
+    }
+    // Immediately update UI state
+    setIsGenerating(false);
+    setAssignmentProgress(null);
+    toast({
+      title: "Generation Cancelled",
+      description: "Assignment generation was stopped.",
+    });
+  };
+
   return {
     accounts,
     customerAccounts,
@@ -1311,6 +1409,7 @@ export const useAssignmentEngine = (buildId?: string) => {
     accountsError,
     handleGenerateAssignments,
     handleExecuteAssignments,
+    cancelGeneration,
     refetchAccounts,
     refreshData,
     getAssignmentReasons,

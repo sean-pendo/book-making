@@ -545,8 +545,44 @@ export function PriorityWaterfallConfig({
               c.id === id ? { ...c, enabled: true, position: targetPosition } : c
             );
           }
+        } else if (priority?.type === 'holdover') {
+          // Holdover/filter priority - insert after the last enabled holdover
+          // This ensures filter priorities always appear above optimization priorities
+          const enabledHoldovers = currentConfig.filter(c => {
+            const def = getPriorityById(c.id);
+            return c.enabled && def?.type === 'holdover';
+          });
+          
+          if (enabledHoldovers.length > 0) {
+            // Find the max position among enabled holdovers
+            const lastHoldoverPosition = Math.max(...enabledHoldovers.map(c => c.position));
+            targetPosition = lastHoldoverPosition + 1;
+            
+            // Shift all priorities at or after this position down
+            newConfig = currentConfig.map(c => {
+              if (c.id === id) {
+                return { ...c, enabled: true, position: targetPosition };
+              }
+              if (c.enabled && c.position >= targetPosition) {
+                return { ...c, position: c.position + 1 };
+              }
+              return c;
+            });
+          } else {
+            // No holdovers enabled (except maybe manual_holdover at 0), add at position 1
+            targetPosition = 1;
+            newConfig = currentConfig.map(c => {
+              if (c.id === id) {
+                return { ...c, enabled: true, position: targetPosition };
+              }
+              if (c.enabled && c.position >= targetPosition) {
+                return { ...c, position: c.position + 1 };
+              }
+              return c;
+            });
+          }
         } else {
-          // Regular priority, add at end
+          // Regular optimization priority, add at end
           const maxPosition = Math.max(...currentConfig.filter(c => c.enabled).map(c => c.position), -1);
           targetPosition = maxPosition + 1;
           newConfig = currentConfig.map(c => 
@@ -638,12 +674,44 @@ export function PriorityWaterfallConfig({
     const newMode = mode as AssignmentMode;
     onModeChange(newMode);
 
-    // Reset to default config for the new mode
-    if (newMode !== 'CUSTOM') {
+    if (newMode === 'CUSTOM') {
+      // When switching to CUSTOM, add config entries for ALL priorities
+      const allPriorities = getAllPriorities();
+      
+      // Find max position in current config to place new priorities after
+      const maxPosition = currentConfig.length > 0 
+        ? Math.max(...currentConfig.map(c => c.position))
+        : -1;
+      let nextPosition = maxPosition + 1;
+      
+      const newConfig = allPriorities.map(p => {
+        const existing = currentConfig.find(c => c.id === p.id);
+        if (existing) {
+          return existing; // Keep existing config
+        }
+        // New priority - add as DISABLED with position after existing priorities
+        return {
+          id: p.id,
+          enabled: false,
+          position: nextPosition++,
+          subConditions: p.subConditions?.map(sc => ({
+            id: sc.id,
+            enabled: sc.defaultEnabled
+          })),
+          settings: p.id === 'team_alignment' ? { minTierMatchPct: 80 } : undefined
+        };
+      });
+      
+      // Sort by position for consistent ordering
+      newConfig.sort((a, b) => a.position - b.position);
+      
+      onConfigChange(newConfig);
+    } else {
+      // Reset to default config for the new mode
       const defaultConfig = getDefaultPriorityConfig(newMode as Exclude<AssignmentMode, 'CUSTOM'>);
       onConfigChange(defaultConfig);
     }
-  }, [onModeChange, onConfigChange]);
+  }, [currentConfig, onModeChange, onConfigChange]);
 
   // Handle reset to default
   const handleReset = useCallback(() => {

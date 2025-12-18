@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { SidebarProvider } from '@/components/ui/sidebar';
 import { Badge } from '@/components/ui/badge';
 import { AppSidebar } from '@/components/AppSidebar';
@@ -14,6 +14,7 @@ interface LayoutProps {
 
 export const Layout = ({ children }: LayoutProps) => {
   const { user, loading, effectiveProfile } = useAuth();
+  const navigate = useNavigate();
 
   if (loading) {
     return (
@@ -39,12 +40,18 @@ export const Layout = ({ children }: LayoutProps) => {
           {/* Slack App Install Prompt */}
           <SlackAppPrompt variant="banner" />
           
-          {/* Header */}
-          <header className="h-16 flex items-center gap-4 border-b bg-gradient-subtle backdrop-blur-sm px-6 sticky top-0 z-10">
+          {/* Header - z-40 to stay above scrolling cards (z-10) but below modals (z-50) */}
+          <header className="h-16 flex items-center gap-4 border-b bg-gradient-subtle backdrop-blur-sm px-6 sticky top-0 z-40">
             <div className="flex-1">
               <div className="flex items-center gap-3">
-                <img src="/favicon.png" alt="Book Builder" className="h-8 w-8 rounded-lg" />
-                <h1 className="text-xl font-bold text-gradient">Book Builder</h1>
+                <button
+                  onClick={() => navigate('/')}
+                  className="flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer"
+                  aria-label="Go to home"
+                >
+                  <img src="/favicon.png" alt="Book Builder" className="h-8 w-8 rounded-lg" />
+                  <h1 className="text-xl font-bold text-gradient">Book Builder</h1>
+                </button>
                 {effectiveProfile?.role?.toUpperCase() === 'REVOPS' && (
                   <Badge variant="outline" className="status-info font-medium">
                     RevOps Admin Access

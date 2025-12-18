@@ -1,0 +1,398 @@
+---
+description: Single Source of Truth (SSOT) enforcement for business logic. This is the MOST IMPORTANT rule in the codebase.
+globs: 
+  - src/**/*.ts
+  - src/**/*.tsx
+  - src/_domain/**/*
+alwaysApply: true
+---
+
+# 🚨 SSOT FLOW - CRITICAL ENFORCEMENT
+
+> **THIS IS THE MOST IMPORTANT RULE IN THE CODEBASE.**
+> Every business logic change MUST follow this exact order. No exceptions.
+
+## ⚠️ THE SSOT FLOW (Single Source of Truth)
+
+**When adding or editing ANY reusable business logic, ALWAYS follow this order:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 1: MASTER_LOGIC.mdc  →  Document the rule/formula FIRST  │
+│  STEP 2: _domain/*.ts      →  Implement in the appropriate file │
+│  STEP 3: Consumer files    →  Import from @/_domain and use     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**This flow is NON-NEGOTIABLE.** Never skip steps or go out of order.
+
+---
+
+## 🏗️ Domain-Driven Design Architecture
+
+**This codebase uses Domain-Driven Design (DDD) principles to ensure business logic is centralized, reusable, and consistently applied.**
+
+### The Layered Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CONSUMERS (Import FROM domain)                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
+│  │  components/ │  │   services/  │  │    hooks/    │  │    utils/    │    │
+│  │   (*.tsx)    │  │    (*.ts)    │  │    (*.ts)    │  │    (*.ts)    │    │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
+│         │                 │                 │                 │             │
+│         └─────────────────┴─────────────────┴─────────────────┘             │
+│                                     │                                        │
+│                                     ▼                                        │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                    import { ... } from '@/_domain'                     │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                     │                                        │
+│                                     ▼                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                        DOMAIN LAYER (Source of Truth)                        │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                         src/_domain/                                 │    │
+│  │                                                                      │    │
+│  │   index.ts ────── Re-exports all domain logic                       │    │
+│  │      │                                                               │    │
+│  │      ├── calculations.ts   (ARR, ATR, Pipeline formulas)            │    │
+│  │      ├── tiers.ts          (Team tier classification)               │    │
+│  │      ├── geography.ts      (Region hierarchy, territories)          │    │
+│  │      ├── constants.ts      (Thresholds, config values)              │    │
+│  │      ├── normalization.ts  (Data cleanup, typo handling)            │    │
+│  │      └── MASTER_LOGIC.mdc  (Documentation - THE source of truth)    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+1. **Domain Layer** (`_domain/`): Contains ALL business logic definitions
+   - Pure functions with no side effects
+   - No React, no Supabase, no UI concerns
+   - Exports everything via `index.ts` for clean imports
+
+2. **Consumer Layers**: Import domain logic, never define it
+   - `components/` - React components import and USE domain functions
+   - `services/` - Data services import domain constants/calculations
+   - `hooks/` - React hooks import domain logic for computed values
+   - `utils/` - Utility functions import domain rules to apply them
+
+### The Import/Export Flow
+
+```typescript
+// 1. DOMAIN LAYER: Define and export (src/_domain/constants.ts)
+export const TIER_THRESHOLDS = { SMB_MAX: 99, GROWTH_MAX: 499, MM_MAX: 1499 };
+export const SALES_TOOLS_ARR_THRESHOLD = 25000;
+
+// 2. DOMAIN INDEX: Re-export for clean imports (src/_domain/index.ts)
+export * from './constants';
+export * from './calculations';
+export * from './tiers';
+
+// 3. CONSUMER: Import and use (src/components/AccountCard.tsx)
+import { TIER_THRESHOLDS, getAccountARR } from '@/_domain';
+
+function AccountCard({ account }) {
+  const arr = getAccountARR(account);  // ✅ Uses domain function
+  const tier = classifyTeamTier(account.employee_count);  // ✅ Uses domain function
+  // ...
+}
+```
+
+### Why This Matters
+
+| Without DDD | With DDD |
+|-------------|----------|
+| Business logic scattered across 50+ files | Business logic in ONE place (`_domain/`) |
+| Same calculation written 5 different ways | Single canonical implementation |
+| Bug fix requires finding all copies | Bug fix in ONE file, applies everywhere |
+| "What's the ARR formula?" - grep the codebase | "What's the ARR formula?" - read `MASTER_LOGIC.mdc` |
+| New dev takes weeks to understand rules | New dev reads `_domain/` and understands in hours |
+
+### Key DDD Principles Applied
+
+1. **Ubiquitous Language**: Terms in `MASTER_LOGIC.mdc` match function/constant names
+2. **Bounded Context**: `_domain/` is the boundary - nothing outside defines business rules
+3. **Dependency Inversion**: Consumers depend on domain, never the reverse
+4. **Single Responsibility**: Each `_domain/*.ts` file owns one concept (tiers, geography, etc.)
+
+---
+
+## 📚 The `_domain/` Folder Structure
+
+**The `src/_domain/` folder is the authoritative source for ALL business logic.**
+
+| File | Purpose |
+|------|---------|
+| **`MASTER_LOGIC.mdc`** | Human-readable documentation of all business rules |
+| **`calculations.ts`** | ARR, ATR, Pipeline calculations |
+| **`tiers.ts`** | Team tier (SMB/Growth/MM/ENT) classification |
+| **`geography.ts`** | Region hierarchy, territory mapping, geo scoring |
+| **`constants.ts`** | Thresholds, defaults, configuration values |
+| **`normalization.ts`** | Typo handling and data normalization |
+| **`index.ts`** | Re-exports everything for `@/_domain` imports |
+
+---
+
+## 📋 SSOT Pre-Implementation Checklist
+
+**Before writing ANY business logic code, answer these questions:**
+
+- [ ] **Is this business logic?** (calculations, thresholds, classification rules, display rules)
+- [ ] **Have I documented it in `MASTER_LOGIC.mdc` first?** (with section number like §12.1.1)
+- [ ] **Does a function/constant already exist in `_domain/`?** (check before creating new)
+- [ ] **Am I importing from `@/_domain`?** (never inline the logic)
+
+---
+
+## 📝 SSOT Implementation Steps
+
+| Step | Action | Example | Verify |
+|------|--------|---------|--------|
+| **1. Document** | Add/update in `MASTER_LOGIC.mdc` | "§12.1.1 Balance Max = MAX(avg × 1.5, largest × 1.2)" | Can find it by section number |
+| **2. Implement** | Add function/constant to `_domain/*.ts` | `export function calculateBalanceMax(...)` | Has `@see MASTER_LOGIC.mdc §X.X` JSDoc |
+| **3. Export** | Ensure exported from `_domain/index.ts` | Auto-exports via `export * from './constants'` | Can import from `@/_domain` |
+| **4. Import** | Use in components/services/hooks | `import { calculateBalanceMax } from '@/_domain'` | No inline logic in consumer |
+
+---
+
+## ✅ What BELONGS in `_domain/` (Business Logic)
+
+- **Calculations**: How ARR, ATR, Pipeline values are computed
+- **Classification rules**: Tier thresholds, account categorization
+- **Geography rules**: Region hierarchy, territory mapping logic
+- **Constants**: Threshold values, scoring weights, defaults
+- **Normalization**: Data cleanup (region aliases, typos)
+- **Display logic rules**: When to show Sales Tools, how to format priority labels
+- **Solver parameters**: LP penalty values, scale limits, normalization strategies
+
+## ❌ What does NOT belong in `_domain/`
+
+- React components (`*.tsx` with JSX)
+- Hooks (`useXxx`)
+- Services (API calls, Supabase queries)
+- UI state management
+- Contexts (`AuthContext`, etc.)
+- Formatting helpers (currency display, date formatting)
+
+**Rule**: `_domain/` answers "HOW should the app calculate/classify things?"
+It does NOT answer "HOW should the app render/fetch/store things?"
+
+---
+
+## ✅ SSOT Compliance Examples
+
+### GOOD - Full SSOT Flow:
+```
+1. Add to MASTER_LOGIC.mdc §11.3: "LP_PENALTY.ALPHA = 0.001 for variance band"
+2. Add to constants.ts: export const LP_PENALTY = { ALPHA: 0.001, ... }
+3. Import in lpProblemBuilder.ts: import { LP_PENALTY } from '@/_domain'
+```
+
+### BAD - Skipped Documentation:
+```
+1. ❌ Skipped MASTER_LOGIC.mdc
+2. Added to lpProblemBuilder.ts: const PENALTY = 0.001  // inline magic number!
+```
+
+### BAD - Wrong Order:
+```
+1. ❌ Implemented in constants.ts first
+2. ❌ Then documented in MASTER_LOGIC.mdc after
+   (This causes docs to drift from reality)
+```
+
+---
+
+## 🔴 SSOT Violations to Watch For
+
+| Violation | Example | Fix |
+|-----------|---------|-----|
+| **Magic numbers** | `if (arr < 25000)` | Use `SALES_TOOLS_ARR_THRESHOLD` from `@/_domain` |
+| **Inline calculations** | `account.calculated_arr \|\| account.arr \|\| 0` | Use `getAccountARR(account)` from `@/_domain` |
+| **Undocumented constants** | `const MAX_ACCOUNTS = 3000` in service file | Add to `MASTER_LOGIC.mdc`, then `constants.ts` |
+| **Duplicate logic** | Same formula in 2+ files | Consolidate to `_domain/*.ts`, import everywhere |
+| **Bug fixes without docs** | Fix a calculation but don't update docs | Always update `MASTER_LOGIC.mdc` first |
+
+---
+
+## 🛑 STOP AND ASK Before Proceeding
+
+**If you're about to add business logic and haven't updated `MASTER_LOGIC.mdc` first, STOP.**
+
+Ask yourself:
+1. "What section of MASTER_LOGIC.mdc does this belong in?"
+2. "What's the formula/rule I'm implementing?"
+3. "Is there an existing constant/function I should use instead?"
+
+**If unsure, ASK THE USER before implementing.**
+
+---
+
+## 🤔 WHEN DOCS ARE UNCLEAR - THINK EXTRA CAREFULLY
+
+**If `MASTER_LOGIC.mdc` or the rules in this file are ambiguous, incomplete, or don't cover your situation:**
+
+### DO NOT:
+- ❌ Guess what the rule should be
+- ❌ Make assumptions about business intent
+- ❌ Implement "what seems reasonable"
+- ❌ Copy patterns from other parts of the codebase without verification
+
+### DO:
+- ✅ **STOP and re-read** the relevant section(s) more carefully
+- ✅ **Check related sections** - the answer might be documented elsewhere
+- ✅ **Search the codebase** for existing implementations that might clarify intent
+- ✅ **ASK THE USER** to clarify the business rule before proceeding
+- ✅ **Propose options** - "I see two interpretations: A or B. Which is correct?"
+
+### Examples of "Unclear" Situations:
+
+| Situation | Wrong Response | Right Response |
+|-----------|----------------|----------------|
+| Formula not documented | Implement what "makes sense" | Ask: "I don't see this formula in MASTER_LOGIC.mdc. Should I add it?" |
+| Conflicting rules | Pick one arbitrarily | Ask: "§3.2 says X but §5.1 implies Y. Which takes precedence?" |
+| Edge case not covered | Handle it inline | Ask: "What should happen when [edge case]? Should I document this?" |
+| Threshold value missing | Use a "reasonable" default | Ask: "I need a threshold for X. What value should I use?" |
+
+### The Golden Rule for Uncertainty:
+
+> **When in doubt, ASK. A 30-second clarification prevents hours of rework.**
+
+Business logic errors are expensive to fix. It's always better to pause and confirm than to implement something incorrect.
+
+---
+
+## 🔒 MANDATORY IMPORT RULES
+
+### Always import from `@/_domain`
+
+```typescript
+// ✅ CORRECT
+import { getAccountARR, classifyTeamTier, REGION_HIERARCHY } from '@/_domain';
+
+// ❌ WRONG - inline logic
+const arr = account.calculated_arr || account.arr || 0;
+```
+
+### Paired updates required
+
+When changing business logic:
+1. Update `MASTER_LOGIC.mdc` (documentation) **FIRST**
+2. Update the corresponding `.ts` file (implementation)
+3. Both must stay in sync
+
+### Never create duplicate logic
+
+If you find business logic outside `_domain/`:
+- Flag it to the user
+- Refactor to import from `@/_domain`
+
+### Standardized Consolidation Technique (DDD Pattern)
+
+**The `_domain/` folder EXPORTS definitions. All other folders IMPORT them.**
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  _domain/    →  EXPORTS definitions (constants, functions)     │
+│                 This is the ONLY place business logic lives    │
+├────────────────────────────────────────────────────────────────┤
+│  components/ →  IMPORTS from @/_domain, renders UI             │
+│  services/   →  IMPORTS from @/_domain, handles data/API       │
+│  hooks/      →  IMPORTS from @/_domain, manages React state    │
+│  utils/      →  IMPORTS from @/_domain, provides helpers       │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Rules:**
+- **Don't MOVE files** between folders. Refactor them to IMPORT from `@/_domain`
+- Keep utils in utils, components in components, etc.
+- If a util/service has business logic, extract that logic to `_domain/` and import it back
+- The import path `@/_domain` provides a clean, consistent way to access all business logic
+
+---
+
+## 🔍 Gradual Refactoring Rule
+
+When working on ANY file in the codebase:
+
+### 1. Detect Hardcoded Logic
+Look for inline calculations that should use `@/_domain`:
+- ARR calculations (priority chains like `calculated_arr || arr || 0`)
+- ATR calculations (filtering by `opportunity_type = 'Renewals'`)
+- Tier thresholds (magic numbers like `100`, `500`, `1500`)
+- Region/territory mappings
+- PE firm name handling
+- LP solver parameters (penalties, scale limits)
+- Display rules (when to show/hide UI elements based on business state)
+
+### 2. Flag Discrepancies
+If you find hardcoded logic that **differs** from `src/_domain/`:
+- **STOP and ASK the user** before changing anything
+- Example: "I found `employees < 150` for SMB in this file, but `TIER_THRESHOLDS.SMB_MAX` is 99. Which is correct?"
+
+### 3. Propose Refactor
+If the hardcoded logic **matches** `src/_domain/`:
+- Suggest replacing with the import
+- Example: "This file has inline ARR calculation. Want me to refactor to use `getAccountARR()` from `@/_domain`?"
+
+### 4. Never Silently Change
+Business logic discrepancies may be intentional edge cases. Always confirm with user.
+
+**Questions to Ask When Discrepancy Found:**
+- "Is this intentional or a bug?"
+- "Should we update `MASTER_LOGIC.mdc` and `src/_domain/` to match this, or vice versa?"
+- "Is this an exception for this specific use case?"
+- "Should we add this as a new constant/function in the _domain module?"
+
+---
+
+## 🏷️ SSOT Changelog Labeling
+
+**When you follow the SSOT flow, prefix your changelog entry with `SSOT:`**
+
+```markdown
+## [2025-12-16] - SSOT: New Balance Threshold Calculation
+
+**Changes:**
+1. **Updated MASTER_LOGIC.mdc §12.1.1** - Documented new balance max formula
+2. **Added to _domain/constants.ts** - `calculateBalanceMax()` function
+3. **Updated consumers** - FullAssignmentConfig.tsx now imports from @/_domain
+```
+
+This makes SSOT compliance **visible and auditable** in the changelog.
+
+---
+
+## 🔴 Debug Mode + SSOT
+
+**When entering Debug Mode, ALWAYS start by reviewing business logic:**
+
+1. **Read `src/_domain/MASTER_LOGIC.mdc`** - Understand the expected behavior before investigating
+2. **Check relevant `_domain/*.ts` files** - Verify the implementation matches documentation
+3. **Compare actual vs expected** - Use `MASTER_LOGIC.mdc` as the source of truth for what *should* happen
+
+**Debug Mode Checklist:**
+- [ ] Did I read `MASTER_LOGIC.mdc` to understand the business rule?
+- [ ] Is the bug in the business logic (fix `_domain/`) or in a consumer (fix component/service)?
+- [ ] Does the current implementation match the documented behavior?
+- [ ] If there's a discrepancy, which is correct - the docs or the code?
+
+**Why this matters:** Many bugs are business logic misunderstandings, not code errors. Reading the docs first prevents "fixing" code that's actually correct.
+
+---
+
+## 📖 Quick Reference: Key Files
+
+| Need to understand... | Read this file |
+|-----------------------|----------------|
+| Any business rule | `src/_domain/MASTER_LOGIC.mdc` |
+| ARR/ATR/Pipeline calcs | `src/_domain/calculations.ts` |
+| Tier classification | `src/_domain/tiers.ts` |
+| Geography/regions | `src/_domain/geography.ts` |
+| Thresholds/constants | `src/_domain/constants.ts` |
+| Data normalization | `src/_domain/normalization.ts` |

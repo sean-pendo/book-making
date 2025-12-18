@@ -1040,16 +1040,27 @@ export class RebalancingAssignmentService {
     console.log(`[REBALANCE] 💾 Saving ${proposals.length} rebalanced assignments...`);
 
     const currentUser = await supabase.auth.getUser();
-    const assignmentRecords = proposals.map(proposal => ({
-      build_id: buildId,
-      sfdc_account_id: proposal.accountId,
-      proposed_owner_id: proposal.proposedOwnerId,
-      proposed_owner_name: proposal.proposedOwnerName,
-      assignment_type: 'AUTO_COMMERCIAL',
-      rationale: `${proposal.ruleApplied}: ${proposal.assignmentReason}`,
-      is_approved: false,
-      created_by: currentUser.data.user?.id
-    }));
+    const assignmentRecords = proposals.map(proposal => {
+      // Build rationale - avoid double-prefix when assignmentReason already starts with priority code
+      let rationale: string;
+      const alreadyHasPrefix = proposal.assignmentReason?.match(/^(P\d+|RO):\s/i);
+      if (alreadyHasPrefix) {
+        rationale = proposal.assignmentReason;
+      } else {
+        rationale = `${proposal.ruleApplied}: ${proposal.assignmentReason}`;
+      }
+      
+      return {
+        build_id: buildId,
+        sfdc_account_id: proposal.accountId,
+        proposed_owner_id: proposal.proposedOwnerId,
+        proposed_owner_name: proposal.proposedOwnerName,
+        assignment_type: 'AUTO_COMMERCIAL',
+        rationale,
+        is_approved: false,
+        created_by: currentUser.data.user?.id
+      };
+    });
 
     const { error } = await supabase
       .from('assignments')

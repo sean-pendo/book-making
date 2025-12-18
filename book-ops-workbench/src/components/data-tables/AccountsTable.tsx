@@ -22,7 +22,7 @@ interface Account {
   parent_id: string | null;
   ultimate_parent_id: string | null;
   ultimate_parent_name: string | null;
-  industry: string | null;
+  // DEPRECATED: industry - removed in v1.3.9
   employees: number | null;
   arr: number | null;
   atr: number | null;
@@ -35,7 +35,7 @@ interface Account {
   geo: string | null;
   enterprise_vs_commercial: string | null;
   hq_country: string | null;
-  account_type: string | null;
+  // DEPRECATED: account_type - removed in v1.3.9
   sales_territory: string | null;
   expansion_tier: string | null;
   initial_sale_tier: string | null;
@@ -158,21 +158,8 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
     },
   });
 
+  // DEPRECATED: account_type and industry filters - removed in v1.3.9
   const filterConfigs: FilterConfig[] = [
-    {
-      key: 'account_type',
-      label: 'Account Type',
-      type: 'select',
-      options: [], // Will be populated from data
-      placeholder: 'All types'
-    },
-    {
-      key: 'industry',
-      label: 'Industry',
-      type: 'select',
-      options: [], // Will be populated from data
-      placeholder: 'All industries'
-    },
     {
       key: 'geo',
       label: 'Geography',
@@ -256,26 +243,21 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
           sfdc_account_id, account_name, owner_name, owner_id,
           new_owner_name, new_owner_id,
           parent_id, ultimate_parent_id, ultimate_parent_name,
-          industry, employees, arr, atr, calculated_arr, calculated_atr, 
+          employees, arr, atr, calculated_arr, calculated_atr, 
           hierarchy_bookings_arr_converted, cre_count,
-          is_customer, geo, enterprise_vs_commercial, hq_country, account_type,
-          sales_territory, expansion_tier, initial_sale_tier, expansion_score,
-          initial_sale_score, cre_risk, cre_status, risk_flag, renewal_date, 
+          is_customer, geo, enterprise_vs_commercial, hq_country,
+          sales_territory, expansion_tier, initial_sale_tier,
+          cre_risk, cre_status, risk_flag, renewal_date, 
           exclude_from_reassignment, is_strategic
         `)
         .eq('build_id', buildId);
 
       if (searchTerm) {
-        query = query.or(`account_name.ilike.%${searchTerm}%,owner_name.ilike.%${searchTerm}%,industry.ilike.%${searchTerm}%,hq_country.ilike.%${searchTerm}%,account_type.ilike.%${searchTerm}%,sales_territory.ilike.%${searchTerm}%,expansion_tier.ilike.%${searchTerm}%,initial_sale_tier.ilike.%${searchTerm}%,ultimate_parent_name.ilike.%${searchTerm}%`);
+        query = query.or(`account_name.ilike.%${searchTerm}%,owner_name.ilike.%${searchTerm}%,hq_country.ilike.%${searchTerm}%,sales_territory.ilike.%${searchTerm}%,expansion_tier.ilike.%${searchTerm}%,initial_sale_tier.ilike.%${searchTerm}%,ultimate_parent_name.ilike.%${searchTerm}%`);
       }
 
       // Apply filters
-      if (filters.account_type) {
-        query = query.eq('account_type', filters.account_type as string);
-      }
-      if (filters.industry) {
-        query = query.eq('industry', filters.industry as string);
-      }
+      // DEPRECATED: account_type and industry filters - removed in v1.3.9
       if (filters.geo) {
         query = query.eq('geo', filters.geo as string);
       }
@@ -311,8 +293,7 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
       // Apply sorting at database level
       const ascending = sortDirection === 'asc';
       if (sortField === 'account_name' || sortField === 'owner_name' || 
-          sortField === 'sales_territory' || sortField === 'account_type' || 
-          sortField === 'industry') {
+          sortField === 'sales_territory') {
         query = query.order(sortField as string, { ascending, nullsFirst: false });
       } else if (sortField === 'employees' || sortField === 'arr' || 
                  sortField === 'calculated_atr' || sortField === 'cre_count' ||
@@ -542,24 +523,7 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                       {getSortIcon('sales_territory')}
                     </div>
                   </TableHead>
-                  <TableHead 
-                    className="cursor-pointer hover:bg-muted/50 select-none"
-                    onClick={() => handleSort('account_type')}
-                  >
-                    <div className="flex items-center gap-1">
-                      Type
-                      {getSortIcon('account_type')}
-                    </div>
-                  </TableHead>
-                  <TableHead 
-                    className="cursor-pointer hover:bg-muted/50 select-none"
-                    onClick={() => handleSort('industry')}
-                  >
-                    <div className="flex items-center gap-1">
-                      Industry
-                      {getSortIcon('industry')}
-                    </div>
-                  </TableHead>
+                  {/* DEPRECATED: account_type and industry columns - removed in v1.3.9 */}
                   <TableHead 
                     className="cursor-pointer hover:bg-muted/50 select-none"
                     onClick={() => handleSort('employees')}
@@ -767,16 +731,7 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                           {!account.sales_territory && !account.geo && '-'}
                         </div>
                       </TableCell>
-                      <TableCell>
-                        {account.account_type ? (
-                          <Badge 
-                            variant={account.account_type === 'Enterprise' ? 'default' : 'outline'}
-                          >
-                            {account.account_type}
-                          </Badge>
-                        ) : '-'}
-                      </TableCell>
-                      <TableCell>{account.industry || '-'}</TableCell>
+                      {/* DEPRECATED: account_type and industry cells - removed in v1.3.9 */}
                       <TableCell>{formatEmployees(account.employees)}</TableCell>
                       <TableCell className="font-medium">
                         {formatCurrency(account.arr)}

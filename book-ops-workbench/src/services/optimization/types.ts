@@ -6,6 +6,7 @@
  */
 
 import type { PriorityConfig } from '@/config/priorityRegistry';
+import type { BalanceIntensity } from '@/_domain';
 
 // =============================================================================
 // Configuration Types (from database JSONB columns)
@@ -43,16 +44,21 @@ export interface LPBalanceConfig {
   pipeline_min?: number;      // Absolute minimum Pipeline per rep
   pipeline_max?: number;      // Absolute maximum Pipeline per rep
   pipeline_variance?: number; // Variance band
+  /** Balance intensity: how aggressively to enforce balance vs continuity @see MASTER_LOGIC.mdc §11.3.1 */
+  balance_intensity?: BalanceIntensity;
 }
 
 /**
  * Hard constraint toggles
+ * 
+ * NOTE: capacity_hard_cap_enabled removed - Big-M penalty system now handles
+ * capacity symmetrically via soft penalties for both over and under allocation.
+ * @see MASTER_LOGIC.mdc §11.3 - Symmetric balance constraints
  */
 export interface LPConstraintsConfig {
   strategic_pool_enabled: boolean;
   locked_accounts_enabled: boolean;
   parent_child_linking_enabled: boolean;
-  capacity_hard_cap_enabled: boolean;
 }
 
 /**
@@ -108,11 +114,14 @@ export interface LPTeamParams {
 
 /**
  * HiGHS solver configuration
+ * 
+ * NOTE: feasibility_penalty removed - Big-M penalty system now handles
+ * capacity overflow symmetrically via soft penalties.
+ * @see MASTER_LOGIC.mdc §11.3 - Symmetric balance constraints
  */
 export interface LPSolverParams {
   timeout_seconds: number;
   tie_break_method: 'rank_based' | 'random';
-  feasibility_penalty: number;  // Large penalty for capacity overflow (1000)
   log_level: 'silent' | 'info' | 'debug';
   use_simplified_model?: boolean;  // Skip Big-M penalty system for numerical stability (default: false)
 }
@@ -300,6 +309,10 @@ export interface SlackBound {
 
 /**
  * Complete LP problem for HiGHS
+ * 
+ * NOTE: feasibilitySlacks removed - Big-M penalty system now handles
+ * capacity overflow symmetrically via soft penalties.
+ * @see MASTER_LOGIC.mdc §11.3 - Symmetric balance constraints
  */
 export interface LPProblem {
   // Decision variables (binary)
@@ -307,7 +320,6 @@ export interface LPProblem {
 
   // Slack variables (continuous)
   balanceSlacks: BalanceSlack[];
-  feasibilitySlacks: { repId: string; name: string }[];
 
   // All slack variable bounds (including Big-M penalty slacks)
   slackBounds: SlackBound[];
@@ -454,11 +466,113 @@ export interface LPSolveResult {
 }
 
 // =============================================================================
+// Telemetry Types
+// =============================================================================
+
+/**
+ * Error categories for optimization run failures
+ * @see MASTER_LOGIC.mdc §14.3.6
+ */
+export type OptimizationErrorCategory = 
+  | 'data_validation'    // Bad input data
+  | 'solver_timeout'     // HiGHS timeout
+  | 'solver_infeasible'  // No solution exists
+  | 'solver_crash'       // WASM memory error
+  | 'network'            // Cloud Run unreachable
+  | 'unknown';           // Uncategorized error
+
+/**
+ * Configuration snapshot stored with each optimization run
+ * @see MASTER_LOGIC.mdc §14.3.2
+ */
+export interface OptimizationWeightsSnapshot {
+  objectives: {
+    wC: number;  // Continuity weight
+    wG: number;  // Geography weight
+    wT: number;  // Team alignment weight
+  };
+  balance: {
+    arr_penalty: number;
+    atr_penalty: number;
+    pipeline_penalty: number;
+  };
+  intensity_multiplier: number;
+}
+
+/**
+ * Telemetry record for optimization runs
+ * Captures comprehensive data about every optimization run for analysis.
+ * 
+ * @see MASTER_LOGIC.mdc §14 - Optimization Telemetry
+ */
+export interface OptimizationRunRecord {
+  // Run context
+  build_id: string;
+  config_id?: string;  // FK to assignment_configuration
+  assignment_type: 'customer' | 'prospect';
+  engine_type: 'waterfall' | 'relaxed_optimization';
+  model_version: string;
+  
+  // Config snapshot (for historical analysis)
+  weights_snapshot: OptimizationWeightsSnapshot;
+  balance_intensity?: string;
+  priority_config_snapshot?: unknown[];
+  
+  // Problem size
+  num_accounts: number;
+  num_reps: number;
+  num_locked_accounts?: number;
+  num_strategic_accounts?: number;
+  num_variables?: number;      // LP only
+  num_constraints?: number;    // LP only
+  lp_size_kb?: number;         // LP only
+  
+  // Solver performance
+  solver_type?: 'highs-wasm' | 'cloud-run' | 'glpk';  // null for waterfall
+  solver_status: 'optimal' | 'feasible' | 'infeasible' | 'timeout' | 'error' | 'complete';
+  solve_time_ms: number;
+  objective_value?: number;    // LP only
+  
+  // Success metrics (all optional - waterfall may not have all)
+  // Balance
+  arr_variance_percent?: number;
+  atr_variance_percent?: number;
+  pipeline_variance_percent?: number;
+  max_overload_percent?: number;
+  
+  // Continuity
+  continuity_rate?: number;
+  high_value_continuity_rate?: number;
+  arr_stayed_percent?: number;
+  
+  // Geography
+  exact_geo_match_rate?: number;
+  sibling_geo_match_rate?: number;
+  cross_region_rate?: number;
+  
+  // Team alignment
+  exact_tier_match_rate?: number;
+  one_level_mismatch_rate?: number;
+  
+  // Feasibility
+  feasibility_slack_total?: number;
+  reps_over_capacity?: number;
+  
+  // Error handling
+  warnings?: string[];
+  error_message?: string;
+  error_category?: OptimizationErrorCategory;
+}
+
+// =============================================================================
 // Engine Types
 // =============================================================================
 
 /**
  * Progress callback for UI updates
+ * 
+ * Extended to provide better transparency for long-running optimizations.
+ * @see MASTER_LOGIC.mdc §11.4 (LP Progress Reporting)
  */
 export interface LPProgress {
   stage: 'loading' | 'preprocessing' | 'building' | 'solving' | 'postprocessing' | 'complete' | 'error';
@@ -471,6 +585,28 @@ export interface LPProgress {
   constraintsBuilt?: number;
   totalConstraints?: number;
   solveIteration?: number;
+  
+  // Problem complexity indicators (for transparency during long solves)
+  problemSize?: {
+    numVariables: number;
+    numConstraints: number;
+    lpSizeKB: number;
+    estimatedTimeMinutes?: number;  // Based on historical data
+  };
+  
+  // Solver activity (for heartbeat during solving stage)
+  solverActivity?: {
+    solverType: 'cloud-run' | 'highs-wasm' | 'glpk';
+    startedAt: number;  // timestamp
+    lastHeartbeat?: number;  // timestamp of last activity
+  };
+  
+  // Batch progress (when problem is split)
+  batchInfo?: {
+    currentBatch: number;
+    totalBatches: number;
+    batchType: 'customer' | 'prospect';
+  };
 }
 
 export type LPProgressCallback = (progress: LPProgress) => void;
@@ -539,8 +675,8 @@ export const DEFAULT_LP_BALANCE_CONFIG: LPBalanceConfig = {
 export const DEFAULT_LP_CONSTRAINTS: LPConstraintsConfig = {
   strategic_pool_enabled: true,
   locked_accounts_enabled: true,
-  parent_child_linking_enabled: true,
-  capacity_hard_cap_enabled: true
+  parent_child_linking_enabled: true
+  // NOTE: capacity_hard_cap_enabled removed - Big-M handles capacity symmetrically
 };
 
 export const DEFAULT_LP_STABILITY_CONFIG: LPStabilityConfig = {
@@ -594,8 +730,8 @@ export const DEFAULT_LP_TEAM_PARAMS: LPTeamParams = {
 export const DEFAULT_LP_SOLVER_PARAMS: LPSolverParams = {
   timeout_seconds: 60,
   tie_break_method: 'rank_based',
-  feasibility_penalty: 10,  // Reduced from 1000 for numerical stability (still >> assignment scores of 0.1-1.0)
   log_level: 'info'
+  // NOTE: feasibility_penalty removed - Big-M handles capacity overflow symmetrically
 };
 
 /**
@@ -667,8 +803,7 @@ export interface SalesRep {
   rep_id: string;
   name: string;
   region: string | null;
-  sub_region: string | null;
-  is_renewal_specialist: boolean | null;
+  // DEPRECATED: sub_region, is_renewal_specialist - removed in v1.3.9
   is_strategic_rep: boolean;
   is_active: boolean | null;
   include_in_assignments: boolean | null;

@@ -1,5 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
-import { getAccountARR, getAccountATR, classifyTeamTier, isRenewalOpportunity, getOpportunityPipelineValue, isParentAccount, calculateGeoMatchScore, SALES_TOOLS_REP_ID, SALES_TOOLS_REP_NAME } from '@/_domain';
+import { getAccountARR, getAccountATR, classifyTeamTier, isRenewalOpportunity, getOpportunityPipelineValue, isParentAccount, calculateGeoMatchScore, SALES_TOOLS_REP_ID, SALES_TOOLS_REP_NAME, getValidRepIdsForContinuity, isEligibleForContinuityTracking, GEO_MATCH_SCORES } from '@/_domain';
 import { getFiscalQuarter, isCurrentFiscalYear } from '@/utils/fiscalYearCalculations';
 import { calculateEnhancedRepMetrics, type EnhancedRepMetrics } from '@/utils/enhancedRepMetrics';
 import type {
@@ -13,7 +13,8 @@ import type {
   MetricsSnapshot,
   MetricsComparison,
   BalanceMetricsDetail,
-  RepLoadDistribution
+  RepLoadDistribution,
+  ContinuityMetrics
 } from '@/types/analytics';
 import { ARR_BUCKETS, GEO_SCORE_WEIGHTS, TEAM_ALIGNMENT_WEIGHTS } from '@/types/analytics';
 
@@ -403,12 +404,13 @@ class BuildDataService {
       const prospectParentIds = new Set(prospectAccounts.map(a => a.sfdc_account_id));
       
       // Calculate child account breakdowns
+      // Child accounts have ultimate_parent_id pointing to their parent's sfdc_account_id
       const childAccounts = accounts.filter(a => !a.is_parent);
       const childCustomers = childAccounts.filter(a => 
-        a.parent_id && customerParentIds.has(a.parent_id)
+        a.ultimate_parent_id && customerParentIds.has(a.ultimate_parent_id)
       ).length;
       const childProspects = childAccounts.filter(a => 
-        a.parent_id && prospectParentIds.has(a.parent_id)
+        a.ultimate_parent_id && prospectParentIds.has(a.ultimate_parent_id)
       ).length;
       
       const summary: BuildDataSummary = {
@@ -661,7 +663,7 @@ class BuildDataService {
         });
       });
 
-      // Calculate enhanced metrics for territory balancing
+      // Calculate enhanced metrics for book balancing
       const enhancedMetrics: EnhancedRepMetrics[] = salesReps.map(rep => 
         calculateEnhancedRepMetrics(rep, accounts, opportunities)
       );
@@ -831,26 +833,77 @@ class BuildDataService {
   }
 
   /**
-   * Calculate Continuity Score - % of accounts staying with same owner
-   * For "before" state, this is 100% (original owners)
+   * Calculate Continuity Metrics - full breakdown with counts for UI display
+   * 
+   * IMPORTANT: Only counts accounts whose original owner is in the current reps list.
+   * Accounts whose owner left the company (not in salesReps) or is a backfill source
+   * are excluded from the denominator - they can never be "retained".
+   * 
+   * This prevents artificial deflation of the continuity percentage.
+   * 
+   * For "before" state, this is 100% (all eligible accounts retained)
    * For "after" state, it's the % where new_owner_id === owner_id
+   * 
+   * @see _domain/calculations.ts - getValidRepIdsForContinuity, isEligibleForContinuityTracking
+   * @see MASTER_LOGIC.mdc §13.7.1 - Continuity Metrics Structure
    */
-  private calculateContinuityScore(accounts: any[], useProposed: boolean): number {
+  private calculateContinuityMetrics(accounts: any[], salesReps: any[], useProposed: boolean): ContinuityMetrics {
     const parentAccounts = accounts.filter(a => a.is_parent);
-    if (parentAccounts.length === 0) return 0;
     
-    if (!useProposed) {
-      // Before state: all accounts are with original owner = 100%
-      return 1;
+    if (parentAccounts.length === 0) {
+      return { score: 0, retainedCount: 0, changedCount: 0, eligibleCount: 0, excludedCount: 0 };
     }
     
-    // After state: count accounts where new_owner_id matches owner_id
-    const retained = parentAccounts.filter(a => {
+    // Build set of valid rep IDs (excludes backfill sources who are leaving)
+    const validRepIds = getValidRepIdsForContinuity(salesReps);
+    
+    // Filter to only accounts whose original owner is eligible for continuity tracking
+    const eligibleAccounts = parentAccounts.filter(a => 
+      isEligibleForContinuityTracking(a.owner_id, validRepIds)
+    );
+    
+    const excludedCount = parentAccounts.length - eligibleAccounts.length;
+    
+    // If no eligible accounts, return score=1 (no relationships to lose)
+    if (eligibleAccounts.length === 0) {
+      return { score: 1, retainedCount: 0, changedCount: 0, eligibleCount: 0, excludedCount };
+    }
+    
+    if (!useProposed) {
+      // Before state: all eligible accounts are with original owner = 100%
+      return {
+        score: 1,
+        retainedCount: eligibleAccounts.length,
+        changedCount: 0,
+        eligibleCount: eligibleAccounts.length,
+        excludedCount
+      };
+    }
+    
+    // After state: count eligible accounts where new_owner_id matches owner_id
+    const retainedCount = eligibleAccounts.filter(a => {
       if (!a.new_owner_id) return true; // No change = retained
       return a.new_owner_id === a.owner_id;
     }).length;
     
-    return retained / parentAccounts.length;
+    const changedCount = eligibleAccounts.length - retainedCount;
+    const score = retainedCount / eligibleAccounts.length;
+    
+    return {
+      score,
+      retainedCount,
+      changedCount,
+      eligibleCount: eligibleAccounts.length,
+      excludedCount
+    };
+  }
+
+  /**
+   * Calculate Continuity Score - backward compatible wrapper
+   * @see calculateContinuityMetrics for full implementation
+   */
+  private calculateContinuityScore(accounts: any[], salesReps: any[], useProposed: boolean): number {
+    return this.calculateContinuityMetrics(accounts, salesReps, useProposed).score;
   }
 
   /**
@@ -1005,8 +1058,8 @@ class BuildDataService {
    * - Cross-region (0.20): Different parent regions
    *
    * For dashboard purposes:
-   * - Score >= 0.40 (Global fallback or better) = Aligned
-   * - Score < 0.40 (cross-region) = Misaligned
+   * - Score >= GEO_MATCH_SCORES.GLOBAL_FALLBACK (0.40) = Aligned
+   * - Score < GEO_MATCH_SCORES.GLOBAL_FALLBACK = Misaligned
    *
    * @param accounts - All accounts
    * @param salesReps - All sales reps
@@ -1085,9 +1138,9 @@ class BuildDataService {
       const geoScore = calculateGeoMatchScore(mappedAccountRegion, repRegionRaw);
 
       // Step 3: Determine alignment based on score
-      // Score >= 0.40 means at least Global fallback level (acceptable)
-      // Score < 0.40 means cross-region mismatch (not acceptable)
-      if (geoScore >= 0.40) {
+      // Score >= GLOBAL_FALLBACK means at least Global fallback level (acceptable)
+      // Score < GLOBAL_FALLBACK means cross-region mismatch (not acceptable)
+      if (geoScore >= GEO_MATCH_SCORES.GLOBAL_FALLBACK) {
         aligned++;
         regionData.aligned++;
       } else {
@@ -1332,10 +1385,14 @@ class BuildDataService {
     const avgTarget = target || balanceDetail.targetLoad;
     const loads = balanceDetail.distribution.map(d => d.arrLoad);
 
+    // Get full continuity metrics with counts
+    const continuityMetrics = this.calculateContinuityMetrics(accounts, salesReps, useProposed);
+
     return {
       balanceScore: balanceDetail.score,
       balanceDetail,
-      continuityScore: this.calculateContinuityScore(accounts, useProposed),
+      continuityScore: continuityMetrics.score,
+      continuityMetrics,
       geographyScore: this.calculateGeographyScore(accounts, salesReps, useProposed, territoryMappings),
       teamAlignmentScore: this.calculateTeamAlignmentScore(accounts, salesReps, useProposed),
       capacityUtilization: this.calculateCapacityUtilization(loads, avgTarget)
@@ -1454,6 +1511,7 @@ class BuildDataService {
           repName: rep.name,
           region: rep.region || 'Unknown',
           ...metrics,
+          isStrategicRep: rep.is_strategic_rep ?? false,
         };
       });
 

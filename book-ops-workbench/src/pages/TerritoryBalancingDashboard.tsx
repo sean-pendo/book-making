@@ -20,7 +20,7 @@ import {
   GainsLossesChart,
   BeforeAfterTab,
 } from '@/components/balancing';
-import { RepDistributionChart, type ThresholdConfig } from '@/components/analytics/RepDistributionChart';
+import { RepDistributionChart, type ThresholdConfig, type MetricThresholds } from '@/components/analytics/RepDistributionChart';
 import { SalesRepsTable } from '@/components/data-tables/SalesRepsTable';
 
 import type { RepDistributionData } from '@/types/analytics';
@@ -97,9 +97,12 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
     const childCustomers = buildDataSummary?.accounts.childCustomers || 0;
     const childProspects = buildDataSummary?.accounts.childProspects || 0;
     const activeReps = data.repMetrics.length;
+    const strategicReps = data.repMetrics.filter(r => r.is_strategic_rep).length;
     const totalParentAccounts = parentCustomers + parentProspects;
+    const assignedAccounts = data.assignedAccountsCount;
+    const unassignedAccounts = totalParentAccounts - assignedAccounts;
     const coveragePercent = totalParentAccounts > 0
-      ? (data.assignedAccountsCount / totalParentAccounts) * 100
+      ? (assignedAccounts / totalParentAccounts) * 100
       : 0;
     
     return {
@@ -108,7 +111,10 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
       childCustomers,
       childProspects,
       activeReps,
+      strategicReps,
       coveragePercent,
+      assignedAccounts,
+      unassignedAccounts,
     };
   }, [data, buildDataSummary]);
 
@@ -122,10 +128,17 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
       region: rep.region || 'Unknown',
       arr: rep.customerARR,
       atr: rep.customerATR,
-      pipeline: 0, // Not available in current data structure
+      pipeline: rep.prospectNetARR ?? 0, // Use prospectNetARR for pipeline (sum of net_arr from prospect opportunities)
       customerAccounts: rep.customerAccounts,
       prospectAccounts: rep.prospectAccounts,
       totalAccounts: rep.customerAccounts + rep.prospectAccounts,
+      // Parent/child breakdown not available in this context, use 0
+      parentCustomers: rep.customerAccounts,
+      childCustomers: 0,
+      parentProspects: rep.prospectAccounts,
+      childProspects: 0,
+      // Strategic rep flag for purple bar coloring
+      isStrategicRep: rep.is_strategic_rep ?? false,
     }));
   }, [data]);
 
@@ -163,23 +176,48 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
     });
   }, [data]);
 
-  // Prepare threshold config for chart
+  // Prepare threshold configs for each metric
   // - min/max: Target zone bounds (target ± variance) - green shaded area
   // - absoluteMin/absoluteMax: Hard limits - blue/red dotted lines
-  const arrThresholds: ThresholdConfig | undefined = useMemo(() => {
+  const metricThresholds = useMemo(() => {
     if (!thresholds) return undefined;
     
-    const targetArr = thresholds.customer_target_arr;
     const variancePercent = thresholds.capacity_variance_percent || 10;
     
-    return {
-      // Target zone (green shaded area)
-      min: targetArr ? targetArr * (1 - variancePercent / 100) : undefined,
-      max: targetArr ? targetArr * (1 + variancePercent / 100) : undefined,
+    // ARR thresholds (customer)
+    const targetArr = thresholds.customer_target_arr;
+    const arrConfig: ThresholdConfig | undefined = targetArr ? {
+      min: targetArr * (1 - variancePercent / 100),
+      max: targetArr * (1 + variancePercent / 100),
       target: targetArr,
-      // Absolute limits (hard floor/ceiling lines)
       absoluteMin: thresholds.customer_min_arr,
       absoluteMax: thresholds.customer_max_arr,
+    } : undefined;
+    
+    // ATR thresholds (if available, use customer ATR metrics)
+    const targetAtr = thresholds.customer_target_atr;
+    const atrConfig: ThresholdConfig | undefined = targetAtr ? {
+      min: targetAtr * (1 - variancePercent / 100),
+      max: targetAtr * (1 + variancePercent / 100),
+      target: targetAtr,
+      absoluteMin: thresholds.customer_min_atr,
+      absoluteMax: thresholds.customer_max_atr,
+    } : undefined;
+    
+    // Pipeline thresholds (prospect)
+    const targetPipeline = thresholds.prospect_target_arr;
+    const pipelineConfig: ThresholdConfig | undefined = targetPipeline ? {
+      min: targetPipeline * (1 - variancePercent / 100),
+      max: targetPipeline * (1 + variancePercent / 100),
+      target: targetPipeline,
+      absoluteMin: thresholds.prospect_min_arr,
+      absoluteMax: thresholds.prospect_max_arr,
+    } : undefined;
+    
+    return {
+      arr: arrConfig,
+      atr: atrConfig,
+      pipeline: pipelineConfig,
     };
   }, [thresholds]);
 
@@ -323,7 +361,10 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
             childCustomers={kpiData.childCustomers}
             childProspects={kpiData.childProspects}
             activeReps={kpiData.activeReps}
+            strategicReps={kpiData.strategicReps}
             coveragePercent={kpiData.coveragePercent}
+            assignedAccounts={kpiData.assignedAccounts}
+            unassignedAccounts={kpiData.unassignedAccounts}
             isLoading={isLoading}
           />
 
@@ -332,6 +373,7 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
             <BalancingSuccessMetrics
               buildId={buildId}
               continuityScore={analyticsMetrics?.lpMetrics?.continuityScore ?? 0}
+              continuityMetrics={analyticsMetrics?.lpMetrics?.continuityMetrics}
               geoAlignment={analyticsMetrics?.geoAlignment || null}
               isLoading={analyticsLoading}
             />
@@ -344,7 +386,7 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
               data={repDistributionData}
               allowedMetrics={['arr', 'atr', 'pipeline']}
               showStats
-              thresholds={arrThresholds}
+              metricThresholds={metricThresholds}
               showThresholdLegend
               className="card-elevated"
             />

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { SALES_TOOLS_ARR_THRESHOLD } from '@/_domain';
-import { Save, CheckCircle, MapPin, X, Loader2, Sparkles, Calculator, HelpCircle, Settings2, ChevronRight } from 'lucide-react';
+import { SALES_TOOLS_ARR_THRESHOLD, BALANCE_INTENSITY_PRESETS, BalanceIntensity } from '@/_domain';
+import { Save, CheckCircle, MapPin, X, Loader2, Sparkles, Calculator, HelpCircle, Settings2, ChevronRight, Scale, Info } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { supabase } from '@/integrations/supabase/client';
@@ -58,6 +59,8 @@ interface ConfigState {
   max_cre_per_rep: number;
   // Optimization model
   optimization_model: 'waterfall' | 'relaxed_optimization';
+  // Balance intensity: trade-off between continuity and balance @see MASTER_LOGIC.mdc §11.3.1
+  balance_intensity: BalanceIntensity;
   // Priority configuration
   assignment_mode: AssignmentMode;
   priority_config: PriorityConfig[];
@@ -93,10 +96,11 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
     territory_mappings: {},
     max_cre_per_rep: 3,
     optimization_model: 'waterfall',  // Default: waterfall optimization
+    balance_intensity: 'NORMAL',  // Default: balanced trade-off @see MASTER_LOGIC.mdc §11.3.1
     // Priority configuration
     assignment_mode: 'ENT',
     priority_config: getDefaultPriorityConfig('ENT'),
-    rs_arr_threshold: 25000,
+    rs_arr_threshold: SALES_TOOLS_ARR_THRESHOLD,
     is_custom_priority: false
   });
   
@@ -173,6 +177,7 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
             territory_mappings: (data.territory_mappings as Record<string, string>) || {},
             max_cre_per_rep: data.max_cre_per_rep || 3,
             optimization_model: ((data as any).optimization_model as 'waterfall' | 'relaxed_optimization') || 'waterfall',
+            balance_intensity: ((data as any).balance_intensity as BalanceIntensity) || 'NORMAL',
             // Priority configuration
             assignment_mode: savedMode,
             priority_config: savedPriorityConfig.length > 0 
@@ -683,6 +688,7 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         territory_mappings: config.territory_mappings,
         max_cre_per_rep: config.max_cre_per_rep,
         optimization_model: config.optimization_model,
+        balance_intensity: config.balance_intensity,
         // Priority configuration
         assignment_mode: config.assignment_mode,
         priority_config: config.priority_config,
@@ -765,6 +771,78 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         }}
         disabled={isSaving}
       />
+      
+      {/* Balance Intensity Slider */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Scale className="h-4 w-4" />
+                Balance Intensity
+              </CardTitle>
+              <CardDescription>
+                How aggressively balance is enforced vs. other assignment factors
+              </CardDescription>
+            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent side="left" className="max-w-xs p-3">
+                <p className="font-medium mb-2">What this controls:</p>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Scales the penalty for imbalanced ARR/ATR/Pipeline. Higher values prioritize even distribution over continuity, geography, and strategic pools.
+                </p>
+                {config.optimization_model === 'waterfall' && (
+                  <p className="text-xs text-amber-500 mt-2">
+                    Note: In waterfall mode, this only affects ARR balance.
+                  </p>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Current selection display */}
+          <div className="text-center">
+            <span className="text-lg font-semibold">
+              {BALANCE_INTENSITY_PRESETS[config.balance_intensity].label}
+            </span>
+            <span className="text-sm text-muted-foreground ml-2">
+              ({BALANCE_INTENSITY_PRESETS[config.balance_intensity].multiplier}x)
+            </span>
+            <p className="text-sm text-muted-foreground mt-1">
+              {BALANCE_INTENSITY_PRESETS[config.balance_intensity].description}
+            </p>
+          </div>
+          
+          {/* 5-point slider */}
+          <div className="px-2">
+            <Slider
+              value={[(['VERY_LIGHT', 'LIGHT', 'NORMAL', 'HEAVY', 'VERY_HEAVY'] as const).indexOf(config.balance_intensity)]}
+              onValueChange={([value]) => {
+                const intensities: BalanceIntensity[] = ['VERY_LIGHT', 'LIGHT', 'NORMAL', 'HEAVY', 'VERY_HEAVY'];
+                setConfig(prev => ({ ...prev, balance_intensity: intensities[value] }));
+                setIsDirty(true);
+                setShowSuccess(false);
+              }}
+              min={0}
+              max={4}
+              step={1}
+              disabled={isSaving}
+              className="w-full"
+            />
+            
+            {/* Labels under slider */}
+            <div className="flex justify-between mt-2 text-xs text-muted-foreground">
+              <span>Preserve Fit</span>
+              <span>Balanced</span>
+              <span>Force Even</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
       
       {/* Quick Actions Bar - Calculate Thresholds at top */}
       <Card className="border-primary/30 bg-gradient-to-r from-primary/5 to-primary/10">
@@ -1570,7 +1648,7 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
 
       {/* Priority Configuration Dialog */}
       <Dialog open={showPriorityConfig} onOpenChange={setShowPriorityConfig}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" hideCloseButton>
           <PriorityWaterfallConfig
             buildId={buildId}
             currentMode={config.assignment_mode}

@@ -1,7 +1,7 @@
 # Book Builder - Business Logic & System Reference
 
-> **Version**: 1.3.7  
-> **Last Updated**: 2025-12-15  
+> **Version**: 1.3.10  
+> **Last Updated**: 2025-12-17  
 > **Status**: ACTIVE - Audited and consolidated  
 > **Purpose**: Single source of truth (SSOT) for all business rules
 
@@ -80,7 +80,101 @@
 
 ### Appendix
 - [Code Locations](#appendix-code-locations)
+- [SSOT Workflow](#ssot-workflow)
 - [Maintenance Rules](#maintenance-rules)
+
+---
+
+# 🚨 SSOT WORKFLOW - READ THIS FIRST
+
+> **This section explains HOW to use this document. Read before making any changes.**
+
+## The SSOT Flow
+
+**When adding or modifying ANY business logic, follow this exact order:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 1: MASTER_LOGIC.mdc  →  Document the rule/formula FIRST  │
+│  STEP 2: _domain/*.ts      →  Implement in the appropriate file │
+│  STEP 3: Consumer files    →  Import from @/_domain and use     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**This order is NON-NEGOTIABLE.** Documentation-first prevents logic drift.
+
+## Why Documentation First?
+
+| Problem | Without SSOT | With SSOT |
+|---------|--------------|-----------|
+| Where's the formula? | Scattered in 5 files | One place: MASTER_LOGIC.mdc |
+| What's the threshold? | Magic number `25000` | `SALES_TOOLS_ARR_THRESHOLD` with docs |
+| Why this value? | No idea, someone hardcoded it | Documented rationale in §X.X |
+| Need to change it? | Hunt through codebase | Update docs → update `_domain/` → done |
+
+## Pre-Implementation Checklist
+
+Before writing ANY business logic code:
+
+- [ ] **Is this business logic?** (calculations, thresholds, classification rules, display conditions)
+- [ ] **What section does it belong in?** (Find the right §X.X or create new section)
+- [ ] **Did I document it FIRST?** (Add to this file before coding)
+- [ ] **Which `_domain/*.ts` file?** (calculations, tiers, geography, constants, normalization)
+- [ ] **Added `@see MASTER_LOGIC.mdc §X.X` JSDoc?** (Cross-reference back to docs)
+
+## Example: Adding a New Threshold
+
+**WRONG ORDER (causes drift):**
+```
+1. ❌ Add `const MAX_ACCOUNTS = 3000` to lpProblemBuilder.ts
+2. ❌ Later: "Oh I should document this..."
+3. ❌ Docs never get updated, magic number lives forever
+```
+
+**CORRECT ORDER (SSOT flow):**
+```
+1. ✅ Add to MASTER_LOGIC.mdc §11.10:
+   "LP_SCALE_LIMITS.MAX_ACCOUNTS_FOR_GLOBAL_LP = 8000"
+   
+2. ✅ Add to _domain/constants.ts:
+   /** @see MASTER_LOGIC.mdc §11.10 */
+   export const LP_SCALE_LIMITS = { MAX_ACCOUNTS_FOR_GLOBAL_LP: 8000 }
+   
+3. ✅ Import in lpProblemBuilder.ts:
+   import { LP_SCALE_LIMITS } from '@/_domain';
+```
+
+## Changelog Labeling
+
+When following SSOT flow, prefix changelog entries with `SSOT:`:
+
+```markdown
+## [2025-12-16] - SSOT: LP Scale Limits
+
+**Changes:**
+1. **Updated MASTER_LOGIC.mdc §11.10** - Documented scale limits
+2. **Added LP_SCALE_LIMITS to constants.ts** - Implementation
+3. **Updated pureOptimizationEngine.ts** - Now imports from @/_domain
+```
+
+## What Belongs in This Document
+
+| Category | Examples | Where in Doc |
+|----------|----------|--------------|
+| **Formulas** | ARR calculation, geo scoring | §2, §4.3, §11.4 |
+| **Thresholds** | $25K Sales Tools, 90 days continuity | Quick Reference, §10.8 |
+| **Classification rules** | Customer vs Prospect, Team Tiers | §3, §5 |
+| **Business rules** | Priority order, stability locks | §10, §11.5 |
+| **Display rules** | When to show Sales Tools in analytics | §13 |
+| **Solver parameters** | LP penalties, scale limits | §11.3, §11.10 |
+
+## What Does NOT Belong Here
+
+- Implementation details (how React renders something)
+- API contracts (Supabase queries)
+- UI layout decisions
+- Error handling patterns
+- Performance optimizations (unless they affect business logic)
 
 ---
 
@@ -159,23 +253,69 @@ ATR = SUM(opportunities.available_to_renew)
       WHERE opportunity_type = 'Renewals'
 ```
 
+**Hierarchy Rollup**: 
+- For **parent accounts**: ATR = direct ATR + SUM(child ATR)
+- Child account ATR rolls up to the parent, similar to how `hierarchy_bookings_arr_converted` works for ARR
+- This ensures parent accounts reflect the total ATR of the entire hierarchy
+- Implemented in database function `recalculate_account_values_db()`
+
 **Critical**: 
 - Only include opportunities where `opportunity_type` (case-insensitive) equals "Renewals"
 - Other opportunity types (New Business, Expansion, etc.) do NOT count toward ATR
 - ATR is about timing, not risk
 - **Constraint**: ATR ≤ ARR (ATR is a subset of existing customer revenue - renewal value cannot exceed total revenue)
 
+### 2.2.1 Net ARR on Renewal Opportunities
+
+**Rule**: Net ARR on Renewal opportunities is **intentionally ignored** for book balancing.
+
+**Why it's ignored:**
+
+| Scenario | Net ARR Value | Why We Ignore It |
+|----------|---------------|------------------|
+| **Expansion bundled in renewal** | +$69K | Customers are balanced on ATR, not pipeline growth |
+| **Contraction/downsell** | -$299K | Risk is already tracked via CRE status |
+
+**Business Rationale (per Nina Maswadeh, 2025-12-18):**
+- "When evaluating customers, we only look at ATR. We are not looking at opp Net ARR when assessing who gets what."
+- "When looking at prospects, we look at the Net ARR"
+- Contraction risk is "caught with CREs" - already factored into `cre_count`
+
+**What each opportunity type contributes:**
+
+| Opportunity Type | ATR Calculation | Pipeline Calculation |
+|------------------|-----------------|----------------------|
+| **Renewals** | ✅ `available_to_renew` | ❌ Excluded (even if net_arr > 0) |
+| **Expansion** | ❌ Not a renewal | ✅ `net_arr` included |
+| **New Subscription** | ❌ Not a renewal | ✅ `net_arr` included |
+
+**Key principle:** 
+- **Customers** = balanced on ATR (timing of renewals)
+- **Prospects** = balanced on Pipeline (potential new revenue)
+- **Risk** = tracked via CRE count (separate from revenue metrics)
+
 ### 2.3 Pipeline Calculation
 
-**Rule**: Pipeline = SUM of `net_arr` from prospect opportunities AND expansion opportunities on customer accounts
+**Impl**: `calculations.ts` - `isPipelineOpportunity()`, `getOpportunityPipelineValue()`, `calculatePipelineWithExpansion()`
+
+**Rule**: Pipeline = SUM of `net_arr` from:
+1. **All opportunities** from prospect accounts (any opportunity_type)
+2. **Expansion + New Subscription** opportunities from customer accounts
 
 ```typescript
 Pipeline = SUM(opportunities.net_arr)
            WHERE account.is_customer = false
-           OR opportunity_type = 'Expansion'
+           OR opportunity_type IN ('Expansion', 'New Subscription')
 ```
 
-**Why include Expansion?** Customer accounts with expansion opportunities represent real pipeline value that should be balanced across reps.
+| Opportunity Type | Prospect Account | Customer Account |
+|-----------------|------------------|------------------|
+| Expansion | ✅ Pipeline | ✅ Pipeline |
+| New Subscription | ✅ Pipeline | ✅ Pipeline |
+| Renewals | ✅ Pipeline | ❌ ATR (not pipeline) |
+| (Blanks/Other) | ✅ Pipeline | ❌ Exclude |
+
+**Why include Expansion + New Subscription from customers?** These represent real new revenue pipeline that should be balanced across reps. Renewals on customer accounts are already counted in ATR.
 
 **Fallback**: If `net_arr` is null, use `amount` field.
 
@@ -557,7 +697,7 @@ Dashboards group accounts by manager hierarchy:
 | `include_in_assignments` | `sales_reps` | TRUE = Rep participates in assignment engine |
 | `is_strategic_rep` | `sales_reps` | TRUE = Handles strategic accounts only |
 | `is_manager` | `sales_reps` | TRUE = FLM/SLM role, may not carry accounts |
-| `is_renewal_specialist` | `sales_reps` | TRUE = Focuses on renewals, different capacity |
+| `is_renewal_specialist` | `sales_reps` | DEPRECATED - Removed in v1.3.9 |
 | `is_backfill_source` | `sales_reps` | TRUE = Rep is leaving, excluded from assignments |
 | `is_backfill_target` | `sales_reps` | TRUE = Rep was created as backfill for leaving Rep |
 | `backfill_target_rep_id` | `sales_reps` | Links leaving Rep to their backfill Rep |
@@ -997,17 +1137,16 @@ SUBJECT TO:
   // 1. ASSIGNMENT CONSTRAINT: Each account assigned to exactly one rep
   ∀i: Σⱼ x_ij = 1
 
-  // 2. CAPACITY CONSTRAINT: Rep cannot exceed hard ARR cap
-  ∀j: Σᵢ (ARR_i × x_ij) ≤ hardCapARR_j
-
-  // 3. STABILITY LOCK: Locked accounts must stay with current owner
+  // 2. STABILITY LOCK: Locked accounts must stay with current owner
   ∀(i,j) where locked: x_ij = 1 (for current owner j)
   ∀(i,k) where locked: x_ik = 0 (for all other reps k ≠ j)
 
-  // 4. BALANCE CONSTRAINT (with 3-tier slack):
+  // 3. BALANCE CONSTRAINT (with 3-tier slack) - SYMMETRIC FOR OVER AND UNDER:
+  // This handles both over-allocation AND under-allocation identically via soft penalties.
+  // No hard capacity constraint needed - BigM zone penalizes extreme deviations.
   ∀j: Σᵢ (metric_i × x_ij) = target_j + α_over - α_under + β_over - β_under + M_over - M_under
 
-  // 5. PARENT-CHILD CONSTRAINT: Same owner for parent and children
+  // 4. PARENT-CHILD CONSTRAINT: Same owner for parent and children
   // This is an implicit priority - the optimizer tries to keep parent/child together
   ∀(parent p, child c): x_pj = x_cj for all j
 
@@ -1053,32 +1192,36 @@ Where weights are normalized to sum to 1.0
 
 **Impl**: `optimization/types.ts` - `DEFAULT_LP_BALANCE_CONFIG`
 
-| Metric | Variance Band | Penalty | Hard Cap |
-|--------|---------------|---------|----------|
-| ARR | ±10% | 0.5 | $3,000,000 |
-| ATR | ±15% | 0.3 | $750,000 |
-| Pipeline | ±15% | 0.4 | $1,000,000 |
+| Metric | Variance Band | Penalty | BigM Zone Boundary |
+|--------|---------------|---------|---------------------|
+| ARR | ±10% | 0.5 | $3,000,000 (soft) |
+| ATR | ±15% | 0.3 | $750,000 (soft) |
+| Pipeline | ±15% | 0.4 | $1,000,000 (soft) |
 
-### 11.3 Three-Tier Penalty System (Alpha, Beta, BigM)
+> **Note**: All limits are soft constraints via the BigM penalty system. Exceeding them incurs a steep penalty but is not mathematically forbidden. This ensures the solver always finds a feasible solution.
 
-Balance constraints use a **three-tier penalty system** to handle deviation from targets:
+### 11.3 Three-Tier Penalty System (Alpha, Beta, BigM) - SYMMETRIC
+
+Balance constraints use a **three-tier penalty system** to handle deviation from targets. This system is **symmetric** - both over-allocation (M+) and under-allocation (M-) are penalized identically.
+
+> **Design Note (December 2025)**: The hard capacity constraint was removed in favor of a fully symmetric Big-M system. Previously, over-allocation was forbidden (hard constraint) while under-allocation was only penalized (soft constraint). Now both directions use the same penalty mechanism, ensuring fair treatment of all deviations.
 
 ```
 actual_value = target + α_over - α_under + β_over - β_under + BigM_over - BigM_under
 ```
 
-| Zone | Variable | Penalty Weight (Normalized) | Description |
-|------|----------|----------------------------|-------------|
-| **Alpha (α)** | Within variance band | 0.001 | Small penalty - expected/acceptable deviation |
-| **Beta (β)** | Buffer zone | 0.01 | Medium penalty - undesirable but not catastrophic |
-| **BigM** | Beyond absolute limits | 0.1 | Large penalty - strongly discouraged |
+| Zone | Variable | Penalty Weight | Description |
+|------|----------|----------------|-------------|
+| **Alpha (α)** | Within variance band | 0.01 | Small penalty - expected/acceptable deviation |
+| **Beta (β)** | Buffer zone | 0.1 | Medium penalty - undesirable but not catastrophic |
+| **BigM** | Beyond absolute limits | 100.0 | Huge penalty - prevents any violation |
 
-> **Numerical Stability Note (December 2025)**: Penalty values are normalized to 0.001-0.1 range to avoid HiGHS WASM crashes. Original conceptual values (0.01, 1.0, 1000.0) caused coefficient magnitude mismatch with assignment scores (0.1-1.0 range), leading to solver instability. The relative ratios (1:10:100) are preserved.
+> **Big-M Fix (December 2025)**: BigM set to 100.0 to completely dominate assignment scores (0-110 range). Small accounts accumulating can otherwise outweigh penalties. At VERY_HEAVY intensity (25x), BigM penalty reaches 1250.0 per normalized unit, absolutely preventing any limit violation.
 
 **Why Three Tiers?**
 - **Alpha**: Allows the solver flexibility within the configured variance band (soft constraint). Penalty scales linearly the further you deviate from target.
 - **Beta**: Warns when approaching hard limits, but still feasible. Also uses linear penalty scaling.
-- **BigM**: Makes violations expensive → strongly discouraged but not mathematically forbidden (allows solver to find feasible solutions)
+- **BigM**: Makes violations expensive → strongly discouraged but not mathematically forbidden (allows solver to find feasible solutions even with locked accounts that push reps over limits)
 
 **Visual Representation**:
 ```
@@ -1098,6 +1241,57 @@ BigM: unbounded                               // But penalty makes it expensive
 ```
 
 **Implementation**: `lpProblemBuilder.ts` - `PENALTY` constant and `buildMetricPenaltyTerms()`
+
+> ⚠️ **Critical Implementation Note (December 2025)**: When building the LP problem string, penalty terms MUST be added to `objectiveTerms[]` BEFORE writing the objective line. The objective function should only be assembled AFTER all balance constraint loops have pushed their penalty terms. Writing the objective too early (before penalty terms are added) causes the solver to ignore balance constraints entirely.
+
+### 11.3.1 Balance Intensity Configuration
+
+**Impl**: `constants.ts` - `BALANCE_INTENSITY_PRESETS`, `getBalancePenaltyMultiplier()`
+
+**DB Column**: `assignment_configuration.balance_intensity` (TEXT, default 'NORMAL')
+
+Users can configure how aggressively the optimizer enforces balance constraints via a "Balance Intensity" slider. This controls the trade-off between:
+- **Assignment Fit** (continuity, geography, strategic pools, team alignment)
+- **Even Distribution** (balanced ARR/ATR/Pipeline/Tier across reps)
+
+Higher values increase balance penalty weights, causing the solver to prioritize even distribution over preserving existing account-rep relationships.
+
+| Intensity | Multiplier | Effect |
+|-----------|------------|--------|
+| Very Light | 0.1x | Preserves fit; balance rarely overrides other factors |
+| Light | 0.5x | Slight preference for balance |
+| Normal | 1.0x | Balanced trade-off (default) |
+| Heavy | 10.0x | Strong preference for even distribution |
+| Very Heavy | 100.0x | Forces even distribution; max limits are hard constraints |
+
+The multiplier is applied to all three penalty tiers (Alpha, Beta, BigM) for:
+- ARR balance
+- ATR balance (customers only)
+- Pipeline balance (prospects only)
+- Tier balance (Tier 1-4 distribution)
+
+**Formula**:
+```
+effective_penalty = LP_PENALTY.{ALPHA|BETA|BIG_M} × metric_weight × intensity_multiplier
+```
+
+**Example** (ARR with Heavy intensity):
+```
+Alpha penalty = 0.01  × 0.50 × 10.0 = 0.05
+Beta penalty  = 0.1   × 0.50 × 10.0 = 0.50
+BigM penalty  = 100.0 × 0.50 × 10.0 = 500.0
+```
+
+**Example** (Pipeline with Very Heavy intensity):
+```
+BigM penalty = 100.0 × 0.50 × 100.0 = 5000.0 per normalized unit
+```
+At this level, exceeding max limits by even 1x target costs 5000 penalty points,
+completely dominating any assignment scores (~0.1-1.0 per account).
+
+At "Very Heavy" (25x), the BigM penalty becomes **1250.0** - this is 10x larger than any possible assignment score (0-110 range), completely preventing any limit violation. The solver will leave accounts unassigned rather than violate max limits.
+
+**Note**: In waterfall mode, balance intensity only affects ARR penalties. ATR/Pipeline/Tier balance is only available in relaxed_optimization mode.
 
 ### 11.4 Scoring Functions
 
@@ -1302,34 +1496,65 @@ The optimization generates human-readable rationales for each assignment:
 
 **Highest-Scoring Display**: Even in relaxed mode, the rationale shows which factor scored highest for transparency.
 
-### 11.10 Scale Limits (HiGHS WASM)
+### 11.10 Scale Limits (Solver Routing)
 
-**Impl**: `_domain/constants.ts` - `LP_SCALE_LIMITS`, `pureOptimizationEngine.ts`
+**Impl**: `_domain/constants.ts` - `LP_SCALE_LIMITS`, `highsWrapper.ts`, `pureOptimizationEngine.ts`
 
-HiGHS WASM in the browser has practical limits on problem size:
+The solver routing system handles problems of varying sizes:
 
 | Limit | Value | Reason |
 |-------|-------|--------|
-| **MAX_ACCOUNTS_FOR_GLOBAL_LP** | 3,000 | Dense constraint matrix causes hangs |
-| **WARN_ACCOUNTS_THRESHOLD** | 2,000 | Performance warning threshold |
+| **MAX_ACCOUNTS_FOR_GLOBAL_LP** | 8,000 | Cloud Run native HiGHS handles large problems reliably |
+| **WARN_ACCOUNTS_THRESHOLD** | 3,000 | Performance warning threshold |
 
-**Why the limit exists:**
+**Why these limits:**
 - Each balance constraint (ARR, ATR, Tier 1-4) references ALL accounts
 - For N accounts and R reps, constraint matrix has ~N × R × 6 non-zeros
-- At 3000 accounts × 48 reps × 6 metrics = ~864K non-zeros
-- HiGHS WASM struggles with matrix operations at this scale
+- At 8000 accounts × 48 reps × 6 metrics = ~2.3M non-zeros
+- Testing showed Cloud Run native HiGHS handles this (~85s solve time)
 
 **What happens when exceeded:**
 ```
-Account count (8000) exceeds global LP limit (3000). Use waterfall mode for large builds.
+Account count (10000) exceeds global LP limit (8000). Use waterfall mode for large builds.
 ```
 
-**Fallback behavior:**
-- Global LP returns error with message to use waterfall
-- UI should detect this and offer waterfall mode
+**Routing behavior:**
+- Accounts ≤ 8,000: Cloud Run native HiGHS (reliable, ~85s for 8K accounts)
+- Accounts > 8,000: Error returned, UI offers waterfall mode
 - Waterfall processes smaller batches per priority level
 
 **Testing**: `solver-tests/test-scale-threshold.html` tests various account counts to find the exact threshold.
+
+### 11.11 Solver Routing Strategy
+
+**Impl**: `highsWrapper.ts` - `solveProblem()`, `solveLPString()`, `_domain/constants.ts` - `SolverMode`
+
+Two solver modes control routing for different use cases:
+
+| Mode | Primary Solver | Fallback Chain | Use Case |
+|------|---------------|----------------|----------|
+| `browser` | HiGHS WASM | GLPK → Cloud Run | Waterfall sub-priority (fast, small LPs) |
+| `cloud` | Cloud Run | None | Global optimization (large LPs, reliability) |
+
+**Routing Logic**:
+- `mode='cloud'`: Always use Cloud Run native HiGHS (no fallback)
+- `mode='browser'`: WASM → GLPK → Cloud Run (on memory errors)
+
+**Why Two Modes?**
+- **Waterfall** solves many small LPs (one per priority level). Browser WASM is fast (~100ms) and avoids network latency.
+- **Global Optimization** solves one large LP. Cloud Run native HiGHS is more reliable and can handle larger problems.
+
+**Default Behavior**:
+- `solveProblem()` defaults to `mode='cloud'` since global optimization is the primary caller
+- `solveLPString()` defaults to `mode='browser'` for backward compatibility with waterfall
+
+**Code Locations**:
+| File | Function | Default Mode |
+|------|----------|--------------|
+| `highsWrapper.ts` | `solveProblem()` | `'cloud'` |
+| `highsWrapper.ts` | `solveLPString()` | `'browser'` |
+| `pureOptimizationEngine.ts` | Calls `solveProblem()` | Explicit `'cloud'` |
+| `simplifiedAssignmentEngine.ts` | Calls `solveLPString()` | Implicit `'browser'` |
 
 ---
 
@@ -1369,6 +1594,105 @@ The "Auto-Calculate Targets" button calculates recommended values using this pat
 **Why Max considers largest account**: Ensures every account can be assigned to at least one rep. If max were lower than the largest account's value, that account could never fit within any rep's capacity.
 
 **Why Target is pure average**: Continuity rules keep large accounts with their current owners naturally. The target should reflect the true balanced state, not be inflated by outliers.
+
+### 12.1.2 Waterfall Engine Min/Max Enforcement
+
+**Impl**: `simplifiedAssignmentEngine.ts` - `getCapacityLimit()`, `getMinimumFloor()`, `getMinimumThreshold()`
+
+The waterfall engine enforces configured min/max ARR through LP slack constraints with asymmetric bounds.
+
+**Configuration Fields** (from `assignment_configuration` table):
+| Field | Purpose | Fallback |
+|-------|---------|----------|
+| `customer_min_arr` | Absolute minimum ARR for customer assignments | `target × (1 - variance)` |
+| `customer_max_arr` | Absolute maximum ARR for customer assignments | `DEFAULT_MAX_ARR_PER_REP` |
+| `prospect_min_arr` | Absolute minimum ARR for prospect assignments | `target × (1 - variance)` |
+| `prospect_max_arr` | Absolute maximum ARR for prospect assignments | `DEFAULT_MAX_ARR_PER_REP` |
+
+**Helper Methods**:
+```typescript
+// Returns configured max or fallback
+getCapacityLimit(): number {
+  return (assignmentType === 'customer' ? customer_max_arr : prospect_max_arr) 
+    || DEFAULT_MAX_ARR_PER_REP;
+}
+
+// Returns configured min or calculated threshold
+getMinimumFloor(): number {
+  return (assignmentType === 'customer' ? customer_min_arr : prospect_min_arr) 
+    ?? getMinimumThreshold();  // target × (1 - variance)
+}
+```
+
+**LP Constraint Zones**:
+```
+                absoluteMinARR  preferredMinARR   target   preferredMaxARR  absoluteMaxARR
+                     │               │              │              │              │
+     BigM penalty ◄──┼──► β penalty ◄┼─► α penalty ◄┼─► α penalty ◄┼─► β penalty ◄┼──► BigM penalty
+     (under)         │    (under)    │   (under)    │   (over)     │   (over)     │    (over)
+```
+
+**Asymmetric Beta Ranges**:
+- `betaOverRange = (absoluteMaxARR - preferredMaxARR) / targetARR`
+- `betaUnderRange = (preferredMinARR - absoluteMinARR) / targetARR`
+
+**Safety Checks**:
+- If `absoluteMinARR >= targetARR`: Log warning, use 0 as floor (prevents infeasible LP)
+- If config values are null: Fall back to calculated defaults
+
+### 12.1.3 Capacity Gating & LP Solver Consistency
+
+**Impl**: `simplifiedAssignmentEngine.ts` - `hasCapacity()`, `batchAssignPriority4()`
+
+**Design Principle**: The LP solver runs the **same Big-M formulation** at every priority level. Capacity filtering should be minimal to let the solver make optimal trade-offs.
+
+#### Priority Levels P1-P3: Capacity-Gated Eligibility
+
+Earlier priorities (Geo+Continuity, Geography, Continuity) use `hasCapacity()` to filter eligible reps:
+
+```typescript
+// P1-P3: Filter by hard cap only
+hasCapacity(repId, accountARR, ...): boolean {
+  if (newLoad > capacityLimit) return false;  // Hard cap
+  if (workload.cre >= max_cre_per_rep) return false;  // CRE limit
+  return true;  // Let LP solver handle Alpha/Beta penalties
+}
+```
+
+#### Priority Level P4 (RO): No Capacity Filter
+
+The Residual Optimization priority does **NOT** filter by capacity at all. ALL eligible reps are passed to the LP solver:
+
+```typescript
+// batchAssignPriority4() - RO
+const allEligibleReps = allReps.filter(rep =>
+  rep.is_active &&
+  rep.include_in_assignments &&
+  !rep.is_strategic_rep
+  // NO hasCapacity() call - LP solver handles all balance constraints
+);
+
+// Every account sees ALL eligible reps
+for (const account of accounts) {
+  eligibleRepsPerAccount.set(account.sfdc_account_id, allEligibleReps);
+}
+```
+
+**Why No Capacity Filter for RO?**
+- RO is the last priority - we want to assign ALL remaining accounts
+- The LP solver's Big-M penalties handle balance: over-allocation gets penalized, not blocked
+- The solver can make optimal trade-offs: "assign to over-loaded rep with geo match vs under-loaded rep without"
+- Only the Force Assignment fallback runs if the LP solver leaves accounts unassigned (very rare)
+
+#### Zone Handling Summary
+
+| Zone | P1-P3 (hasCapacity) | P4/RO (no filter) | LP Solver |
+|------|---------------------|-------------------|-----------|
+| Alpha | ✅ eligible | ✅ eligible | α penalty (0.01 × intensity) |
+| Beta | ✅ eligible | ✅ eligible | β penalty (0.1 × intensity) |
+| Beyond Max | ❌ excluded | ✅ **eligible** | BigM penalty (100.0 × intensity) |
+
+At "Very Heavy" intensity (25x), BigM penalty = 2500.0 per normalized unit. This completely dominates assignment scores (0-110 range), effectively preventing any significant over-allocation while still allowing the solver to make optimal decisions.
 
 ### 12.2 Variance Bands
 
@@ -1557,6 +1881,69 @@ Calculates dynamic per-rep targets for additional balance metrics beyond ARR:
 
 The `types/analytics.ts` file imports from `@/_domain` to ensure consistency.
 
+### 13.7 Continuity Eligibility (Analytics Filter)
+
+**Impl**: `calculations.ts` - `getValidRepIdsForContinuity()`, `isEligibleForContinuityTracking()`
+
+**Problem**: Accounts whose past owner isn't in the current reps CSV are counted as "not retained" in the continuity percentage denominator. This artificially deflates the metric since these accounts can never be retained - their owner left the company.
+
+**Solution**: Only include accounts in continuity calculations where the original owner exists in the current sales reps list and is not a backfill source (leaving).
+
+**Eligibility Criteria**:
+An account is **eligible for continuity tracking** if:
+1. `owner_id` is not null/undefined
+2. `owner_id` exists in current `sales_reps` table
+3. That rep is NOT a backfill source (`is_backfill_source = false`)
+
+**Formula**:
+```
+eligible_accounts = accounts WHERE owner_id IN (valid_rep_ids)
+valid_rep_ids = reps WHERE is_backfill_source = false
+
+continuity_rate = (eligible_accounts with same owner) / (eligible_accounts) × 100
+```
+
+**Example**:
+| Scenario | Retained | Total | Continuity % |
+|----------|----------|-------|--------------|
+| **Without filter (wrong)** | 50 | 100 | **50%** |
+| **With filter (correct)** | 50 | 70 | **71%** |
+
+The 30 accounts whose owner left were never going to be retained - excluding them gives the true retention rate.
+
+**Files Using This Filter**:
+- `buildDataService.ts` → `calculateContinuityScore()` (dashboard analytics)
+- `metricsCalculator.ts` → `calculateMetrics()` (LP post-processing)
+
+**Note**: The LP objective scoring (`continuityScore.ts`) is NOT affected. It already returns 0 for non-owners, and departed owners aren't in the eligible reps list anyway.
+
+### 13.7.1 Continuity Metrics Structure
+
+**Impl**: `types/analytics.ts` - `ContinuityMetrics`, `buildDataService.ts` - `calculateContinuityMetrics()`
+
+For UI display, the continuity calculation returns a full metrics object with counts:
+
+| Field | Formula | Description |
+|-------|---------|-------------|
+| `score` | `retainedCount / eligibleCount` | 0-1, the percentage |
+| `retainedCount` | eligible accounts WHERE `new_owner_id = owner_id` OR `new_owner_id IS NULL` | Accounts staying with same owner |
+| `changedCount` | `eligibleCount - retainedCount` | Accounts moving to different owner |
+| `eligibleCount` | parent accounts WHERE `owner_id IN valid_rep_ids` | Denominator for score |
+| `excludedCount` | `parentAccounts.length - eligibleCount` | Accounts excluded (owner not in reps file) |
+
+**Why excludedCount matters**: Accounts whose original owner isn't in the uploaded reps file cannot be "retained" - there's no one to retain them with. These are excluded from the continuity percentage but shown separately in the UI for transparency.
+
+**TypeScript Interface** (in `types/analytics.ts`):
+```typescript
+interface ContinuityMetrics {
+  score: number;           // 0-1
+  retainedCount: number;
+  changedCount: number;
+  eligibleCount: number;
+  excludedCount: number;
+}
+```
+
 ---
 
 # Appendix
@@ -1567,7 +1954,7 @@ The `types/analytics.ts` file imports from `@/_domain` to ensure consistency.
 
 | File | Key Exports | Doc Section |
 |------|-------------|-------------|
-| `calculations.ts` | `getAccountARR()`, `getAccountATR()`, `isCustomer()`, `calculateBalanceTarget()` | §2, §3, §12 |
+| `calculations.ts` | `getAccountARR()`, `getAccountATR()`, `isCustomer()`, `calculateBalanceTarget()`, `getValidRepIdsForContinuity()`, `isEligibleForContinuityTracking()` | §2, §3, §12, §13.7 |
 | `tiers.ts` | `classifyTeamTier()`, `TEAM_TIER_ORDER`, `getTierDistance()`, `isEnterprise()` | §5 |
 | `geography.ts` | `REGION_HIERARCHY`, `REGION_ANCESTRY`, `calculateGeoMatchScore()`, `autoMapTerritoryToUSRegion()` | §4 |
 | `normalization.ts` | `normalizeRegion()`, `normalizePEFirm()`, `normalizeTeamTier()`, `REGION_ALIASES`, `PE_FIRM_ALIASES` | §6 |
@@ -1600,11 +1987,220 @@ Every function/constant in `_domain/*.ts` links back to this doc, and vice versa
 
 ---
 
+## SSOT Workflow
+
+> **See the full SSOT Workflow section at the top of this document.**
+
+### Quick Reference: The 3-Step Flow
+
+```
+1. MASTER_LOGIC.mdc   →   Document the rule/formula FIRST
+2. _domain/*.ts       →   Implement in the appropriate file
+3. Consumer files     →   Import from @/_domain and use
+```
+
+### SSOT Violations to Avoid
+
+| Violation | Example | Fix |
+|-----------|---------|-----|
+| **Magic numbers** | `if (arr < 25000)` | Use `SALES_TOOLS_ARR_THRESHOLD` |
+| **Inline calculations** | `account.calculated_arr \|\| account.arr \|\| 0` | Use `getAccountARR(account)` |
+| **Undocumented constants** | `const MAX = 3000` in service | Document in §X.X first |
+| **Duplicate logic** | Same formula in 2+ files | Consolidate to `_domain/` |
+| **Code before docs** | Implement, then document | Always document FIRST |
+
+### Bug Fixes Follow SSOT Too
+
+Even urgent fixes should:
+1. Document the **correct** behavior in this file first
+2. Then fix the implementation in `_domain/*.ts`
+3. This prevents "fix drift" where code diverges from documentation
+
+---
+
 ## Maintenance Rules
 
-1. **Add to `_domain/`** - Never add business logic elsewhere
-2. **Update this document** - Keep MASTER_LOGIC.mdc in sync
-3. **Add cross-references** - Link code ↔ doc both directions
-4. **Import from `@/_domain`** - All consumers must import
+1. **Documentation First** - Update this file BEFORE implementing code
+2. **Add to `_domain/`** - Never add business logic elsewhere
+3. **Add cross-references** - Link code ↔ doc both directions (`@see §X.X`)
+4. **Import from `@/_domain`** - All consumers must import, never inline
+5. **Label changelog entries** - Use `SSOT:` prefix when following the flow
+6. **Version this document** - Update version number when making changes
 
 > See `_domain/README.md` for detailed contribution guidelines.
+
+---
+
+## Appendix: Deprecated Fields
+
+> **Version**: 1.3.9  
+> **Last Updated**: 2025-12-16  
+> **Purpose**: Document fields that have been deprecated and removed from import processing
+
+The following fields were identified as unused or legacy. They have been removed from CSV import processing but may still exist in the database schema (flagged for future migration).
+
+### Accounts - Deprecated Fields
+
+| Field | Status | Reason |
+|-------|--------|--------|
+| `initial_sale_score` | REMOVED | Never used in business logic |
+| `expansion_score` | REMOVED | Never used in business logic |
+| `is_2_0` | REMOVED | Legacy flag, never implemented |
+| `in_customer_hierarchy` | REMOVED | Never used (hierarchy derived from `ultimate_parent_id`) |
+| `include_in_emea` | REMOVED | Never used |
+| `inbound_count` | REMOVED | Never used in business logic |
+| `idr_count` | REMOVED | Never used in business logic |
+| `ultimate_parent_employee_size` | REMOVED | Never used (tier uses account's `employees` field) |
+| `industry` | REMOVED | Display-only field, no business logic |
+| `account_type` | REMOVED | Display-only field, no business logic |
+
+### Opportunities - Deprecated Fields
+
+| Field | Status | Reason |
+|-------|--------|--------|
+| `stage` | REMOVED | Display-only field, no business logic |
+| `amount` | REMOVED | Fallback for `net_arr`, rarely needed |
+| `close_date` | REMOVED | Display-only field, no business logic |
+| `created_date` | REMOVED | Display-only field, no business logic |
+
+**Kept:** `opportunity_name` remains available for import (display value).
+
+### Sales Reps - Deprecated Fields
+
+| Field | Status | Reason |
+|-------|--------|--------|
+| `manager` | REMOVED | Legacy field - use `flm`/`slm` instead |
+| `sub_region` | REMOVED | Never implemented - EMEA uses region field directly |
+| `is_renewal_specialist` | REMOVED | Never used in production - RS routing disabled |
+
+### Database Migration Candidates
+
+The following columns exist in the database but are no longer populated via import. They are candidates for removal in a future database migration:
+
+| Table | Column | Notes |
+|-------|--------|-------|
+| `accounts` | `industry` | Can be dropped |
+| `accounts` | `account_type` | Can be dropped |
+| `accounts` | `expansion_score` | Can be dropped |
+| `accounts` | `initial_sale_score` | Can be dropped |
+| `accounts` | `is_2_0` | Can be dropped |
+| `accounts` | `in_customer_hierarchy` | Can be dropped |
+| `accounts` | `include_in_emea` | Can be dropped |
+| `accounts` | `inbound_count` | Can be dropped |
+| `accounts` | `idr_count` | Can be dropped |
+| `accounts` | `ultimate_parent_employee_size` | Can be dropped |
+| `opportunities` | `stage` | Can be dropped |
+| `opportunities` | `close_date` | Can be dropped |
+| `opportunities` | `created_date` | Can be dropped |
+| `sales_reps` | `manager` | Can be dropped (use `flm`/`slm`) |
+| `sales_reps` | `sub_region` | Can be dropped |
+| `sales_reps` | `is_renewal_specialist` | Can be dropped |
+
+**Note:** `opportunities.amount` is kept as fallback for `net_arr` in the `getOpportunityPipelineValue()` function.
+
+---
+
+## 14. Optimization Telemetry
+
+### 14.1 Purpose
+
+The telemetry system captures comprehensive data about every optimization run, enabling:
+- Performance analysis across different configurations
+- Historical comparison of model behavior
+- AI-assisted parameter tuning
+- Debugging and anomaly detection
+
+### 14.2 Model Versioning
+
+The optimization model uses semantic versioning (`MAJOR.MINOR.PATCH`) to track changes:
+
+| Version Component | When to Bump | Examples |
+|-------------------|--------------|----------|
+| **Major** (X.0.0) | Breaking changes to scoring formula structure | New scoring factor added, constraint type removed |
+| **Minor** (0.X.0) | New optional features, significant algorithm changes | New balance metric, solver routing change |
+| **Patch** (0.0.X) | Threshold/weight value changes | `LP_PENALTY.ALPHA` change, `DEFAULT_LP_GEOGRAPHY_PARAMS` tweak |
+
+**Current Version:** Defined in `@/_domain/constants.ts` as `OPTIMIZATION_MODEL_VERSION`.
+
+**Version History:** See `docs/core/MODEL_CHANGELOG.md` for detailed version history.
+
+### 14.3 Telemetry Data Model
+
+#### 14.3.1 Run Context
+- `build_id`: Links to the build being optimized
+- `config_id`: Links to `assignment_configuration` for full config access
+- `assignment_type`: 'customer' or 'prospect'
+- `engine_type`: 'waterfall' or 'relaxed_optimization'
+- `model_version`: Semantic version at time of run
+
+#### 14.3.2 Configuration Snapshot
+
+Stored as JSONB for historical analysis even if config changes:
+
+```json
+{
+  "objectives": { "wC": 0.35, "wG": 0.35, "wT": 0.30 },
+  "balance": { "arr_penalty": 0.5, "atr_penalty": 0.3, "pipeline_penalty": 0.4 },
+  "intensity_multiplier": 1.0
+}
+```
+
+- `balance_intensity`: The intensity preset used (VERY_LIGHT to VERY_HEAVY)
+- `priority_config_snapshot`: Priority order at run time
+
+#### 14.3.3 Problem Size Metrics
+- `num_accounts`, `num_reps`: Input size
+- `num_locked_accounts`, `num_strategic_accounts`: Constraint counts
+- `num_variables`, `num_constraints`, `lp_size_kb`: LP-specific (null for waterfall)
+
+#### 14.3.4 Solver Performance
+- `solver_type`: 'highs-wasm', 'cloud-run', or 'glpk' (null for waterfall)
+- `solver_status`: 'optimal', 'feasible', 'infeasible', 'timeout', 'error', 'complete'
+- `solve_time_ms`: Execution time in milliseconds
+- `objective_value`: LP objective function value (null for waterfall)
+
+#### 14.3.5 Success Metrics
+
+All metrics stored as percentages (0-100):
+
+| Category | Metrics |
+|----------|---------|
+| **Balance** | `arr_variance_percent`, `atr_variance_percent`, `pipeline_variance_percent`, `max_overload_percent` |
+| **Continuity** | `continuity_rate`, `high_value_continuity_rate`, `arr_stayed_percent` |
+| **Geography** | `exact_geo_match_rate`, `sibling_geo_match_rate`, `cross_region_rate` |
+| **Team** | `exact_tier_match_rate`, `one_level_mismatch_rate` |
+| **Feasibility** | `feasibility_slack_total`, `reps_over_capacity` |
+
+#### 14.3.6 Error Handling
+- `warnings`: Array of warning messages from the run
+- `error_message`: Detailed error message if failed
+- `error_category`: Categorized error type for analysis
+  - `data_validation`: Bad input data
+  - `solver_timeout`: HiGHS timeout
+  - `solver_infeasible`: No solution exists
+  - `solver_crash`: WASM memory error
+  - `network`: Cloud Run unreachable
+  - `unknown`: Uncategorized error
+
+### 14.4 Implementation
+
+**Database Table:** `optimization_runs`
+
+**Telemetry Service:** `src/services/optimization/telemetry/optimizationTelemetry.ts`
+- `recordLPOptimizationRun()`: Full metrics from LP engine
+- `recordWaterfallRun()`: Simplified metrics from waterfall engine
+
+**Fire-and-Forget Pattern:** Telemetry recording is non-blocking. Failures are logged but never prevent assignment generation.
+
+### 14.5 Usage Guidelines
+
+1. **Always bump `OPTIMIZATION_MODEL_VERSION`** when changing:
+   - Scoring functions (`continuityScore`, `geographyScore`, `teamAlignmentScore`)
+   - LP penalty values (`LP_PENALTY.*`)
+   - Default weights (`DEFAULT_OPTIMIZATION_WEIGHTS`)
+   - Constraint formulations in `lpProblemBuilder.ts`
+
+2. **Query patterns** for analysis:
+   - Compare versions: `WHERE model_version = '1.0.0' vs '1.1.0'`
+   - Compare engines: `WHERE engine_type = 'waterfall' vs 'relaxed_optimization'`
+   - Find optimal configs: `ORDER BY continuity_rate DESC WHERE arr_variance_percent < 20`

@@ -6,13 +6,19 @@ import {
   getAccountARR,
   getAccountATR,
   SALES_TOOLS_ARR_THRESHOLD,
+  DEFAULT_MAX_ARR_PER_REP,
+  DEFAULT_CONTINUITY_DAYS,
   calculatePriorityWeight,
   DEFAULT_PRIORITY_WEIGHTS,
   LP_SCORING_FACTORS,
-  LP_PENALTY
+  LP_PENALTY,
+  getBalancePenaltyMultiplier,
+  BalanceIntensity,
+  LP_SCALE_LIMITS
 } from '@/_domain';
 import { getDefaultPriorityConfig, PriorityConfig, SubConditionConfig } from '@/config/priorityRegistry';
-import { getPositionLabel } from '@/services/optimization';
+import { getPositionLabel, recordWaterfallRun } from '@/services/optimization';
+import { solveLPString } from '@/services/optimization/solver/highsWrapper';
 
 /**
  * Priority-Level Batch Assignment Engine
@@ -51,47 +57,8 @@ import { getPositionLabel } from '@/services/optimization';
 
 import { supabase } from '@/integrations/supabase/client';
 
-// HiGHS Solver for batch optimization at each priority level
-let highsInstance: any = null;
-let highsLoadPromise: Promise<any> | null = null;
-
-async function getHiGHS(): Promise<any> {
-  if (highsInstance) return highsInstance;
-  if (highsLoadPromise) return highsLoadPromise;
-
-  highsLoadPromise = (async () => {
-    try {
-      const highsModule = await import('highs') as any;
-
-      // Resolve the loader function from various module patterns
-      const highsLoader =
-        typeof highsModule.default === 'function' ? highsModule.default :
-        typeof highsModule['module.exports'] === 'function' ? highsModule['module.exports'] :
-        highsModule.default?.default && typeof highsModule.default.default === 'function' ? highsModule.default.default :
-        typeof highsModule.highs === 'function' ? highsModule.highs :
-        typeof highsModule === 'function' ? highsModule : null;
-
-      if (typeof highsLoader !== 'function') {
-        throw new Error('HiGHS module import failed - could not resolve loader function');
-      }
-
-      const highs = await highsLoader({
-        locateFile: (file: string) =>
-          typeof window !== 'undefined'
-            ? `https://lovasoa.github.io/highs-js/${file}`
-            : file
-      });
-      highsInstance = highs;
-      console.log('[WaterfallEngine] HiGHS solver loaded successfully');
-      return highs;
-    } catch (error) {
-      console.error('[WaterfallEngine] Failed to load HiGHS:', error);
-      throw error;
-    }
-  })();
-
-  return highsLoadPromise;
-}
+// HiGHS solver is now handled by highsWrapper.ts with unified routing
+// @see MASTER_LOGIC.mdc §11.11 Solver Routing Strategy
 
 function sanitizeVarName(name: string): string {
   return name.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25);
@@ -207,8 +174,10 @@ interface SalesRep {
 interface AssignmentConfiguration {
   customer_target_arr: number;
   customer_max_arr: number;
+  customer_min_arr?: number;  // From DB - absolute minimum for customers
   prospect_target_arr: number;
   prospect_max_arr: number;
+  prospect_min_arr?: number;  // From DB - absolute minimum for prospects
   max_cre_per_rep: number;
   capacity_variance_percent?: number;
   max_tier1_per_rep?: number;
@@ -269,6 +238,54 @@ interface WorkloadState {
   q4_renewals: number;
 }
 
+/**
+ * Progress callback for waterfall engine UI updates
+ * Provides granular progress during priority waterfall execution
+ */
+export interface WaterfallProgress {
+  stage: 'initializing' | 'loading' | 'priority' | 'solving' | 'finalizing' | 'complete';
+  status: string;
+  progress: number;  // 0-100
+  currentPriority?: string;
+  priorityIndex?: number;
+  totalPriorities?: number;
+  accountsProcessed?: number;
+  totalAccounts?: number;
+  assignmentsMade?: number;
+}
+
+export type WaterfallProgressCallback = (progress: WaterfallProgress) => void;
+
+/**
+ * Yield to the UI event loop to keep animations smooth
+ * Uses double-frame yield to ensure browser has time to render
+ * and process pending timers (like setInterval for the stopwatch)
+ */
+async function yieldToUI(): Promise<void> {
+  // Double yield: first to let React process state updates, 
+  // second to let browser render and process timers
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise(resolve => {
+    if (typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(() => {
+        // Yield again after animation frame to let timer callbacks run
+        setTimeout(resolve, 16); // ~1 frame at 60fps
+      });
+    } else {
+      setTimeout(resolve, 16);
+    }
+  });
+}
+
+/**
+ * Lightweight yield for use in hot loops
+ * Only yields to microtask queue (~0-4ms) instead of full frame (~32ms)
+ * Use this for iteration-based yielding in LP building loops
+ */
+async function yieldMicrotask(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0));
+}
+
 export class WaterfallAssignmentEngine {
   private buildId: string;
   private assignmentType: 'customer' | 'prospect';
@@ -279,8 +296,13 @@ export class WaterfallAssignmentEngine {
   private opportunitiesMap: Map<string, number>;  // Map sfdc_account_id -> net_arr
   private totalProspectCount: number = 0;  // Track total prospects for dynamic capacity calculation
   private priorityConfig: PriorityConfig[] = [];  // Loaded from DB in generateAssignments
+  private balanceIntensityMultiplier: number = 1.0;  // Balance vs continuity trade-off @see MASTER_LOGIC.mdc §11.3.1
+  private balanceIntensity: BalanceIntensity = 'NORMAL';  // Store string for telemetry
+  private lpBalanceConfig?: { arr_penalty?: number; atr_penalty?: number; pipeline_penalty?: number };  // Store for telemetry
+  private progressCallback?: WaterfallProgressCallback;
+  private lastYieldTime: number = 0;
 
-  constructor(buildId: string, assignmentType: 'customer' | 'prospect', config: AssignmentConfiguration, opportunities?: Array<{sfdc_account_id: string, net_arr: number}>) {
+  constructor(buildId: string, assignmentType: 'customer' | 'prospect', config: AssignmentConfiguration, opportunities?: Array<{sfdc_account_id: string, net_arr: number}>, progressCallback?: WaterfallProgressCallback) {
     this.buildId = buildId;
     this.assignmentType = assignmentType;
     this.config = {
@@ -303,12 +325,34 @@ export class WaterfallAssignmentEngine {
       console.log(`📊 Loaded ${this.opportunitiesMap.size} accounts with Net ARR data, total opportunities: ${opportunities.length}`);
     }
 
+    // Store progress callback for UI updates
+    this.progressCallback = progressCallback;
+    this.lastYieldTime = Date.now();
+
     console.log(`🎯 Waterfall Engine initialized:`, {
       type: assignmentType,
       targetARR: this.getTargetARR() / 1000000 + 'M',
       capacityLimit: this.getCapacityLimit() / 1000000 + 'M',
       maxCRE: this.config.max_cre_per_rep
     });
+  }
+
+  /**
+   * Report progress to UI callback and yield to event loop
+   * Always yields to ensure the browser can render the update and run timers
+   */
+  private async reportProgress(progress: WaterfallProgress): Promise<void> {
+    if (this.progressCallback) {
+      this.progressCallback(progress);
+    }
+    
+    // Always yield to UI after progress update
+    // This ensures the browser can:
+    // 1. Process the React state update
+    // 2. Render the updated progress bar
+    // 3. Run pending timer callbacks (stopwatch, animations)
+    await yieldToUI();
+    this.lastYieldTime = Date.now();
   }
 
   private getTargetARR(): number {
@@ -318,10 +362,26 @@ export class WaterfallAssignmentEngine {
   }
 
   private getCapacityLimit(): number {
-    // Use the configured max ARR directly as the hard cap
-    return this.assignmentType === 'customer'
+    // Use the configured max ARR as the hard cap, with fallback
+    // @see MASTER_LOGIC.mdc §12.1.2 Waterfall Engine Min/Max Enforcement
+    const configured = this.assignmentType === 'customer'
       ? this.config.customer_max_arr
       : this.config.prospect_max_arr;
+    return configured || DEFAULT_MAX_ARR_PER_REP;
+  }
+
+  /**
+   * Get the absolute minimum ARR floor for a rep
+   * Uses configured min if set, otherwise falls back to calculated threshold
+   * @see MASTER_LOGIC.mdc §12.1.2 Waterfall Engine Min/Max Enforcement
+   */
+  private getMinimumFloor(): number {
+    const configuredMin = this.assignmentType === 'customer'
+      ? this.config.customer_min_arr
+      : this.config.prospect_min_arr;
+    
+    // Use configured min if set, otherwise calculate from target × variance
+    return configuredMin ?? this.getMinimumThreshold();
   }
 
   /**
@@ -335,7 +395,7 @@ export class WaterfallAssignmentEngine {
   }
 
   private getMinimumThreshold(): number {
-    // Calculate minimum threshold based on target and variance
+    // Calculate minimum threshold based on target and variance (soft floor)
     const target = this.getTargetARR();
     const variance = this.config.capacity_variance_percent || 10;
     return target * (1 - variance / 100);
@@ -345,7 +405,17 @@ export class WaterfallAssignmentEngine {
     accounts: Account[],
     reps: SalesRep[]
   ): Promise<{ proposals: AssignmentProposal[], warnings: AssignmentWarning[] }> {
+    const startTime = Date.now();
     console.log(`🚀 Starting waterfall assignment: ${accounts.length} accounts, ${reps.length} reps`);
+
+    // Report initial progress
+    await this.reportProgress({
+      stage: 'initializing',
+      status: 'Initializing waterfall engine...',
+      progress: 2,
+      totalAccounts: accounts.length,
+      assignmentsMade: 0
+    });
 
     // Fetch full config including priority_config and territory_mappings
     const { data: configData } = await supabase
@@ -361,6 +431,14 @@ export class WaterfallAssignmentEngine {
       || getDefaultPriorityConfig('COMMERCIAL');
     
     console.log(`[Engine] ✅ Loaded priority config with ${this.priorityConfig.length} priorities`);
+    
+    // Get balance intensity for LP penalty multiplier @see MASTER_LOGIC.mdc §11.3.1
+    this.balanceIntensity = (configData?.balance_intensity as BalanceIntensity) ?? 'NORMAL';
+    this.balanceIntensityMultiplier = getBalancePenaltyMultiplier(this.balanceIntensity);
+    console.log(`[Waterfall] Balance intensity: ${this.balanceIntensity} (multiplier: ${this.balanceIntensityMultiplier}x)`);
+    
+    // Store lp_balance_config for telemetry
+    this.lpBalanceConfig = configData?.lp_balance_config as { arr_penalty?: number; atr_penalty?: number; pipeline_penalty?: number } | undefined;
     
     // Apply territory mappings to accounts with missing geo but present sales_territory
     accounts = accounts.map(account => {
@@ -459,20 +537,63 @@ export class WaterfallAssignmentEngine {
     
     console.log(`[Engine] Enabled priorities: ${enabledPriorities.map(p => `${p.id}@${p.position}`).join(' → ')}`);
     
+    // Report loading complete, starting priorities
+    await this.reportProgress({
+      stage: 'loading',
+      status: `Loaded ${sortedAccounts.length} accounts, starting priority waterfall...`,
+      progress: 10,
+      totalAccounts: sortedAccounts.length,
+      totalPriorities: enabledPriorities.length,
+      assignmentsMade: 0
+    });
+    
     // Track remaining accounts and stats per priority
     let remainingAccounts = [...sortedAccounts];
     const priorityStats: Record<string, number> = {};
     
     // Execute each priority in configured order
-    for (const priority of enabledPriorities) {
+    // Progress from 10% to 85% across all priorities
+    const progressPerPriority = 75 / enabledPriorities.length;
+    
+    for (let i = 0; i < enabledPriorities.length; i++) {
+      const priority = enabledPriorities[i];
+      const priorityLabel = PRIORITY_NAMES[priority.id] || priority.id;
+      const baseProgress = 10 + (i * progressPerPriority);
+      
       console.log(`\n=== Executing: ${priority.id} (position ${priority.position}) ===`);
       console.log(`[Engine] ${remainingAccounts.length} accounts remaining`);
+      
+      // Report starting this priority
+      await this.reportProgress({
+        stage: 'priority',
+        status: `P${priority.position}: ${priorityLabel} - Processing ${remainingAccounts.length} accounts...`,
+        progress: baseProgress,
+        currentPriority: priorityLabel,
+        priorityIndex: i + 1,
+        totalPriorities: enabledPriorities.length,
+        totalAccounts: sortedAccounts.length,
+        accountsProcessed: sortedAccounts.length - remainingAccounts.length,
+        assignmentsMade: proposals.length
+      });
       
       const result = await this.executePriority(priority, remainingAccounts, reps);
       
       proposals.push(...result.assigned);
       remainingAccounts = result.remaining;
       priorityStats[priority.id] = result.assigned.length;
+      
+      // Report completing this priority
+      await this.reportProgress({
+        stage: 'priority',
+        status: `P${priority.position}: ${priorityLabel} - Assigned ${result.assigned.length} accounts`,
+        progress: baseProgress + progressPerPriority * 0.9,
+        currentPriority: priorityLabel,
+        priorityIndex: i + 1,
+        totalPriorities: enabledPriorities.length,
+        totalAccounts: sortedAccounts.length,
+        accountsProcessed: sortedAccounts.length - remainingAccounts.length,
+        assignmentsMade: proposals.length
+      });
       
       console.log(`[Engine] ${priority.id}: assigned ${result.assigned.length}, remaining ${remainingAccounts.length}`);
     }
@@ -481,6 +602,16 @@ export class WaterfallAssignmentEngine {
     // This ensures 100% assignment rate even when all reps are at capacity
     if (remainingAccounts.length > 0) {
       console.log(`\n🔥 FORCE ASSIGNMENT: ${remainingAccounts.length} accounts need forced assignment`);
+      
+      await this.reportProgress({
+        stage: 'priority',
+        status: `Force assigning ${remainingAccounts.length} remaining accounts...`,
+        progress: 86,
+        currentPriority: 'Force Assignment',
+        totalAccounts: sortedAccounts.length,
+        accountsProcessed: sortedAccounts.length - remainingAccounts.length,
+        assignmentsMade: proposals.length
+      });
       
       // Get all eligible reps (active, assignable, non-strategic)
       const allEligibleReps = reps.filter(rep => 
@@ -502,7 +633,8 @@ export class WaterfallAssignmentEngine {
         }
       } else {
         // Force assign each remaining account to least loaded rep
-        for (const account of remainingAccounts) {
+        for (let i = 0; i < remainingAccounts.length; i++) {
+          const account = remainingAccounts[i];
           const accountARR = getAccountARR(account);
           const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
           
@@ -557,12 +689,35 @@ export class WaterfallAssignmentEngine {
           });
           
           priorityStats['force_assignment'] = (priorityStats['force_assignment'] || 0) + 1;
+          
+          // Yield to UI periodically during force assignment (every 50 accounts)
+          if (i % 50 === 0) {
+            await this.reportProgress({
+              stage: 'priority',
+              status: `Force assigning... ${i + 1}/${remainingAccounts.length}`,
+              progress: 86 + (i / remainingAccounts.length) * 4,
+              currentPriority: 'Force Assignment',
+              totalAccounts: sortedAccounts.length,
+              accountsProcessed: sortedAccounts.length - remainingAccounts.length + i,
+              assignmentsMade: proposals.length
+            });
+          }
         }
         
         // Clear remaining accounts since they've all been force-assigned
         remainingAccounts = [];
       }
     }
+    
+    // Report finalizing
+    await this.reportProgress({
+      stage: 'finalizing',
+      status: 'Finalizing assignments and generating summary...',
+      progress: 92,
+      totalAccounts: sortedAccounts.length,
+      accountsProcessed: sortedAccounts.length,
+      assignmentsMade: proposals.length
+    });
     
     // Log summary
     console.log(`\n📊 Priority Execution Summary:`);
@@ -575,8 +730,90 @@ export class WaterfallAssignmentEngine {
     // Post-process: Check for warnings
     this.checkPostAssignmentWarnings(reps);
 
-    console.log(`✅ Generated ${proposals.length} proposals with ${this.warnings.length} warnings`);
+    // Report complete
+    await this.reportProgress({
+      stage: 'complete',
+      status: `Complete! ${proposals.length} assignments generated.`,
+      progress: 100,
+      totalAccounts: sortedAccounts.length,
+      accountsProcessed: sortedAccounts.length,
+      assignmentsMade: proposals.length
+    });
+
+    const solveTimeMs = Date.now() - startTime;
+    console.log(`✅ Generated ${proposals.length} proposals with ${this.warnings.length} warnings in ${solveTimeMs}ms`);
+    
+    // Calculate simple metrics for telemetry
+    const telemetryMetrics = this.calculateTelemetryMetrics(proposals, reps);
+    
+    // Record telemetry (fire-and-forget)
+    // @see MASTER_LOGIC.mdc §14 - Optimization Telemetry
+    recordWaterfallRun({
+      buildId: this.buildId,
+      assignmentType: this.assignmentType,
+      numAccounts: sortedAccounts.length,
+      numReps: reps.filter(r => r.is_active && r.include_in_assignments).length,
+      numLockedAccounts: priorityStats['manual_holdover'] || 0,
+      numStrategicAccounts: priorityStats['strategic_continuity'] || 0,
+      solveTimeMs,
+      warnings: this.warnings.map(w => `${w.type}: ${w.reason}`),
+      // Pass config snapshot for telemetry analysis
+      config: {
+        balance_intensity: this.balanceIntensity,
+        priority_config: this.priorityConfig,
+        lp_balance_config: this.lpBalanceConfig,
+        intensity_multiplier: this.balanceIntensityMultiplier
+      },
+      metrics: telemetryMetrics
+    }).catch(() => {}); // Swallow errors - telemetry is non-critical
+    
     return { proposals, warnings: this.warnings };
+  }
+  
+  /**
+   * Calculate simple metrics for telemetry
+   * These are lightweight calculations that don't require full LP metrics infrastructure
+   */
+  private calculateTelemetryMetrics(
+    proposals: AssignmentProposal[],
+    reps: SalesRep[]
+  ): { arr_variance_percent?: number; continuity_rate?: number; exact_geo_match_rate?: number } {
+    if (proposals.length === 0) return {};
+    
+    // Continuity rate: % of accounts staying with current owner
+    const continuityCount = proposals.filter(p => 
+      p.currentOwner && p.proposedRep.rep_id === p.currentOwner.rep_id
+    ).length;
+    const continuity_rate = (continuityCount / proposals.length) * 100;
+    
+    // Geo match rate: % of accounts with exact geo match
+    const exactGeoCount = proposals.filter(p => {
+      const accountGeo = p.account.geo || p.account.sales_territory;
+      const repRegion = p.proposedRep.region;
+      return accountGeo && repRegion && accountGeo === repRegion;
+    }).length;
+    const exact_geo_match_rate = (exactGeoCount / proposals.length) * 100;
+    
+    // ARR variance: coefficient of variation of ARR per rep
+    const repARRMap = new Map<string, number>();
+    for (const p of proposals) {
+      const arr = getAccountARR(p.account);
+      const current = repARRMap.get(p.proposedRep.rep_id) || 0;
+      repARRMap.set(p.proposedRep.rep_id, current + arr);
+    }
+    
+    const arrValues = Array.from(repARRMap.values());
+    if (arrValues.length > 1) {
+      const mean = arrValues.reduce((a, b) => a + b, 0) / arrValues.length;
+      if (mean > 0) {
+        const variance = arrValues.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / arrValues.length;
+        const stdDev = Math.sqrt(variance);
+        const arr_variance_percent = (stdDev / mean) * 100;
+        return { arr_variance_percent, continuity_rate, exact_geo_match_rate };
+      }
+    }
+    
+    return { continuity_rate, exact_geo_match_rate };
   }
 
   // ========== PRIORITY DISPATCHER ==========
@@ -710,7 +947,8 @@ export class WaterfallAssignmentEngine {
         lockStats.cre_risk++;
       }
       
-      // Check Renewal Soon (within 90 days)
+      // Check Renewal Soon (within stability window)
+      // @see MASTER_LOGIC.mdc §10.8 - DEFAULT_CONTINUITY_DAYS
       if (!lockReason && enabledConditions.has('renewal_soon') && account.renewal_date) {
         const renewalDate = new Date(account.renewal_date);
         const now = new Date();
@@ -718,7 +956,7 @@ export class WaterfallAssignmentEngine {
           (renewalDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
         );
         
-        if (daysUntilRenewal >= 0 && daysUntilRenewal <= 90) {
+        if (daysUntilRenewal >= 0 && daysUntilRenewal <= DEFAULT_CONTINUITY_DAYS) {
           lockReason = `Renewal in ${daysUntilRenewal} days`;
           lockType = 'renewal_soon';
           lockStats.renewal_soon++;
@@ -732,7 +970,8 @@ export class WaterfallAssignmentEngine {
         lockStats.pe_firm++;
       }
       
-      // Check Recent Owner Change (within 90 days)
+      // Check Recent Owner Change (within stability window)
+      // @see MASTER_LOGIC.mdc §10.8 - DEFAULT_CONTINUITY_DAYS
       if (!lockReason && enabledConditions.has('recent_owner_change') && account.owner_change_date) {
         const changeDate = new Date(account.owner_change_date);
         const now = new Date();
@@ -740,7 +979,7 @@ export class WaterfallAssignmentEngine {
           (now.getTime() - changeDate.getTime()) / (1000 * 60 * 60 * 24)
         );
         
-        if (daysSinceChange >= 0 && daysSinceChange <= 90) {
+        if (daysSinceChange >= 0 && daysSinceChange <= DEFAULT_CONTINUITY_DAYS) {
           lockReason = `Owner changed ${daysSinceChange} days ago`;
           lockType = 'recent_owner_change';
           lockStats.recent_owner_change++;
@@ -829,6 +1068,9 @@ export class WaterfallAssignmentEngine {
   /**
    * Solve batch assignment using HiGHS optimization
    * Formulates LP: maximize assignment quality while respecting capacity constraints
+   * 
+   * Now uses unified solver routing via highsWrapper.solveLPString()
+   * @see MASTER_LOGIC.mdc §11.11 Solver Routing Strategy
    */
   private async solveWithHiGHS(
     accounts: Account[],
@@ -853,7 +1095,7 @@ export class WaterfallAssignmentEngine {
     }
     
     try {
-      const highs = await getHiGHS();
+      // No longer loading HiGHS directly - using unified solver via highsWrapper
       
       // Build LP problem
       const lines: string[] = [];
@@ -938,7 +1180,12 @@ export class WaterfallAssignmentEngine {
         return { assigned: [], remaining: [...accounts] };
       }
       
-      lines.push('    ' + objectiveTerms.join(' + '));
+      // NOTE: objectiveTerms is populated here but NOT written yet!
+      // We need to add penalty terms from the balance constraint loop first.
+      // The objective line will be written AFTER all penalty terms are added.
+      // @see MASTER_LOGIC.mdc §11.3 - penalty terms must be in objective
+      const objectiveLineIndex = lines.length; // Placeholder position
+      lines.push(''); // Will be replaced after penalty terms are added
       
       // Constraints
       lines.push('Subject To');
@@ -957,31 +1204,53 @@ export class WaterfallAssignmentEngine {
       
       // Rep ARR balance constraints with Big-M penalty slacks
       // @see _domain/MASTER_LOGIC.mdc §11.3 Three-Tier Penalty System
+      // @see _domain/MASTER_LOGIC.mdc §12.1.2 Waterfall Engine Min/Max Enforcement
       // This allows reps to go over preferredMax but penalizes it, and strongly penalizes going over absoluteMax
       // Use SSOT penalty constants for Big-M system
       // @see _domain/constants.ts LP_PENALTY
-      // @see _domain/MASTER_LOGIC.mdc §11.3 Three-Tier Penalty System
-      const absoluteMaxARR = this.config.max_arr_per_rep || 2500000;
+      const absoluteMaxARR = this.getCapacityLimit();
+      let absoluteMinARR = this.getMinimumFloor();
+      const preferredMinARR = targetARR * (1 - variance);
+      
+      // Safety check: min must be less than target (otherwise constraint is infeasible)
+      if (absoluteMinARR >= targetARR) {
+        console.warn(`[LP] Min ARR ($${absoluteMinARR.toLocaleString()}) >= target ($${targetARR.toLocaleString()}), using 0 as floor`);
+        absoluteMinARR = 0;
+      }
+      
+      const metricLabel = this.assignmentType === 'prospect' ? 'Pipeline' : 'ARR';
+      console.log(`[LP Balance] ${metricLabel} constraints: min=${absoluteMinARR.toLocaleString()}, prefMin=${preferredMinARR.toLocaleString()}, target=${targetARR.toLocaleString()}, prefMax=${preferredMaxARR.toLocaleString()}, max=${absoluteMaxARR.toLocaleString()}, intensity=${this.balanceIntensityMultiplier}x`);
+      
       const slackBounds: string[] = [];
       
+      // Track iterations for UI yielding - prevents browser freeze on large datasets
+      let lpBuildIterations = 0;
+      
       for (const [repId, rep] of allEligibleReps) {
-        const currentLoad = this.workloadMap.get(repId)?.arr || 0;
-        const arrTerms: string[] = [];
+        // For prospects, use netARR (pipeline); for customers, use ARR
+        const currentLoad = this.assignmentType === 'prospect' 
+          ? (this.workloadMap.get(repId)?.netARR || 0)
+          : (this.workloadMap.get(repId)?.arr || 0);
+        const valueTerms: string[] = [];
         
         for (const account of accounts) {
           const eligibleReps = eligibleRepsPerAccount.get(account.sfdc_account_id) || [];
           if (eligibleReps.some(r => r.rep_id === repId)) {
             const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(repId)}`;
-            const arr = getAccountARR(account);
-            if (arr > 0) {
-              // Normalize by targetARR to keep coefficients in stable range
-              const normalizedArr = arr / targetARR;
-              arrTerms.push(`${normalizedArr.toFixed(6)} ${varName}`);
+            // For prospects, use pipeline value; for customers, use ARR
+            const accountValue = this.assignmentType === 'prospect'
+              ? (this.opportunitiesMap.get(account.sfdc_account_id) || 0)
+              : getAccountARR(account);
+            if (accountValue > 0) {
+              // Normalize by target to keep coefficients in stable range
+              const normalizedValue = accountValue / targetARR;
+              valueTerms.push(`${normalizedValue.toFixed(6)} ${varName}`);
             }
           }
+          lpBuildIterations++;
         }
         
-        if (arrTerms.length > 0) {
+        if (valueTerms.length > 0) {
           const repIdx = sanitizeVarName(repId);
           
           // Slack variables for this rep (6 total: alpha over/under, beta over/under, bigM over/under)
@@ -990,27 +1259,37 @@ export class WaterfallAssignmentEngine {
           const mo = `mo_${repIdx}`, mu = `mu_${repIdx}`;
           
           // Add penalty terms to objective (negative because we maximize)
-          objectiveTerms.push(`- ${LP_PENALTY.ALPHA.toFixed(6)} ${ao}`);
-          objectiveTerms.push(`- ${LP_PENALTY.ALPHA.toFixed(6)} ${au}`);
-          objectiveTerms.push(`- ${LP_PENALTY.BETA.toFixed(6)} ${bo}`);
-          objectiveTerms.push(`- ${LP_PENALTY.BETA.toFixed(6)} ${bu}`);
-          objectiveTerms.push(`- ${LP_PENALTY.BIG_M.toFixed(6)} ${mo}`);
-          objectiveTerms.push(`- ${LP_PENALTY.BIG_M.toFixed(6)} ${mu}`);
+          // Apply balance intensity multiplier @see MASTER_LOGIC.mdc §11.3.1
+          const im = this.balanceIntensityMultiplier;
+          objectiveTerms.push(`- ${(LP_PENALTY.ALPHA * im).toFixed(6)} ${ao}`);
+          objectiveTerms.push(`- ${(LP_PENALTY.ALPHA * im).toFixed(6)} ${au}`);
+          objectiveTerms.push(`- ${(LP_PENALTY.BETA * im).toFixed(6)} ${bo}`);
+          objectiveTerms.push(`- ${(LP_PENALTY.BETA * im).toFixed(6)} ${bu}`);
+          objectiveTerms.push(`- ${(LP_PENALTY.BIG_M * im).toFixed(6)} ${mo}`);
+          objectiveTerms.push(`- ${(LP_PENALTY.BIG_M * im).toFixed(6)} ${mu}`);
           
-          // Decomposition constraint: sum(arr/target * x) - ao + au - bo + bu - mo + mu = 1 - currentLoad/target
+          // Decomposition constraint: sum(value/target * x) - ao + au - bo + bu - mo + mu = 1 - currentLoad/target
+          // For prospects: value = pipeline (net_arr); for customers: value = ARR
           // This allows deviation from target with graduated penalties
           const normalizedTarget = 1 - currentLoad / targetARR; // How much more they can take (normalized)
-          constraints.push(` bal_${repIdx}: ${arrTerms.join(' + ')} - 1 ${ao} + 1 ${au} - 1 ${bo} + 1 ${bu} - 1 ${mo} + 1 ${mu} = ${normalizedTarget.toFixed(6)}`);
+          constraints.push(` bal_${repIdx}: ${valueTerms.join(' + ')} - 1 ${ao} + 1 ${au} - 1 ${bo} + 1 ${bu} - 1 ${mo} + 1 ${mu} = ${normalizedTarget.toFixed(6)}`);
           
-          // Slack bounds (normalized)
+          // Slack bounds (normalized) - ASYMMETRIC for over/under
+          // @see MASTER_LOGIC.mdc §12.1.2 Waterfall Engine Min/Max Enforcement
           const alphaRange = variance; // e.g., 0.10 for 10%
-          const betaRange = (absoluteMaxARR - preferredMaxARR) / targetARR; // Buffer zone
+          const betaOverRange = (absoluteMaxARR - preferredMaxARR) / targetARR; // Buffer zone above
+          const betaUnderRange = Math.max(0, (preferredMinARR - absoluteMinARR) / targetARR); // Buffer zone below
           slackBounds.push(` 0 <= ${ao} <= ${alphaRange.toFixed(6)}`);
           slackBounds.push(` 0 <= ${au} <= ${alphaRange.toFixed(6)}`);
-          slackBounds.push(` 0 <= ${bo} <= ${betaRange.toFixed(6)}`);
-          slackBounds.push(` 0 <= ${bu} <= ${betaRange.toFixed(6)}`);
+          slackBounds.push(` 0 <= ${bo} <= ${betaOverRange.toFixed(6)}`);
+          slackBounds.push(` 0 <= ${bu} <= ${betaUnderRange.toFixed(6)}`);
           slackBounds.push(` ${mo} >= 0`);
           slackBounds.push(` ${mu} >= 0`);
+        }
+        
+        // Yield every 50K iterations to prevent UI freeze on large datasets
+        if (lpBuildIterations % 50000 === 0) {
+          await yieldMicrotask();
         }
       }
       
@@ -1045,6 +1324,7 @@ export class WaterfallAssignmentEngine {
               // Non-matching tier: coefficient = -minPct
               nonMatchingTerms.push(`${minPct.toFixed(4)} ${varName}`);
             }
+            lpBuildIterations++;
           }
           
           // Constraint: matching * (1-minPct) - nonMatching * minPct >= 0
@@ -1057,8 +1337,19 @@ export class WaterfallAssignmentEngine {
               constraints.push(` tier_${sanitizeVarName(repId)}: ${constraintLhs} >= 0`);
             }
           }
+          
+          // Continue yielding based on cumulative iteration count
+          if (lpBuildIterations % 50000 === 0) {
+            await yieldMicrotask();
+          }
         }
       }
+      
+      // NOW write the objective function with all penalty terms included
+      // This MUST happen AFTER the balance constraint loop that adds penalty terms
+      // @see MASTER_LOGIC.mdc §11.3 - Big-M penalty terms must be in objective
+      lines[objectiveLineIndex] = '    ' + objectiveTerms.join(' + ');
+      console.log(`[LP Objective] Written with ${objectiveTerms.length} terms (includes ${objectiveTerms.filter(t => t.includes('mo_') || t.includes('mu_')).length} BigM penalty terms)`);
       
       lines.push(...constraints);
       
@@ -1079,64 +1370,84 @@ export class WaterfallAssignmentEngine {
       
       const lpProblem = lines.join('\n');
       const numSlacks = slackBounds.length;
-      console.log(`[HiGHS P${priorityLevel}] Solving ${accounts.length} accounts, ${allEligibleReps.size} reps, ${numSlacks} slack vars...`);
+      console.log(`[WaterfallEngine P${priorityLevel}] Solving ${accounts.length} accounts, ${allEligibleReps.size} reps, ${numSlacks} slack vars...`);
       
-      // Solve with mip_rel_gap - required for complex LPs with Big-M slacks
-      // @see solver-tests/test-presolve-only.html and HIGHS_SOLVER_NOTES.md
-      const solution = highs.solve(lpProblem, {
-        mip_rel_gap: 0.05,  // 5% gap for waterfall (faster, good enough for per-priority batches)
-      });
+      // Yield to UI before solving (solver can block for a while)
+      await yieldToUI();
       
-      if (solution.Status !== 'Optimal') {
-        console.warn(`[HiGHS P${priorityLevel}] Non-optimal status: ${solution.Status}, falling back to greedy`);
+      // Use unified solver routing via highsWrapper
+      // For large datasets (>3000 accounts), use cloud mode to prevent UI freezing
+      // Browser WASM runs on main thread and blocks UI for large LPs
+      // @see MASTER_LOGIC.mdc §11.11 Solver Routing Strategy
+      const useCloudMode = accounts.length > LP_SCALE_LIMITS.WARN_ACCOUNTS_THRESHOLD;
+      const solution = await solveLPString(lpProblem, useCloudMode ? 'cloud' : 'browser');
+      
+      // Yield to UI after solving to update animations
+      await yieldToUI();
+      
+      if (solution.status !== 'Optimal') {
+        console.warn(`[WaterfallEngine P${priorityLevel}] Non-optimal status: ${solution.status}, falling back to greedy`);
+        if (solution.error) {
+          console.warn(`[WaterfallEngine P${priorityLevel}] Error: ${solution.error}`);
+        }
         return { assigned: [], remaining: [...accounts] };
       }
       
-      console.log(`[HiGHS P${priorityLevel}] Optimal solution found, objective: ${solution.ObjectiveValue?.toFixed(2)}`);
+      console.log(`[WaterfallEngine P${priorityLevel}] Optimal solution found, objective: ${solution.objectiveValue?.toFixed(2)}, time: ${solution.solveTimeMs}ms`);
       
-      // Parse solution
+      // Parse solution (using unified response format from highsWrapper)
       const assignedAccountIds = new Set<string>();
       
-      for (const [varName, varData] of Object.entries(solution.Columns || {})) {
+      // Build lookup map once for O(1) variable matching instead of O(n^3) nested loops
+      // This dramatically improves performance for large datasets (8K+ accounts)
+      const varToAccountRep = new Map<string, { account: Account, rep: SalesRep }>();
+      for (const account of accounts) {
+        const eligibleReps = eligibleRepsPerAccount.get(account.sfdc_account_id) || [];
+        for (const rep of eligibleReps) {
+          const varName = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(rep.rep_id)}`;
+          varToAccountRep.set(varName, { account, rep });
+        }
+      }
+      
+      // Yield once after map building
+      await yieldMicrotask();
+      
+      // Parse solution with O(1) lookups
+      for (const [varName, varData] of Object.entries(solution.columns || {})) {
         if (!varName.startsWith('x_')) continue;
         if ((varData as any).Primal < 0.5) continue;
         
-        // Find matching account and rep
-        for (const account of accounts) {
-          const eligibleReps = eligibleRepsPerAccount.get(account.sfdc_account_id) || [];
-          for (const rep of eligibleReps) {
-            const expectedVar = `x_${sanitizeVarName(account.sfdc_account_id)}_${sanitizeVarName(rep.rep_id)}`;
-            if (varName === expectedVar) {
-              const accountARR = getAccountARR(account);
-              const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
-              
-              const accountWarnings: AssignmentWarning[] = [];
-              if (currentOwner && currentOwner.rep_id !== rep.rep_id) {
-                accountWarnings.push({
-                  severity: 'medium',
-                  type: 'continuity_broken',
-                  accountOrRep: account.account_name,
-                  reason: `Changed from ${currentOwner.name} to ${rep.name}`,
-                  details: `Optimized assignment for balance`
-                });
-              }
-              
-              const proposal: AssignmentProposal = {
-                account,
-                proposedRep: rep,
-                currentOwner,
-                rationale: `${rationale} (Optimized)`,
-                warnings: accountWarnings,
-                ruleApplied,
-                arr: accountARR,
-                priorityLevel
-              };
-              
-              assigned.push(proposal);
-              this.updateWorkload(rep.rep_id, account);
-              assignedAccountIds.add(account.sfdc_account_id);
-            }
+        const match = varToAccountRep.get(varName);
+        if (match) {
+          const { account, rep } = match;
+          const accountARR = getAccountARR(account);
+          const currentOwner = account.owner_id ? this.repMap.get(account.owner_id) || null : null;
+          
+          const accountWarnings: AssignmentWarning[] = [];
+          if (currentOwner && currentOwner.rep_id !== rep.rep_id) {
+            accountWarnings.push({
+              severity: 'medium',
+              type: 'continuity_broken',
+              accountOrRep: account.account_name,
+              reason: `Changed from ${currentOwner.name} to ${rep.name}`,
+              details: `Optimized assignment for balance`
+            });
           }
+          
+          const proposal: AssignmentProposal = {
+            account,
+            proposedRep: rep,
+            currentOwner,
+            rationale: `${rationale} (Optimized)`,
+            warnings: accountWarnings,
+            ruleApplied,
+            arr: accountARR,
+            priorityLevel
+          };
+          
+          assigned.push(proposal);
+          this.updateWorkload(rep.rep_id, account);
+          assignedAccountIds.add(account.sfdc_account_id);
         }
       }
       
@@ -1400,39 +1711,45 @@ export class WaterfallAssignmentEngine {
 
 
   /**
-   * arr_balance: Batch assign accounts to any rep with capacity (fallback/residual optimization)
-   * Uses HiGHS optimization to find globally optimal assignment
+   * arr_balance: Batch assign accounts to any rep (fallback/residual optimization)
+   * Uses HiGHS optimization with Big-M penalties to find globally optimal assignment.
+   * 
+   * IMPORTANT: Unlike earlier priorities, this does NOT filter by hasCapacity().
+   * ALL eligible reps are included so the LP solver can apply Big-M penalties for
+   * over-allocation. The solver will either:
+   * - Assign with penalty if it's the best global trade-off
+   * - Leave unassigned if the penalty is too high (rare, only if all reps are way over max)
+   * 
+   * @see MASTER_LOGIC.mdc §12.1.3 Capacity Gating (Hard Cap Only)
    */
   private async batchAssignPriority4(accounts: Account[], allReps: SalesRep[]): Promise<{ assigned: AssignmentProposal[], remaining: Account[] }> {
-    // Build eligibility map: account -> list of all eligible reps (any geography)
+    // Build eligibility map: account -> list of ALL eligible reps (no capacity filter)
+    // The LP solver's Big-M system handles balance constraints
     const eligibleRepsPerAccount = new Map<string, SalesRep[]>();
     const accountsWithOptions: Account[] = [];
     const accountsWithoutOptions: Account[] = [];
     
-    for (const account of accounts) {
-      const accountARR = getAccountARR(account);
-      
-      // Find all eligible reps with capacity (any geography)
-      const eligibleReps = allReps.filter(rep =>
-        rep.is_active &&
-        rep.include_in_assignments &&
-        !rep.is_strategic_rep &&
-        this.hasCapacity(rep.rep_id, accountARR, account.cre_count, account, rep)
-      );
-      
-      if (eligibleReps.length > 0) {
-        eligibleRepsPerAccount.set(account.sfdc_account_id, eligibleReps);
-        accountsWithOptions.push(account);
-      } else {
-        accountsWithoutOptions.push(account);
-      }
-    }
+    // Get all eligible reps ONCE (no per-account capacity filtering)
+    const allEligibleReps = allReps.filter(rep =>
+      rep.is_active &&
+      rep.include_in_assignments &&
+      !rep.is_strategic_rep
+    );
     
-    if (accountsWithOptions.length === 0) {
+    if (allEligibleReps.length === 0) {
+      console.warn('[RO] No eligible reps available for residual optimization');
       return { assigned: [], remaining: accounts };
     }
     
-    // Use HiGHS to optimally assign
+    for (const account of accounts) {
+      // Every account gets ALL eligible reps - let LP solver decide
+      eligibleRepsPerAccount.set(account.sfdc_account_id, allEligibleReps);
+      accountsWithOptions.push(account);
+    }
+    
+    console.log(`[RO] Residual Optimization: ${accountsWithOptions.length} accounts, ${allEligibleReps.length} reps - LP solver with Big-M penalties`);
+    
+    // Use HiGHS to optimally assign with Big-M penalties
     const result = await this.solveWithHiGHS(
       accountsWithOptions,
       eligibleRepsPerAccount,
@@ -1454,10 +1771,9 @@ export class WaterfallAssignmentEngine {
       }
     }
     
-    // Combine HiGHS remaining with accounts that had no options
     return {
       assigned: result.assigned,
-      remaining: [...result.remaining, ...accountsWithoutOptions]
+      remaining: result.remaining  // Accounts the LP solver couldn't assign (rare)
     };
   }
 
@@ -2007,38 +2323,17 @@ export class WaterfallAssignmentEngine {
     }
     
     const capacityLimit = this.getCapacityLimit();
-    const targetARR = this.getTargetARR();
-    const minThreshold = this.getMinimumThreshold();
-    const preferredMax = targetARR * (1 + (this.config.capacity_variance_percent || 10) / 100);
     
     // STANDARD CAPACITY LOGIC (for customers)
+    // IMPORTANT: hasCapacity() ONLY enforces the hard cap (capacityLimit).
+    // The LP solver handles Alpha/Beta/BigM zones with graduated penalties.
+    // If we filter more aggressively here, the solver never sees those reps.
+    // @see MASTER_LOGIC.mdc §12.1.3
     const currentLoad = workload.arr;
     const newLoad = currentLoad + accountARR;
     
-    // Multi-dimensional minimum enforcement: If rep is below minimum on ANY metric
-    const isBelowMinimumOnAnyMetric = this.isBelowMinimumThreshold(repId);
-    if (isBelowMinimumOnAnyMetric) {
-      // 1. Never exceed absolute hard cap
-      if (newLoad > capacityLimit) {
-        return false;
-      }
-      
-      // 2. If this brings rep into target range (min to preferred max), excellent!
-      if (newLoad >= minThreshold && newLoad <= preferredMax) {
-        return true;
-      }
-      
-      // 3. If rep is far below minimum (< 50% of min), allow up to 10% over preferred max
-      if (currentLoad < (minThreshold * 0.5) && newLoad <= (preferredMax * 1.1)) {
-        return true;
-      }
-      
-      // 4. Otherwise, only accept if within 5% of preferred max
-      return newLoad <= (preferredMax * 1.05);
-    }
-    
-    // Rep is at/above minimum - check if they can stay within preferred max
-    if (newLoad > preferredMax) {
+    // Only block if exceeding absolute hard cap
+    if (newLoad > capacityLimit) {
       return false;
     }
     
@@ -2095,10 +2390,30 @@ export class WaterfallAssignmentEngine {
     return workload.arr < minARR && (workload.arr + accountARR) <= targetARR;
   }
 
+  /**
+   * Find the rep with most available capacity, respecting hard limits
+   * @see MASTER_LOGIC.mdc §12.1.3 Waterfall Engine Hard Cap Check
+   */
   private findMostCapacityRep(reps: SalesRep[]): SalesRep {
+    // STEP 1: Hard cap check - filter to reps below max ARR
+    // This ensures we don't pile accounts onto already-overloaded reps
+    const maxARR = this.getCapacityLimit();
+    const repsUnderMax = reps.filter(rep => {
+      const workload = this.workloadMap.get(rep.rep_id)!;
+      return workload.arr < maxARR;
+    });
+    
+    // If all reps are over max, log warning and use all reps (can't leave accounts unassigned)
+    if (repsUnderMax.length === 0) {
+      console.warn(`⚠️ All ${reps.length} reps are at/above max ARR ($${maxARR.toLocaleString()}). Falling back to least loaded.`);
+    }
+    
+    // Use reps under max if available, otherwise fall back to all reps
+    const repsAfterMaxFilter = repsUnderMax.length > 0 ? repsUnderMax : reps;
+    
     // For prospects, sort by lowest account count
     if (this.assignmentType === 'prospect') {
-      return reps.reduce((best, current) => {
+      return repsAfterMaxFilter.reduce((best, current) => {
         const bestWorkload = this.workloadMap.get(best.rep_id)!;
         const currentWorkload = this.workloadMap.get(current.rep_id)!;
         return currentWorkload.accounts < bestWorkload.accounts ? current : best;
@@ -2106,10 +2421,10 @@ export class WaterfallAssignmentEngine {
     }
     
     // For customers, use multi-dimensional selection
-    const repsBelowMinimum = reps.filter(rep => this.isBelowMinimumThreshold(rep.rep_id));
+    const repsBelowMinimum = repsAfterMaxFilter.filter(rep => this.isBelowMinimumThreshold(rep.rep_id));
     
-    // If we have reps below minimum, select from them; otherwise use all reps
-    const repsToConsider = repsBelowMinimum.length > 0 ? repsBelowMinimum : reps;
+    // If we have reps below minimum, select from them; otherwise use filtered reps
+    const repsToConsider = repsBelowMinimum.length > 0 ? repsBelowMinimum : repsAfterMaxFilter;
     
     // Find rep with LOWEST balance score (furthest below targets across all metrics)
     return repsToConsider.reduce((best, current) => {
@@ -2269,8 +2584,9 @@ export async function generateSimplifiedAssignments(
   accounts: Account[],
   reps: SalesRep[],
   config: AssignmentConfiguration,
-  opportunities?: Array<{sfdc_account_id: string, net_arr: number}>
+  opportunities?: Array<{sfdc_account_id: string, net_arr: number}>,
+  progressCallback?: WaterfallProgressCallback
 ): Promise<{ proposals: AssignmentProposal[], warnings: AssignmentWarning[] }> {
-  const engine = new WaterfallAssignmentEngine(buildId, assignmentType, config, opportunities);
+  const engine = new WaterfallAssignmentEngine(buildId, assignmentType, config, opportunities, progressCallback);
   return engine.generateAssignments(accounts, reps);
 }

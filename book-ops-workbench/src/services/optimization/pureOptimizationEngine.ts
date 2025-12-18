@@ -26,7 +26,8 @@ import type {
   NormalizedWeights,
   StabilityLockResult,
   AssignmentScores,
-  LPMetrics
+  LPMetrics,
+  LPProblem
 } from './types';
 
 import { loadBuildData, LoadedBuildData } from './preprocessing/dataLoader';
@@ -37,7 +38,26 @@ import { buildLPProblem, ProblemBuildResult } from './constraints/lpProblemBuild
 import { solveProblem, extractAssignments } from './solver/highsWrapper';
 import { generateRationale } from './postprocessing/rationaleGenerator';
 import { calculateRepLoads, calculateMetrics } from './postprocessing/metricsCalculator';
+import { recordLPOptimizationRun } from './telemetry/optimizationTelemetry';
 import { LP_SCALE_LIMITS } from '@/_domain';
+
+/**
+ * Yield to the UI event loop to keep animations smooth
+ * Uses double-frame yield to ensure browser has time to render
+ * and process pending timers (like setInterval for the stopwatch)
+ */
+async function yieldToUI(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise(resolve => {
+    if (typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(() => {
+        setTimeout(resolve, 16);
+      });
+    } else {
+      setTimeout(resolve, 16);
+    }
+  });
+}
 
 export class PureOptimizationEngine {
   private buildId: string;
@@ -56,7 +76,7 @@ export class PureOptimizationEngine {
     
     try {
       // Phase 1: Load data
-      this.reportProgress({
+      await this.reportProgress({
         stage: 'loading',
         status: 'Loading build data...',
         progress: 5
@@ -65,7 +85,7 @@ export class PureOptimizationEngine {
       const data = await loadBuildData(this.buildId);
       
       // Phase 2: Preprocess
-      this.reportProgress({
+      await this.reportProgress({
         stage: 'preprocessing',
         status: 'Processing accounts and reps...',
         progress: 15,
@@ -78,7 +98,7 @@ export class PureOptimizationEngine {
     } catch (error: any) {
       console.error('[PureOptimization] Engine error:', error);
       
-      this.reportProgress({
+      await this.reportProgress({
         stage: 'error',
         status: `Error: ${error.message}`,
         progress: 0
@@ -155,7 +175,7 @@ export class PureOptimizationEngine {
     }
     
     // Phase 2a: Handle strategic pool
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'preprocessing',
       status: 'Assigning strategic accounts...',
       progress: 20
@@ -170,7 +190,7 @@ export class PureOptimizationEngine {
     }
     
     // Phase 2b: Identify stability locks
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'preprocessing',
       status: 'Identifying stability locks...',
       progress: 25
@@ -185,7 +205,7 @@ export class PureOptimizationEngine {
     console.log(`[PureOptimization] Stability locks:`, lockStats);
     
     // Phase 3: Build LP problem
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'building',
       status: 'Building optimization problem...',
       progress: 35
@@ -198,10 +218,12 @@ export class PureOptimizationEngine {
       config: data.lpConfig,
       assignmentType,
       territoryMappings: data.territoryMappings,
-      hardCapArr: data.hardCapArr
+      hardCapArr: data.hardCapArr,
+      targetArr: data.targetArr,
+      targetPipeline: data.targetPipeline
     });
     
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'building',
       status: `Problem built: ${problem.numVariables} variables, ${problem.numConstraints} constraints`,
       progress: 45,
@@ -210,13 +232,15 @@ export class PureOptimizationEngine {
     });
     
     // Phase 4: Solve
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'solving',
       status: 'Running HiGHS optimizer...',
       progress: 50
     });
     
-    const solution = await solveProblem(problem, data.lpConfig.lp_solver_params);
+    // Use cloud mode for global optimization (reliable, handles large problems)
+    // @see MASTER_LOGIC.mdc §11.11 Solver Routing Strategy
+    const solution = await solveProblem(problem, data.lpConfig.lp_solver_params, 'cloud');
     
     console.log(`[PureOptimization] Solver status: ${solution.status}, objective: ${solution.objectiveValue.toFixed(4)}`);
     
@@ -256,7 +280,7 @@ export class PureOptimizationEngine {
     }
     
     // Phase 5: Extract assignments and build proposals
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'postprocessing',
       status: 'Extracting assignments...',
       progress: 70
@@ -278,7 +302,7 @@ export class PureOptimizationEngine {
     const allProposals = [...strategicResult.fixedAssignments, ...proposals];
     
     // Phase 6: Cascade to children
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'postprocessing',
       status: 'Cascading to child accounts...',
       progress: 80
@@ -289,7 +313,7 @@ export class PureOptimizationEngine {
       : allProposals;
     
     // Phase 7: Calculate metrics
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'postprocessing',
       status: 'Calculating metrics...',
       progress: 90
@@ -307,7 +331,7 @@ export class PureOptimizationEngine {
     );
     
     // Phase 8: Complete
-    this.reportProgress({
+    await this.reportProgress({
       stage: 'complete',
       status: `Assigned ${finalProposals.length} accounts`,
       progress: 100
@@ -329,7 +353,7 @@ export class PureOptimizationEngine {
       warnings.push(`Capacity exceeded by $${(totalSlack / 1000000).toFixed(2)}M total`);
     }
     
-    return {
+    const result: LPSolveResult = {
       success: true,
       proposals: finalProposals,
       repLoads,
@@ -338,6 +362,22 @@ export class PureOptimizationEngine {
       objectiveValue: solution.objectiveValue,
       warnings
     };
+    
+    // Record telemetry (fire-and-forget)
+    // @see MASTER_LOGIC.mdc §14 - Optimization Telemetry
+    recordLPOptimizationRun({
+      buildId: this.buildId,
+      assignmentType,
+      config: data.lpConfig,
+      weights,
+      problem,
+      result,
+      solverType: solution.solverType,
+      numLockedAccounts: lockedAccounts.length,
+      numStrategicAccounts: strategicResult.strategicAccountCount
+    }).catch(() => {}); // Swallow errors - telemetry is non-critical
+    
+    return result;
   }
   
   /**
@@ -440,12 +480,15 @@ export class PureOptimizationEngine {
   }
   
   /**
-   * Report progress to callback
+   * Report progress to callback and yield to UI
+   * Ensures browser can update animations and run timer callbacks
    */
-  private reportProgress(progress: LPProgress): void {
+  private async reportProgress(progress: LPProgress): Promise<void> {
     if (this.onProgress) {
       this.onProgress(progress);
     }
+    // Yield to UI to allow animations and timers to run
+    await yieldToUI();
   }
   
   /**

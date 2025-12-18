@@ -162,3 +162,36 @@ export async function notifyBuildStatusChange(
   });
 }
 
+/**
+ * Notify a user that their optimization run has completed
+ * 
+ * Used when user opts into Slack notifications for long-running optimizations.
+ * This helps users who start an optimization and switch to other tasks.
+ */
+export async function notifyOptimizationComplete(
+  recipientEmail: string,
+  buildName: string,
+  accountCount: number,
+  proposalCount: number,
+  elapsedTime: string
+): Promise<NotificationResult> {
+  return sendSlackNotification({
+    type: 'build_status',
+    recipientEmail,
+    title: '✅ Optimization Complete',
+    message: `Your territory optimization for "${buildName}" has finished!\n\n` +
+      `📊 *Results:*\n` +
+      `• ${accountCount.toLocaleString()} accounts processed\n` +
+      `• ${proposalCount.toLocaleString()} assignment proposals generated\n` +
+      `• Completed in ${elapsedTime}\n\n` +
+      `⚠️ *Important:* Assignments are not saved yet. Return to Book Builder and click *Apply* to save them.`,
+    metadata: {
+      buildName,
+      accountCount,
+      proposalCount,
+      elapsedTime,
+      eventType: 'optimization_complete',
+    },
+  });
+}
+

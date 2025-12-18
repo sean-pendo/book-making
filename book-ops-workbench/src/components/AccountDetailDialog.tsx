@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { formatCurrency, getAccountARR, getAccountATR } from "@/_domain";
 import { toast } from "sonner";
 import { Loader2, AlertTriangle, Shield, Users } from "lucide-react";
+import { useInvalidateAnalytics } from "@/hooks/useInvalidateAnalytics";
 
 interface AccountDetailDialogProps {
   open: boolean;
@@ -33,6 +34,7 @@ export function AccountDetailDialog({
   const [isUpdating, setIsUpdating] = useState(false);
   const [selectedOwnerId, setSelectedOwnerId] = useState(account?.new_owner_id || account?.owner_id);
   const queryClient = useQueryClient();
+  const invalidateAnalytics = useInvalidateAnalytics();
 
   const handleReassignment = async () => {
     if (!selectedOwnerId || selectedOwnerId === account?.owner_id) {
@@ -55,9 +57,12 @@ export function AccountDetailDialog({
 
       if (error) throw error;
 
-      // Refresh data
+      // Refresh data - table queries
       queryClient.invalidateQueries({ queryKey: ['customer-accounts', buildId] });
       queryClient.invalidateQueries({ queryKey: ['customer-assignment-changes', buildId] });
+      
+      // Invalidate analytics queries so KPIs and charts update
+      await invalidateAnalytics(buildId);
       
       toast.success("Account reassigned successfully");
       onOpenChange(false);

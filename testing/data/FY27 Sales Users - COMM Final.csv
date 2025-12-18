@@ -1,45 +1,45 @@
-VP,SLM,FLM,REP,TEAM,SFDC ID,PE Ownership,Region
-Jim Harvey,Jim Gersham,Allie Rosenbower,Hank Blalock,Growth,005Pf0000068vQh,,Global
-Jim Harvey,Jim Gersham,Allie Rosenbower,Kyle Harrison,Growth,005Pe00000Ek2y1,,Global
-Jim Harvey,Jim Gersham,Allie Rosenbower,Alec Mares,SMB,005Pf000004kfDx,,Global
-Jim Harvey,Jim Gersham,Allie Rosenbower,Curt Alvesteffer,SMB,005Pf000003bQOP,,Global
-Jim Harvey,Jim Gersham,Allie Rosenbower,Brent Schmedding,SMB,005Pe00000EeqRF,,Global
-Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Sophie Sanguedolce,Growth,005Pf000006IGNp,,Global
-Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Marie Page Smith,SMB,0055b00000OuFgh,,Global
-Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Melissa Mosher,SMB,005Pf000000oHSH,,Global
-Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Joshua Lee,SMB,005Pf000000O8dx,,Global
-Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Mac Mitchell,Growth,005Pf0000004Fmr,,Global
-Jim Harvey,Jim Gersham,Matt Saraceno,Amanda Hester,Growth,005Pf000006xGgT,,Global
-Jim Harvey,Jim Gersham,Matt Saraceno,Theo Gandelheid,Growth,0055b00000QZUgs,,Global
-Jim Harvey,Jim Gersham,Matt Saraceno,Benjamin Westenberger,Growth,0055b00000QGbWX,,Global
-Jim Harvey,Jim Gersham,Matt Saraceno,Emma Wright,Growth,005Pf0000068vDl,,Global
-Jim Harvey,Jim Gersham,Matt Saraceno,Jonathan Boulaphinh,Growth,005Pf000003st0z,,Global
-Jim Harvey,Jim Gersham,Matt Saraceno,Worth McMillan,SMB,005Pf000003XgbR,,Global
-Jim Harvey,Jim Gersham,Lauren Brown ,Lauren Carr,SMB,005Pf000001MByk,,Global
-Jim Harvey,Jim Gersham,Lauren Brown ,Emily Burke,Growth,005Pf000005Npjh,,Global
-Jim Harvey,Jim Gersham,Lauren Brown ,Paulina Racheck,Growth,005Pf000003XgWb,,Global
-Jim Harvey,Jim Gersham,Lauren Brown ,Sylvia Concepcion,Growth,0050a00000LUh5B,,Global
-Jim Harvey,Jim Gersham,Lauren Brown ,Jane Manzi,SMB,005Pf000002T48j,,NYC
-Jim Harvey,Jim Gersham,Lauren Brown ,Alex Knapp,SMB,005Pf000002Sy06,,NYC
-Jim Harvey,Jim Harvey,Blair Lithgow,Andrew Kuhn,MM,0055b00000OsXou,JMI Private Equity,Global
-Jim Harvey,Jim Harvey,Blair Lithgow,Virgil Fowler,MM,0055b00000OLr8d,,Global
-Jim Harvey,Jim Harvey,Blair Lithgow,Taylor Tharrington,MM,0050a00000Krmuk,PSG Private Equity,Global
-Jim Harvey,Jim Harvey,Blair Lithgow,Will Tenneson,MM,0050a00000JedIw,,Global
-Jim Harvey,Jim Harvey,Blair Lithgow,Christopher White,MM,005Pf000006lnjN,,Global
-Jim Harvey,Jim Harvey,Blair Lithgow,Drew Sartain,MM,0055b00000OsqeZ,,Global
-Jim Harvey,Jim Harvey,Mackenzie Shealy,Lara George,MM,0050a00000LVJb0,Bregal Sagemount Private Equity,Global
-Jim Harvey,Jim Harvey,Mackenzie Shealy,Christa Bryant,MM,0055b00000OMv8o,TPG Capital Private Equity,Global
-Jim Harvey,Jim Harvey,Mackenzie Shealy,John Pitzer,MM,005Pf0000030zUn,,Global
-Jim Harvey,Jim Harvey,Mackenzie Shealy,Amirah Nathani,MM,005Pf000002T4gb,,California
-Jim Harvey,Jim Harvey,Mackenzie Shealy,Pete Carlson,MM,005Pf000001Ihyn,,Global
-Jim Harvey,Jim Harvey,Mackenzie Shealy,Open Headcount,MM,XX,,Global
-Jim Harvey,Jim Harvey,Hannah Kiger,Brooke Hallow,MM,0055b00000OuLua,LLR Partners,Global
-Jim Harvey,Jim Harvey,Hannah Kiger,Matt Junior,MM,005Pf000003ybm9,,Global
-Jim Harvey,Jim Harvey,Hannah Kiger,Bradley Wallace,MM,0055b00000OMiuL,,Global
-Jim Harvey,Jim Harvey,Hannah Kiger,Brittany Powel,MM,005Pf0000013kLt,,Global
-Jim Harvey,Jim Harvey,Hannah Kiger,Makie Michaux,MM,0055b00000OMh4d,,Global
-Jim Harvey,Jim Harvey,Hannah Kiger,Open Headcount,MM,XX,,Global
-Jim Harvey,Jim Harvey,Ricardo Villarreal,Joao Pinto ,ENT,005Pf000001g3de,,LATAM
-Jim Harvey,Jim Harvey,Ricardo Villarreal,Victor Rico ,MM,005Pf000003sshd,,LATAM
-Jim Harvey,Jim Harvey,Ricardo Villarreal,Renato Cunha,MM,005Pf000005Nq33,,LATAM
-Jim Harvey,Jim Harvey,Ricardo Villarreal,Jonathan Ortiz,ENT,0055b00000OMeS3,,LATAM
+VP,SLM,FLM,REP,TEAM,SFDC ID,PE Ownership,Region,Is Strategic Rep
+Jim Harvey,Jim Gersham,Allie Rosenbower,Hank Blalock,Growth,005Pf0000068vQh,,Global,
+Jim Harvey,Jim Gersham,Allie Rosenbower,Kyle Harrison,Growth,005Pe00000Ek2y1,,Global,
+Jim Harvey,Jim Gersham,Allie Rosenbower,Alec Mares,SMB,005Pf000004kfDx,,Global,
+Jim Harvey,Jim Gersham,Allie Rosenbower,Curt Alvesteffer,SMB,005Pf000003bQOP,,Global,
+Jim Harvey,Jim Gersham,Allie Rosenbower,Brent Schmedding,SMB,005Pe00000EeqRF,,Global,
+Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Sophie Sanguedolce,Growth,005Pf000006IGNp,,Global,
+Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Marie Page Smith,SMB,0055b00000OuFgh,,Global,
+Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Melissa Mosher,SMB,005Pf000000oHSH,,Global,
+Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Joshua Lee,SMB,005Pf000000O8dx,,Global,
+Jim Harvey,Jim Gersham,Mary Katherine Lindsey,Mac Mitchell,Growth,005Pf0000004Fmr,,Global,
+Jim Harvey,Jim Gersham,Matt Saraceno,Amanda Hester,Growth,005Pf000006xGgT,,Global,
+Jim Harvey,Jim Gersham,Matt Saraceno,Theo Gandelheid,Growth,0055b00000QZUgs,,Global,
+Jim Harvey,Jim Gersham,Matt Saraceno,Benjamin Westenberger,Growth,0055b00000QGbWX,,Global,
+Jim Harvey,Jim Gersham,Matt Saraceno,Emma Wright,Growth,005Pf0000068vDl,,Global,
+Jim Harvey,Jim Gersham,Matt Saraceno,Jonathan Boulaphinh,Growth,005Pf000003st0z,,Global,
+Jim Harvey,Jim Gersham,Matt Saraceno,Worth McMillan,SMB,005Pf000003XgbR,,Global,
+Jim Harvey,Jim Gersham,Lauren Brown ,Lauren Carr,SMB,005Pf000001MByk,,Global,
+Jim Harvey,Jim Gersham,Lauren Brown ,Emily Burke,Growth,005Pf000005Npjh,,Global,
+Jim Harvey,Jim Gersham,Lauren Brown ,Paulina Racheck,Growth,005Pf000003XgWb,,Global,
+Jim Harvey,Jim Gersham,Lauren Brown ,Sylvia Concepcion,Growth,0050a00000LUh5B,,Global,
+Jim Harvey,Jim Gersham,Lauren Brown ,Jane Manzi,SMB,005Pf000002T48j,,NYC,
+Jim Harvey,Jim Gersham,Lauren Brown ,Alex Knapp,SMB,005Pf000002Sy06,,NYC,
+Jim Harvey,Jim Harvey,Blair Lithgow,Andrew Kuhn,MM,0055b00000OsXou,JMI Private Equity,Global,
+Jim Harvey,Jim Harvey,Blair Lithgow,Virgil Fowler,MM,0055b00000OLr8d,,Global,
+Jim Harvey,Jim Harvey,Blair Lithgow,Taylor Tharrington,MM,0050a00000Krmuk,PSG Private Equity,Global,
+Jim Harvey,Jim Harvey,Blair Lithgow,Will Tenneson,MM,0050a00000JedIw,,Global,
+Jim Harvey,Jim Harvey,Blair Lithgow,Christopher White,MM,005Pf000006lnjN,,Global,
+Jim Harvey,Jim Harvey,Blair Lithgow,Drew Sartain,MM,0055b00000OsqeZ,,Global,
+Jim Harvey,Jim Harvey,Mackenzie Shealy,Lara George,MM,0050a00000LVJb0,Bregal Sagemount Private Equity,Global,
+Jim Harvey,Jim Harvey,Mackenzie Shealy,Christa Bryant,MM,0055b00000OMv8o,TPG Capital Private Equity,Global,
+Jim Harvey,Jim Harvey,Mackenzie Shealy,John Pitzer,MM,005Pf0000030zUn,,Global,
+Jim Harvey,Jim Harvey,Mackenzie Shealy,Amirah Nathani,MM,005Pf000002T4gb,,California,
+Jim Harvey,Jim Harvey,Mackenzie Shealy,Pete Carlson,MM,005Pf000001Ihyn,,Global,
+Jim Harvey,Jim Harvey,Mackenzie Shealy,Open Headcount,MM,XX,,Global,
+Jim Harvey,Jim Harvey,Hannah Kiger,Brooke Hallow,MM,0055b00000OuLua,LLR Partners,Global,
+Jim Harvey,Jim Harvey,Hannah Kiger,Matt Junior,MM,005Pf000003ybm9,,Global,
+Jim Harvey,Jim Harvey,Hannah Kiger,Bradley Wallace,MM,0055b00000OMiuL,,Global,
+Jim Harvey,Jim Harvey,Hannah Kiger,Brittany Powel,MM,005Pf0000013kLt,,Global,
+Jim Harvey,Jim Harvey,Hannah Kiger,Makie Michaux,MM,0055b00000OMh4d,,Global,
+Jim Harvey,Jim Harvey,Hannah Kiger,Open Headcount,MM,XX,,Global,
+Jim Harvey,Jim Harvey,Ricardo Villarreal,Joao Pinto ,ENT,005Pf000001g3de,,LATAM,TRUE
+Jim Harvey,Jim Harvey,Ricardo Villarreal,Victor Rico ,MM,005Pf000003sshd,,LATAM,
+Jim Harvey,Jim Harvey,Ricardo Villarreal,Renato Cunha,MM,005Pf000005Nq33,,LATAM,
+Jim Harvey,Jim Harvey,Ricardo Villarreal,Jonathan Ortiz,ENT,0055b00000OMeS3,,LATAM,TRUE

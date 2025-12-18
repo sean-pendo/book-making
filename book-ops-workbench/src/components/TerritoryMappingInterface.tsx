@@ -52,7 +52,6 @@ const DEFAULT_US_MAPPINGS: Record<string, string> = {
   'GREATER ONTARIO-CA': 'Central',
   'MID-WEST': 'Central',
   'MOUNTAIN': 'Central',
-  'SOUTHWEST': 'Central',
   
   // West
   'LOS ANGELES': 'West',
@@ -60,7 +59,9 @@ const DEFAULT_US_MAPPINGS: Record<string, string> = {
   'PAC NW-CA': 'West',
   'PAC NW-US': 'West',
   'SAN FRANCISCO': 'West',
-  'SO CAL': 'West'
+  'SO CAL': 'West',
+  'SOUTHWEST': 'West',
+  'SOUTH WEST': 'West'
 };
 
 const INTERNATIONAL_MAPPINGS: Record<string, string> = {

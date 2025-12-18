@@ -187,9 +187,8 @@ async function checkAccountFieldPresence(buildId: string): Promise<Set<string>> 
  * Check which sales_reps fields have actual data
  */
 async function checkSalesRepFieldPresence(buildId: string): Promise<Set<string>> {
+  // DEPRECATED: is_renewal_specialist, sub_region - removed in v1.3.9
   const fieldsToCheck = [
-    'is_renewal_specialist',
-    'sub_region',
     'region',
     'is_strategic_rep',
     'flm',
@@ -209,7 +208,7 @@ async function checkSalesRepFieldPresence(buildId: string): Promise<Set<string>>
         .not(field, 'is', null);
       
       // For boolean fields, also check if any are true
-      if (field === 'is_renewal_specialist' || field === 'is_strategic_rep') {
+      if (field === 'is_strategic_rep') {
         query = supabase
           .from('sales_reps')
           .select('*', { count: 'exact', head: true })

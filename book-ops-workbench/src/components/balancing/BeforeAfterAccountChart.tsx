@@ -26,7 +26,13 @@ export interface BeforeAfterAccountData {
   afterChildCustomers: number;
   afterParentProspects: number;
   afterChildProspects: number;
+  // Strategic rep flag for distinct chart coloring
+  isStrategicRep?: boolean;
 }
+
+// Strategic rep colors - two shades of purple for stacked bars (matches RepDistributionChart)
+const STRATEGIC_REP_CUSTOMER_COLOR = '#7c3aed'; // Violet-600 (darker purple for customers)
+const STRATEGIC_REP_PROSPECT_COLOR = '#c084fc'; // Purple-400 (lighter purple for prospects)
 
 interface BeforeAfterAccountChartProps {
   data: BeforeAfterAccountData[];
@@ -86,6 +92,11 @@ export const BeforeAfterAccountChart: React.FC<BeforeAfterAccountChartProps> = (
   // Calculate deltas
   const customerDelta = stats.after.customers - stats.before.customers;
   const prospectDelta = stats.after.prospects - stats.before.prospects;
+
+  // Check if any strategic reps exist
+  const hasStrategicReps = useMemo(() => 
+    sortedData.some(r => r.isStrategicRep), 
+  [sortedData]);
 
   const DeltaIndicator = ({ delta }: { delta: number }) => {
     if (delta === 0) {
@@ -172,6 +183,12 @@ export const BeforeAfterAccountChart: React.FC<BeforeAfterAccountChartProps> = (
             <div className="w-3 h-3 rounded bg-blue-500" />
             <span className="text-muted-foreground">Prospects</span>
           </div>
+          {hasStrategicReps && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded bg-purple-500" />
+              <span className="text-purple-600 dark:text-purple-400">Strategic</span>
+            </div>
+          )}
         </div>
       </CardHeader>
       
@@ -184,13 +201,21 @@ export const BeforeAfterAccountChart: React.FC<BeforeAfterAccountChartProps> = (
               const beforeWidth = maxValue > 0 ? (beforeTotal / maxValue) * 100 : 0;
               const afterCustomerWidth = maxValue > 0 ? (rep.afterCustomers / maxValue) * 100 : 0;
               const afterProspectWidth = maxValue > 0 ? (rep.afterProspects / maxValue) * 100 : 0;
+              const isStrategic = rep.isStrategicRep ?? false;
+              
+              // Choose colors based on strategic rep status
+              const customerColor = isStrategic ? STRATEGIC_REP_CUSTOMER_COLOR : undefined;
+              const prospectColor = isStrategic ? STRATEGIC_REP_PROSPECT_COLOR : undefined;
               
               return (
                 <Tooltip key={rep.repId}>
                   <TooltipTrigger asChild>
                     <div className="flex items-center gap-2 group cursor-pointer py-0.5">
                       {/* Rep initials */}
-                      <div className="w-8 text-xs font-medium text-right text-muted-foreground group-hover:text-foreground">
+                      <div className={cn(
+                        "w-8 text-xs font-medium text-right group-hover:text-foreground",
+                        isStrategic ? "text-purple-500" : "text-muted-foreground"
+                      )}>
                         {formatRepName(rep.repName)}
                       </div>
                       
@@ -204,16 +229,27 @@ export const BeforeAfterAccountChart: React.FC<BeforeAfterAccountChartProps> = (
                         
                         {/* Customer bar (after) */}
                         <div
-                          className="absolute top-0.5 h-4 rounded-l-full bg-emerald-500 group-hover:opacity-80"
-                          style={{ width: `${afterCustomerWidth}%`, left: 0 }}
+                          className={cn(
+                            "absolute top-0.5 h-4 rounded-l-full group-hover:opacity-80",
+                            !isStrategic && "bg-emerald-500"
+                          )}
+                          style={{ 
+                            width: `${afterCustomerWidth}%`, 
+                            left: 0,
+                            ...(customerColor && { backgroundColor: customerColor })
+                          }}
                         />
                         
                         {/* Prospect bar (after) */}
                         <div
-                          className="absolute top-0.5 h-4 rounded-r-full bg-blue-500 group-hover:opacity-80"
+                          className={cn(
+                            "absolute top-0.5 h-4 rounded-r-full group-hover:opacity-80",
+                            !isStrategic && "bg-blue-500"
+                          )}
                           style={{ 
                             width: `${afterProspectWidth}%`, 
-                            left: `${afterCustomerWidth}%` 
+                            left: `${afterCustomerWidth}%`,
+                            ...(prospectColor && { backgroundColor: prospectColor })
                           }}
                         />
                       </div>
@@ -224,10 +260,26 @@ export const BeforeAfterAccountChart: React.FC<BeforeAfterAccountChartProps> = (
                       </div>
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-xs">
+                  <TooltipContent 
+                    side="top" 
+                    className={cn(
+                      "max-w-xs",
+                      isStrategic && "bg-purple-50 dark:bg-purple-950 border-purple-200 dark:border-purple-800"
+                    )}
+                  >
                     <div className="text-sm">
-                      <div className="font-medium">{rep.repName}</div>
+                      <div className="flex items-center gap-2">
+                        {isStrategic && <Users className="h-4 w-4 text-purple-500" />}
+                        <span className={cn("font-medium", isStrategic && "text-purple-600 dark:text-purple-400")}>
+                          {rep.repName}
+                        </span>
+                      </div>
                       <div className="text-muted-foreground text-xs mb-2">{rep.region}</div>
+                      {isStrategic && (
+                        <div className="text-xs text-purple-500 mb-2">
+                          Strategic Rep - balanced separately
+                        </div>
+                      )}
                       
                       {/* Before */}
                       <div className="space-y-1 pb-2 border-b">

@@ -1,6 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { AssignmentServiceHelpers } from './assignmentServiceHelpers';
-import { getAccountARR, HIGH_VALUE_ARR_THRESHOLD, TIER_1_PRIORITY_EMPLOYEE_THRESHOLD } from '@/_domain';
+import { getAccountARR, HIGH_VALUE_ARR_THRESHOLD, TIER_1_PRIORITY_EMPLOYEE_THRESHOLD, WORKLOAD_SCORE_WEIGHTS } from '@/_domain';
 
 export interface Account {
   sfdc_account_id: string;
@@ -70,6 +70,7 @@ interface AssignmentProposal {
   proposedOwnerName: string;
   proposedOwnerRegion?: string;
   assignmentReason: string;
+  warningDetails?: string;
   ruleApplied: string;
   conflictRisk: 'LOW' | 'MEDIUM' | 'HIGH';
 }
@@ -337,17 +338,28 @@ class AssignmentService {
 
       // Save assignments to assignments table
       const currentUser = await supabase.auth.getUser();
-      const assignmentRecords = proposals.map(proposal => ({
-        build_id: buildId,
-        sfdc_account_id: proposal.accountId,
-        proposed_owner_id: proposal.proposedOwnerId,
-        proposed_owner_name: proposal.proposedOwnerName,
-        proposed_team: '',
-        assignment_type: 'AUTO_COMMERCIAL', // All automated assignments use this type
-        rationale: `${proposal.ruleApplied}: ${proposal.assignmentReason}`,
-        is_approved: false, // Mark as pending until execution
-        created_by: currentUser.data.user?.id
-      }));
+      const assignmentRecords = proposals.map(proposal => {
+        // Build rationale - avoid double-prefix when assignmentReason already starts with priority code
+        let rationale: string;
+        const alreadyHasPrefix = proposal.assignmentReason?.match(/^(P\d+|RO):\s/i);
+        if (alreadyHasPrefix) {
+          rationale = proposal.assignmentReason;
+        } else {
+          rationale = `${proposal.ruleApplied}: ${proposal.assignmentReason}`;
+        }
+        
+        return {
+          build_id: buildId,
+          sfdc_account_id: proposal.accountId,
+          proposed_owner_id: proposal.proposedOwnerId,
+          proposed_owner_name: proposal.proposedOwnerName,
+          proposed_team: '',
+          assignment_type: 'AUTO_COMMERCIAL', // All automated assignments use this type
+          rationale,
+          is_approved: false, // Mark as pending until execution
+          created_by: currentUser.data.user?.id
+        };
+      });
 
       const { error: assignmentError } = await supabase
         .from('assignments')
@@ -1168,21 +1180,34 @@ class AssignmentService {
       
       // Use upsert to ensure assignment records exist with proper rationale
       // For Sales Tools accounts, use null for proposed_owner_id
-      const assignmentRecords = proposals.map(proposal => ({
-        build_id: buildId,
-        sfdc_account_id: proposal.accountId,
-        proposed_owner_id: proposal.proposedOwnerId || null,  // null for Sales Tools
-        proposed_owner_name: proposal.proposedOwnerName || 'Sales Tools',
-        proposed_team: '',
-        assignment_type: proposal.proposedOwnerId ? 'AUTO_COMMERCIAL' : 'SALES_TOOLS',
-        rationale: `${proposal.ruleApplied}: ${proposal.assignmentReason}`,
-        is_approved: true,
-        approved_by: currentUser.data.user?.id,
-        approved_at: new Date().toISOString(),
-        created_by: currentUser.data.user?.id,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }));
+      const assignmentRecords = proposals.map(proposal => {
+        // Build rationale - avoid double-prefix when assignmentReason already starts with priority code
+        let rationale: string;
+        const alreadyHasPrefix = proposal.assignmentReason?.match(/^(P\d+|RO):\s/i);
+        if (alreadyHasPrefix) {
+          // assignmentReason already has "P4: Geography + Continuity → ..." - use as-is
+          rationale = proposal.assignmentReason;
+        } else {
+          // Prefix with ruleApplied
+          rationale = `${proposal.ruleApplied}: ${proposal.assignmentReason}`;
+        }
+        
+        return {
+          build_id: buildId,
+          sfdc_account_id: proposal.accountId,
+          proposed_owner_id: proposal.proposedOwnerId || null,  // null for Sales Tools
+          proposed_owner_name: proposal.proposedOwnerName || 'Sales Tools',
+          proposed_team: '',
+          assignment_type: proposal.proposedOwnerId ? 'AUTO_COMMERCIAL' : 'SALES_TOOLS',
+          rationale,
+          is_approved: true,
+          approved_by: currentUser.data.user?.id,
+          approved_at: new Date().toISOString(),
+          created_by: currentUser.data.user?.id,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+      });
 
       // Use proper upsert with ON CONFLICT to handle existing records
       // The unique constraint is on (build_id, sfdc_account_id)
@@ -2059,7 +2084,8 @@ class AssignmentService {
       const totalTier1 = current.tier1Count + current.currentTier1Count;
       
       // Composite score: prioritize ARR balance, then account balance, then tier balance
-      current.workloadScore = (totalARRValue * 0.6) + (totalAccounts * 50000 * 0.3) + (totalTier1 * 25000 * 0.1);
+      // @see MASTER_LOGIC.mdc - WORKLOAD_SCORE_WEIGHTS in constants.ts
+      current.workloadScore = (totalARRValue * 0.6) + (totalAccounts * WORKLOAD_SCORE_WEIGHTS.ACCOUNT_WEIGHT * 0.3) + (totalTier1 * WORKLOAD_SCORE_WEIGHTS.TIER1_WEIGHT * 0.1);
       
       tracker.set(repId, current);
       

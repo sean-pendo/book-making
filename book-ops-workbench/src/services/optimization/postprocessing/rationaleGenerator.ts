@@ -15,6 +15,7 @@ import type {
   NormalizedWeights,
   StabilityLockResult
 } from '../types';
+import { DEFAULT_LP_GEOGRAPHY_PARAMS } from '../types';
 import type { PriorityConfig } from '@/config/priorityRegistry';
 
 // =============================================================================
@@ -108,8 +109,8 @@ export function generateRationale(
   const top = contributions[0];
 
   // Check for combined Geography + Continuity
-  const hasStrongGeo = scores.geography >= 0.65;
-  const hasStrongContinuity = scores.continuity >= 0.4;
+  const hasStrongGeo = scores.geography >= DEFAULT_LP_GEOGRAPHY_PARAMS.sibling_score;
+  const hasStrongContinuity = scores.continuity >= DEFAULT_LP_GEOGRAPHY_PARAMS.parent_score;
 
   if (hasStrongGeo && hasStrongContinuity) {
     const label = getPositionLabel('geo_and_continuity', priorityConfig);
@@ -117,17 +118,17 @@ export function generateRationale(
   }
 
   // Geography dominant
-  if (top.name === 'Geography' && top.raw >= 1.0) {
+  if (top.name === 'Geography' && top.raw >= DEFAULT_LP_GEOGRAPHY_PARAMS.exact_match_score) {
     const label = getPositionLabel('geography', priorityConfig);
     return `${label}: Geography Match → ${assignedRep.name} (${assignedRep.region || 'matching region'} - exact geo match, score ${totalScore.toFixed(2)})`;
   }
 
-  if (top.name === 'Geography' && top.raw >= 0.65) {
+  if (top.name === 'Geography' && top.raw >= DEFAULT_LP_GEOGRAPHY_PARAMS.sibling_score) {
     const label = getPositionLabel('geography', priorityConfig);
     return `${label}: Geography Match → ${assignedRep.name} (${assignedRep.region || 'nearby region'} - sibling region, score ${totalScore.toFixed(2)})`;
   }
 
-  if (top.name === 'Geography' && top.raw >= 0.4) {
+  if (top.name === 'Geography' && top.raw >= DEFAULT_LP_GEOGRAPHY_PARAMS.parent_score) {
     const label = getPositionLabel('geography', priorityConfig);
     return `${label}: Geography Match → ${assignedRep.name} (${assignedRep.region || 'same macro-region'} - regional alignment, score ${totalScore.toFixed(2)})`;
   }

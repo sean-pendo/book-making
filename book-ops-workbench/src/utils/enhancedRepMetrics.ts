@@ -1,6 +1,6 @@
-// Enhanced Sales Rep metrics calculations for Territory Balancing
+// Enhanced Sales Rep metrics calculations for Book Balancing
 import { getFiscalQuarter, isCurrentFiscalYear, getFiscalYear, getCurrentFiscalYear } from './fiscalYearCalculations';
-import { getAccountARR, isRenewalOpportunity, isParentAccount } from '@/_domain';
+import { getAccountARR, isRenewalOpportunity, isParentAccount, isPipelineOpportunity, getOpportunityPipelineValue } from '@/_domain';
 
 interface Account {
   sfdc_account_id: string;
@@ -283,16 +283,32 @@ export function calculateEnhancedRepMetrics(
     const regionalAlignment = repAccounts.length > 0 ? 
       (alignedCount / repAccounts.length) * 100 : 0;
 
-    // Calculate Prospect Net ARR - sum net_arr from opportunities for prospect accounts (hierarchy_bookings_arr_converted = 0)
+    // Calculate Pipeline per MASTER_LOGIC.mdc §2.3:
+    // Pipeline = ALL prospect opps + (Expansion + New Subscription) from customer accounts
     const prospectAccountIds = new Set(
       repAccounts
         .filter(acc => !acc.hierarchy_bookings_arr_converted || acc.hierarchy_bookings_arr_converted <= 0)
         .map(acc => acc.sfdc_account_id)
     );
+    const customerAccountIds = new Set(
+      repAccounts
+        .filter(acc => acc.hierarchy_bookings_arr_converted && acc.hierarchy_bookings_arr_converted > 0)
+        .map(acc => acc.sfdc_account_id)
+    );
     
-    const prospectNetARR = repOpportunities
-      .filter(opp => prospectAccountIds.has(opp.sfdc_account_id))
-      .reduce((sum, opp) => sum + (opp.net_arr || 0), 0);
+    // All opportunities from prospect accounts (uses SSOT getOpportunityPipelineValue)
+    const prospectOpps = repOpportunities.filter(opp => prospectAccountIds.has(opp.sfdc_account_id));
+    const prospectPipeline = prospectOpps.reduce((sum, opp) => sum + getOpportunityPipelineValue(opp), 0);
+    
+    // Expansion + New Subscription opportunities from customer accounts (uses SSOT isPipelineOpportunity)
+    // Excludes Renewals (those go to ATR) and Blanks
+    const customerPipelineOpps = repOpportunities.filter(opp => 
+      customerAccountIds.has(opp.sfdc_account_id) && isPipelineOpportunity(opp)
+    );
+    const customerPipeline = customerPipelineOpps.reduce((sum, opp) => sum + getOpportunityPipelineValue(opp), 0);
+    
+    // Total pipeline = prospect + customer pipeline (per §2.3)
+    const prospectNetARR = prospectPipeline + customerPipeline;
 
     // Enhanced metrics calculation completed for rep (debug logs removed for performance)
 

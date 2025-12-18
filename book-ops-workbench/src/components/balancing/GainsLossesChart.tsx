@@ -9,6 +9,7 @@ import {
   YAxis,
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
+  Cell,
 } from 'recharts';
 import { TrendingUp, TrendingDown, DollarSign, Hash, Info } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -257,25 +258,25 @@ export const GainsLossesChart: React.FC<GainsLossesChartProps> = ({
           {/* Metric Toggle */}
           <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
             <Button
-              variant={metric === 'arr' ? 'secondary' : 'ghost'}
+              variant={metric === 'arr' ? 'default' : 'ghost'}
               size="sm"
-              className="h-7 px-2 text-xs"
+              className={`h-7 px-2 text-xs ${metric === 'arr' ? 'bg-primary text-primary-foreground shadow-sm' : ''}`}
               onClick={() => setMetric('arr')}
             >
               ARR
             </Button>
             <Button
-              variant={metric === 'atr' ? 'secondary' : 'ghost'}
+              variant={metric === 'atr' ? 'default' : 'ghost'}
               size="sm"
-              className="h-7 px-2 text-xs"
+              className={`h-7 px-2 text-xs ${metric === 'atr' ? 'bg-primary text-primary-foreground shadow-sm' : ''}`}
               onClick={() => setMetric('atr')}
             >
               ATR
             </Button>
             <Button
-              variant={metric === 'pipeline' ? 'secondary' : 'ghost'}
+              variant={metric === 'pipeline' ? 'default' : 'ghost'}
               size="sm"
-              className="h-7 px-2 text-xs"
+              className={`h-7 px-2 text-xs ${metric === 'pipeline' ? 'bg-primary text-primary-foreground shadow-sm' : ''}`}
               onClick={() => setMetric('pipeline')}
             >
               Pipeline
@@ -313,28 +314,33 @@ export const GainsLossesChart: React.FC<GainsLossesChartProps> = ({
 
         {/* Chart */}
         {chartData.length > 0 ? (
-          <div className="h-[400px] overflow-y-auto">
-            <ResponsiveContainer width="100%" height={Math.max(400, chartData.length * 40)}>
+          <div style={{ height: Math.max(400, chartData.length * 40), minHeight: 400 }}>
+            <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={chartData}
                 layout="vertical"
                 margin={{ left: 0, right: 80, top: 10, bottom: 5 }}
               >
-                <XAxis type="number" hide domain={[0, 'dataMax']} />
+                <XAxis 
+                  type="number" 
+                  hide 
+                  domain={[0, (dataMax: number) => dataMax * 1.1]}
+                />
                 <YAxis
                   type="category"
-                  dataKey="name"
+                  dataKey="repId"
                   tick={{ fontSize: 12, fontWeight: 500 }}
                   width={50}
                   axisLine={false}
                   tickLine={false}
+                  tickFormatter={(repId: string) => {
+                    const rep = chartData.find(r => r.repId === repId);
+                    return rep?.name || repId;
+                  }}
                 />
                 <RechartsTooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
                 <Bar
                   dataKey={direction === 'gains' ? 'change' : 'absChange'}
-                  fill={direction === 'gains' ? '#22c55e' : '#ef4444'}
-                  stroke={direction === 'gains' ? '#16a34a' : '#dc2626'}
-                  strokeWidth={1}
                   radius={[0, 6, 6, 0]}
                   barSize={24}
                   label={{
@@ -344,7 +350,16 @@ export const GainsLossesChart: React.FC<GainsLossesChartProps> = ({
                     fill: direction === 'gains' ? '#22c55e' : '#ef4444',
                     formatter: (value: number) => formatValue(direction === 'gains' ? value : -value),
                   }}
-                />
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={direction === 'gains' ? '#22c55e' : '#ef4444'}
+                      stroke={direction === 'gains' ? '#16a34a' : '#dc2626'}
+                      strokeWidth={1}
+                    />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>

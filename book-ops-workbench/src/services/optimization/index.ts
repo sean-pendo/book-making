@@ -56,3 +56,7 @@ export { solveProblem, extractAssignments } from './solver/highsWrapper';
 // Post-processing
 export { generateRationale, generateScoreBreakdown, getPositionLabel } from './postprocessing/rationaleGenerator';
 export { calculateRepLoads, calculateMetrics, formatMetricsSummary } from './postprocessing/metricsCalculator';
+
+// Telemetry
+export { recordLPOptimizationRun, recordWaterfallRun } from './telemetry/optimizationTelemetry';
+export type { LPTelemetryInput, WaterfallTelemetryInput } from './telemetry/optimizationTelemetry';

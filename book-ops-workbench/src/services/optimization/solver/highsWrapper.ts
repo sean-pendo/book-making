@@ -13,7 +13,7 @@
  */
 
 import type { LPProblem, LPSolverParams } from '../types';
-import { LP_SCALE_LIMITS } from '@/_domain';
+import { LP_SCALE_LIMITS, SolverMode } from '@/_domain';
 
 // Size limits for WASM safety
 const HIGHS_MAX_VARIABLES = 30000;  // ~30K binary vars is safe limit
@@ -24,13 +24,9 @@ const HIGHS_MAX_LP_STRING_BYTES = 5_000_000;  // 5MB LP string limit
 const CLOUD_RUN_SOLVER_URL = 'https://highs-solver-710441294184.us-central1.run.app';
 const CLOUD_RUN_TIMEOUT_MS = 300000; // 5 minutes
 
-// Feature flag: Use Cloud Run for large problems
+// Feature flag: Use Cloud Run for large problems when in browser mode
 // Cloud Run uses native HiGHS binary which can handle much larger problems than WASM
 const USE_CLOUD_RUN_FOR_LARGE = true;
-
-// Feature flag: Always use Cloud Run (bypass WASM/GLPK entirely)
-// Set to true to route ALL problems to Cloud Run native solver
-const ALWAYS_USE_CLOUD_RUN = true;
 
 // Solver instances (lazy loaded)
 let highsInstance: any = null;
@@ -127,7 +123,8 @@ async function solveWithCloudRun(
       objectiveValue: result.objectiveValue || 0,
       assignments,
       slackValues,
-      solveTimeMs
+      solveTimeMs,
+      solverType: 'cloud-run'
     };
     
   } catch (error: any) {
@@ -141,7 +138,8 @@ async function solveWithCloudRun(
         assignments: new Map(),
         slackValues: new Map(),
         solveTimeMs: Date.now() - startTime,
-        error: 'Cloud Run solver timed out'
+        error: 'Cloud Run solver timed out',
+        solverType: 'cloud-run'
       };
     }
     
@@ -316,6 +314,8 @@ export interface SolverSolution {
   slackValues: Map<string, number>;
   solveTimeMs: number;
   error?: string;
+  /** Which solver was actually used (for telemetry) */
+  solverType?: 'highs-wasm' | 'cloud-run' | 'glpk';
 }
 
 /**
@@ -421,23 +421,8 @@ function problemToLPFormat(problem: LPProblem): {
     }
   }
 
-  for (const slack of problem.feasibilitySlacks) {
-    const feasCompact = `sf${slackIdx}`;
-    slackNameMap.set(slack.name, feasCompact);
-    slackIdx++;
-
-    let coef = problem.objectiveCoefficients.get(slack.name) || 0;
-    coef = validateCoefficient(coef, `feas:${feasCompact}`);
-    if (Math.abs(coef) > 1e-10) {
-      const term = `${coef >= 0 ? '+' : '-'} ${Math.abs(coef).toFixed(6)} ${feasCompact}`;
-      if (currentLine.length + term.length > MAX_LINE_LENGTH) {
-        lines.push(' ' + currentLine);
-        currentLine = term;
-      } else {
-        currentLine += ' ' + term;
-      }
-    }
-  }
+  // NOTE: feasibilitySlacks removed - Big-M penalty system handles capacity symmetrically
+  // @see MASTER_LOGIC.mdc §11.3 - Symmetric balance constraints
 
   // Add Big-M penalty slack objectives (beta and bigM slacks)
   // These are in slackBounds but not yet in the objective - CRITICAL FIX!
@@ -572,11 +557,7 @@ function problemToLPFormat(problem: LPProblem): {
     }
   }
 
-  // Feasibility slacks (already in slackNameMap)
-  for (const slack of problem.feasibilitySlacks) {
-    const compactName = slackNameMap.get(slack.name) || sanitizeVarName(slack.name);
-    lines.push(` ${compactName} >= 0`);
-  }
+  // NOTE: feasibilitySlacks bounds removed - Big-M penalty system handles capacity symmetrically
 
   // Binary variables
   lines.push('Binary');
@@ -765,7 +746,8 @@ async function solveWithHiGHS(
       objectiveValue: solution.ObjectiveValue || 0,
       assignments,
       slackValues,
-      solveTimeMs
+      solveTimeMs,
+      solverType: 'highs-wasm'
     };
     
   } catch (error: any) {
@@ -790,7 +772,8 @@ async function solveWithHiGHS(
       assignments: new Map(),
       slackValues: new Map(),
       solveTimeMs: Date.now() - startTime,
-      error: error.message || 'Unknown solver error'
+      error: error.message || 'Unknown solver error',
+      solverType: 'highs-wasm'
     };
   }
 }
@@ -847,14 +830,8 @@ async function solveWithGLPK(
       }
     }
 
-    // 4. Feasibility slacks
-    for (const slack of problem.feasibilitySlacks) {
-      const sanitized = sanitizeVarName(slack.name);
-      if (!addedVarNames.has(sanitized)) {
-        allVars.push({ name: sanitized, coef: problem.objectiveCoefficients.get(slack.name) || 0, binary: false });
-        addedVarNames.add(sanitized);
-      }
-    }
+    // NOTE: feasibilitySlacks removed - Big-M penalty system handles capacity symmetrically
+    // @see MASTER_LOGIC.mdc §11.3 - Symmetric balance constraints
 
     lastVarMapping = varMapping;
 
@@ -981,7 +958,8 @@ async function solveWithGLPK(
       objectiveValue: result.result.z || 0,
       assignments,
       slackValues,
-      solveTimeMs
+      solveTimeMs,
+      solverType: 'glpk'
     };
 
   } catch (error: any) {
@@ -992,29 +970,30 @@ async function solveWithGLPK(
       assignments: new Map(),
       slackValues: new Map(),
       solveTimeMs: Date.now() - startTime,
-      error: error.message || 'Unknown solver error'
+      error: error.message || 'Unknown solver error',
+      solverType: 'glpk'
     };
   }
 }
 
 /**
  * Solve the LP problem
- * Uses multi-layer defense:
- *
- * Layer 0: Cloud Run (for large problems > scale limit)
- * Layer 1: Pre-check size limits
- * Layer 2: Browser HiGHS WASM
- * Layer 3: GLPK fallback
- * Layer 4: Cloud Run fallback (on WASM memory errors)
+ * 
+ * Mode-based routing:
+ * - 'cloud': Always use Cloud Run native HiGHS (reliable for large problems)
+ * - 'browser': WASM → GLPK → Cloud Run fallback chain (fast for small problems)
+ * 
+ * @see MASTER_LOGIC.mdc §11.11 Solver Routing Strategy
  */
 export async function solveProblem(
   problem: LPProblem,
-  params: LPSolverParams
+  params: LPSolverParams,
+  mode: SolverMode = 'cloud'  // Default to cloud (global optimization is primary caller)
 ): Promise<SolverSolution> {
   const numVars = problem.assignmentVars.length;
 
   // Log problem size
-  console.log(`[Solver] Problem: ${numVars} assignment vars, ${problem.numConstraints} constraints, ${problem.slackBounds?.length || 0} slack bounds`);
+  console.log(`[Solver] Problem: ${numVars} assignment vars, ${problem.numConstraints} constraints, ${problem.slackBounds?.length || 0} slack bounds, mode=${mode}`);
 
   // Pre-compute LP format (used by all solvers)
   const { lpString: preCheckLpString, varMapping: preCheckVarMapping } = problemToLPFormat(problem);
@@ -1024,10 +1003,10 @@ export async function solveProblem(
 
   const numAccounts = new Set(problem.assignmentVars.map(v => v.accountId)).size;
 
-  // ALWAYS_USE_CLOUD_RUN: Route ALL problems to Cloud Run native solver
-  // This bypasses flaky WASM/GLPK entirely for maximum reliability
-  if (ALWAYS_USE_CLOUD_RUN) {
-    console.log(`[Solver] Using Cloud Run native solver (${numAccounts} accounts, ${numVars} vars)`);
+  // CLOUD MODE: Route to Cloud Run native solver for reliability
+  // @see MASTER_LOGIC.mdc §11.11
+  if (mode === 'cloud') {
+    console.log(`[Solver] Cloud mode: using Cloud Run native solver (${numAccounts} accounts, ${numVars} vars)`);
     try {
       const result = await solveWithCloudRun(preCheckLpString, preCheckVarMapping);
       
@@ -1052,13 +1031,19 @@ export async function solveProblem(
         assignments: new Map(),
         slackValues: new Map(),
         solveTimeMs: 0,
-        error: `Cloud Run solver error: ${cloudError.message}`
+        error: `Cloud Run solver error: ${cloudError.message}`,
+        solverType: 'cloud-run'
       };
     }
   }
 
-  // Layer 0: Use Cloud Run for large problems (when ALWAYS_USE_CLOUD_RUN is false)
-  // Browser WASM can't handle problems > ~3000 accounts due to dense constraint matrices
+  // BROWSER MODE: WASM → GLPK → Cloud Run fallback chain
+  // @see MASTER_LOGIC.mdc §11.11
+  console.log(`[Solver] Browser mode: using WASM with GLPK/Cloud Run fallback`);
+
+  // Layer 0: Use Cloud Run for large problems (even in browser mode)
+  // Cloud Run native HiGHS handles problems up to 8000 accounts reliably (~85s solve time)
+  // @see MASTER_LOGIC.mdc §11.10
   const useCloudRun = USE_CLOUD_RUN_FOR_LARGE && numAccounts > LP_SCALE_LIMITS.MAX_ACCOUNTS_FOR_GLOBAL_LP;
   
   if (useCloudRun) {
@@ -1085,7 +1070,8 @@ export async function solveProblem(
         assignments: new Map(),
         slackValues: new Map(),
         solveTimeMs: 0,
-        error: `Cloud Run solver error: ${cloudError.message}`
+        error: `Cloud Run solver error: ${cloudError.message}`,
+        solverType: 'cloud-run'
       };
     }
   }
@@ -1156,6 +1142,171 @@ export async function solveProblem(
  */
 export function getLastVarMapping(): Map<string, { accountId: string; repId: string }> {
   return lastVarMapping;
+}
+
+/**
+ * Solve an LP problem from a raw LP string
+ * 
+ * This is a simpler interface for waterfall engine which builds its own LP strings.
+ * Uses browser WASM by default for speed, with GLPK and Cloud Run fallbacks.
+ * 
+ * @param lpString - The LP problem in LP format (text)
+ * @param mode - Solver mode: 'browser' (default) or 'cloud'
+ * @returns Solution with status, objective value, and variable values
+ * 
+ * @see MASTER_LOGIC.mdc §11.11 Solver Routing Strategy
+ */
+export async function solveLPString(
+  lpString: string,
+  mode: SolverMode = 'browser'
+): Promise<{ 
+  status: string; 
+  objectiveValue: number; 
+  columns: Record<string, { Primal: number; [key: string]: any }>;
+  solveTimeMs: number;
+  error?: string;
+}> {
+  const startTime = Date.now();
+  const lpSizeKB = Math.round(lpString.length / 1024);
+  
+  console.log(`[solveLPString] LP size: ${lpSizeKB}KB, mode=${mode}`);
+
+  // CLOUD MODE: Use Cloud Run for reliability
+  if (mode === 'cloud') {
+    console.log(`[solveLPString] Cloud mode: using Cloud Run native solver`);
+    try {
+      const response = await fetch(`${CLOUD_RUN_SOLVER_URL}/solve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: lpString,
+        signal: AbortSignal.timeout(CLOUD_RUN_TIMEOUT_MS)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`Cloud Run solver error: ${errorData.error || response.statusText}`);
+      }
+      
+      const result = await response.json();
+      return {
+        status: result.status,
+        objectiveValue: result.objectiveValue || 0,
+        columns: result.columns || {},
+        solveTimeMs: Date.now() - startTime
+      };
+    } catch (cloudError: any) {
+      console.error('[solveLPString] Cloud Run failed:', cloudError.message);
+      return {
+        status: 'Error',
+        objectiveValue: 0,
+        columns: {},
+        solveTimeMs: Date.now() - startTime,
+        error: cloudError.message
+      };
+    }
+  }
+
+  // BROWSER MODE: WASM → GLPK → Cloud Run fallback chain
+  console.log(`[solveLPString] Browser mode: trying WASM first`);
+  
+  try {
+    // Try HiGHS WASM first
+    const highs = await getHiGHS();
+    
+    if (!usingGLPK) {
+      console.log(`[solveLPString] Solving with HiGHS WASM...`);
+      
+      // Yield to event loop before solve to allow pending UI updates
+      await new Promise(resolve => setTimeout(resolve, 0));
+      
+      // HiGHS solve is synchronous and blocks the main thread
+      // Wrap in a Promise with setTimeout to prevent complete thread blocking
+      // This allows the browser's event loop to process at least one frame
+      const solution = await new Promise<any>((resolve, reject) => {
+        // Use setTimeout to yield before the synchronous solve
+        setTimeout(() => {
+          try {
+            const result = highs.solve(lpString, {
+              mip_rel_gap: 0.05,  // 5% gap for waterfall (faster, good enough)
+            });
+            resolve(result);
+          } catch (err) {
+            reject(err);
+          }
+        }, 0);
+      });
+      
+      // Yield again after solve to allow UI to catch up
+      await new Promise(resolve => setTimeout(resolve, 0));
+      
+      return {
+        status: solution.Status,
+        objectiveValue: solution.ObjectiveValue || 0,
+        columns: solution.Columns || {},
+        solveTimeMs: Date.now() - startTime
+      };
+    }
+  } catch (wasmError: any) {
+    console.warn(`[solveLPString] WASM failed: ${wasmError.message}`);
+    
+    // Check if memory error - reset instance
+    const isMemoryError = wasmError.message?.includes('memory') ||
+                          wasmError.message?.includes('Aborted') ||
+                          wasmError.message?.includes('RuntimeError');
+    if (isMemoryError) {
+      resetHiGHSInstance();
+    }
+  }
+
+  // Try GLPK fallback
+  try {
+    console.log(`[solveLPString] Falling back to GLPK...`);
+    const glpk = await loadGLPK();
+    
+    // GLPK needs the problem parsed into its format
+    // For now, return error - GLPK requires structured input, not LP string
+    // The waterfall engine should catch this and use greedy fallback
+    console.warn(`[solveLPString] GLPK doesn't support raw LP strings, trying Cloud Run...`);
+  } catch (glpkError: any) {
+    console.warn(`[solveLPString] GLPK failed: ${glpkError.message}`);
+  }
+
+  // Last resort: Cloud Run
+  if (USE_CLOUD_RUN_FOR_LARGE) {
+    console.log(`[solveLPString] Last resort: trying Cloud Run...`);
+    try {
+      const response = await fetch(`${CLOUD_RUN_SOLVER_URL}/solve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: lpString,
+        signal: AbortSignal.timeout(CLOUD_RUN_TIMEOUT_MS)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`Cloud Run solver error: ${errorData.error || response.statusText}`);
+      }
+      
+      const result = await response.json();
+      return {
+        status: result.status,
+        objectiveValue: result.objectiveValue || 0,
+        columns: result.columns || {},
+        solveTimeMs: Date.now() - startTime
+      };
+    } catch (cloudError: any) {
+      console.error('[solveLPString] Cloud Run also failed:', cloudError.message);
+    }
+  }
+
+  // All solvers failed
+  return {
+    status: 'Error',
+    objectiveValue: 0,
+    columns: {},
+    solveTimeMs: Date.now() - startTime,
+    error: 'All solvers failed (WASM, GLPK, Cloud Run)'
+  };
 }
 
 /**

@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Info, DollarSign, TrendingUp, Building2, TrendingDown, Minus } from 'lucide-react';
+import { Info, DollarSign, TrendingUp, Building2, TrendingDown, Minus, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ThresholdConfig } from '@/components/analytics/RepDistributionChart';
 
@@ -20,7 +20,12 @@ export interface BeforeAfterRepData {
   afterAtr: number;
   beforePipeline: number;
   afterPipeline: number;
+  // Strategic rep flag for distinct chart coloring
+  isStrategicRep?: boolean;
 }
+
+// Strategic rep color - matches RepDistributionChart
+const STRATEGIC_REP_COLOR = '#a855f7'; // Purple-500
 
 type MetricType = 'arr' | 'atr' | 'pipeline';
 
@@ -47,7 +52,10 @@ const formatRepName = (fullName: string): string => {
   return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 };
 
-const getBarColor = (value: number, thresholds?: ThresholdConfig): string => {
+const getBarColor = (value: number, thresholds?: ThresholdConfig, isStrategicRep?: boolean): string => {
+  // Strategic reps always purple
+  if (isStrategicRep) return STRATEGIC_REP_COLOR;
+  
   if (!thresholds) return '#22c55e';
   const min = thresholds.min ?? 0;
   const max = thresholds.max ?? Infinity;
@@ -57,7 +65,10 @@ const getBarColor = (value: number, thresholds?: ThresholdConfig): string => {
   return '#3b82f6'; // Blue - below floor
 };
 
-const getStatusText = (value: number, thresholds?: ThresholdConfig): { text: string; color: string } => {
+const getStatusText = (value: number, thresholds?: ThresholdConfig, isStrategicRep?: boolean): { text: string; color: string } => {
+  // Strategic reps have special status
+  if (isStrategicRep) return { text: 'Strategic Rep - balanced separately', color: 'text-purple-500' };
+  
   if (!thresholds) return { text: '', color: '' };
   const min = thresholds.min ?? 0;
   const max = thresholds.max ?? Infinity;
@@ -174,6 +185,8 @@ export const BeforeAfterDistributionChart: React.FC<BeforeAfterDistributionChart
     let overCeiling = 0;
     
     sortedData.forEach(r => {
+      // Skip strategic reps from threshold counts
+      if (r.isStrategicRep) return;
       const val = r[config.afterKey] as number;
       if (val > max) overCeiling++;
       else if (val >= min) inRange++;
@@ -182,6 +195,11 @@ export const BeforeAfterDistributionChart: React.FC<BeforeAfterDistributionChart
     
     return { belowFloor, inRange, overCeiling };
   }, [sortedData, config, thresholds]);
+
+  // Check if any strategic reps exist
+  const hasStrategicReps = useMemo(() => 
+    sortedData.some(r => r.isStrategicRep), 
+  [sortedData]);
 
   return (
     <Card className={cn('card-elevated', className)}>
@@ -267,6 +285,12 @@ export const BeforeAfterDistributionChart: React.FC<BeforeAfterDistributionChart
                 <div className="w-3 h-3 rounded bg-red-500" />
                 <span className="text-muted-foreground">Over Ceiling: {statusCounts?.overCeiling ?? 0}</span>
               </div>
+              {hasStrategicReps && (
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 rounded bg-purple-500" />
+                  <span className="text-purple-600 dark:text-purple-400">Strategic</span>
+                </div>
+              )}
             </div>
             <div className="h-4 w-px bg-border" />
             {/* Target and Target Zone together */}
@@ -318,15 +342,19 @@ export const BeforeAfterDistributionChart: React.FC<BeforeAfterDistributionChart
               const afterVal = rep[config.afterKey] as number;
               const beforeWidth = maxValue > 0 ? (beforeVal / maxValue) * 100 : 0;
               const afterWidth = maxValue > 0 ? (afterVal / maxValue) * 100 : 0;
-              const barColor = getBarColor(afterVal, thresholds);
-              const status = getStatusText(afterVal, thresholds);
+              const isStrategic = rep.isStrategicRep ?? false;
+              const barColor = getBarColor(afterVal, thresholds, isStrategic);
+              const status = getStatusText(afterVal, thresholds, isStrategic);
               
               return (
                 <Tooltip key={rep.repId}>
                   <TooltipTrigger asChild>
                     <div className="flex items-center gap-2 group cursor-pointer py-0.5">
                       {/* Rep initials */}
-                      <div className="w-8 text-xs font-medium text-right text-muted-foreground group-hover:text-foreground">
+                      <div className={cn(
+                        "w-8 text-xs font-medium text-right group-hover:text-foreground",
+                        isStrategic ? "text-purple-500" : "text-muted-foreground"
+                      )}>
                         {formatRepName(rep.repName)}
                       </div>
                       
@@ -411,9 +439,20 @@ export const BeforeAfterDistributionChart: React.FC<BeforeAfterDistributionChart
                       </div>
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-xs">
+                  <TooltipContent 
+                    side="top" 
+                    className={cn(
+                      "max-w-xs",
+                      isStrategic && "bg-purple-50 dark:bg-purple-950 border-purple-200 dark:border-purple-800"
+                    )}
+                  >
                     <div className="text-sm">
-                      <div className="font-medium">{rep.repName}</div>
+                      <div className="flex items-center gap-2">
+                        {isStrategic && <Users className="h-4 w-4 text-purple-500" />}
+                        <span className={cn("font-medium", isStrategic && "text-purple-600 dark:text-purple-400")}>
+                          {rep.repName}
+                        </span>
+                      </div>
                       <div className="text-muted-foreground text-xs">{rep.region}</div>
                       <div className="mt-2 space-y-1">
                         <div className="flex items-center gap-2">

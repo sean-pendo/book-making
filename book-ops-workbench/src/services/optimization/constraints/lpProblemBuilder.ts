@@ -28,7 +28,7 @@ import { continuityScore } from '../scoring/continuityScore';
 import { geographyScore } from '../scoring/geographyScore';
 import { teamAlignmentScore } from '../scoring/teamAlignmentScore';
 import { normalizeWeights, deriveWeightsFromPriorityConfig } from '../utils/weightNormalizer';
-import { LP_PENALTY } from '@/_domain';
+import { LP_PENALTY, getBalancePenaltyMultiplier } from '@/_domain';
 
 /**
  * Three-tier penalty constants
@@ -71,6 +71,7 @@ interface MetricPenaltySlacks {
 
 /**
  * Build three-tier penalty terms for a single metric (ARR, ATR, or Pipeline)
+ * @param intensityMultiplier - Balance intensity multiplier (0.1x to 10x) @see MASTER_LOGIC.mdc §11.3.1
  */
 function buildMetricPenaltyTerms(
   metric: string,
@@ -79,7 +80,8 @@ function buildMetricPenaltyTerms(
   variance: number,
   min: number,
   max: number,
-  weight: number
+  weight: number,
+  intensityMultiplier: number = 1.0
 ): {
   slacks: MetricPenaltySlacks;
   penalties: Map<string, number>;
@@ -112,10 +114,11 @@ function buildMetricPenaltyTerms(
   // Penalty coefficients (negative because we maximize, penalties reduce score)
   // NUMERICAL STABILITY: Penalties are now in the same scale as assignment scores (0.1-1.0)
   // No division by normFactor - keeps coefficients in stable range
+  // Apply intensity multiplier to control continuity vs balance trade-off @see MASTER_LOGIC.mdc §11.3.1
   const penalties = new Map<string, number>();
-  const alphaPenalty = PENALTY.ALPHA * weight;  // ~0.0005 for ARR (weight=0.5)
-  const betaPenalty = PENALTY.BETA * weight;     // ~0.005 for ARR
-  const bigMPenalty = PENALTY.BIG_M * weight;    // ~0.05 for ARR
+  const alphaPenalty = PENALTY.ALPHA * weight * intensityMultiplier;  // ~0.005 for ARR (weight=0.5) at Normal intensity
+  const betaPenalty = PENALTY.BETA * weight * intensityMultiplier;     // ~0.05 for ARR at Normal intensity
+  const bigMPenalty = PENALTY.BIG_M * weight * intensityMultiplier;    // ~0.5 for ARR at Normal intensity
   
   penalties.set(slacks.alphaOver, -alphaPenalty);
   penalties.set(slacks.alphaUnder, -alphaPenalty);
@@ -145,6 +148,9 @@ export interface BuildProblemInput {
   assignmentType: 'customer' | 'prospect';
   territoryMappings: Record<string, string>;
   hardCapArr: number;
+  // Configured targets (used for normalization if provided)
+  targetArr?: number;
+  targetPipeline?: number;
 }
 
 export interface ProblemBuildResult {
@@ -157,7 +163,7 @@ export interface ProblemBuildResult {
  * Build the complete LP problem
  */
 export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
-  const { accounts, reps, lockedAccounts, config, assignmentType, territoryMappings, hardCapArr } = input;
+  const { accounts, reps, lockedAccounts, config, assignmentType, territoryMappings, hardCapArr, targetArr: configTargetArr, targetPipeline: configTargetPipeline } = input;
 
   // IMPORTANT: Combine unlocked accounts AND locked accounts for full problem
   // Locked accounts need variables too (so they contribute to capacity/balance constraints)
@@ -260,18 +266,32 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
   const pipelineMax = config.lp_balance_config.pipeline_max ?? 1000000;
   const pipelineVariance = config.lp_balance_config.pipeline_variance ?? 0.15;
 
-  // Calculate targets using ALL accounts in problem
+  // Get balance intensity multiplier @see MASTER_LOGIC.mdc §11.3.1
+  const balanceIntensity = config.lp_balance_config.balance_intensity ?? 'NORMAL';
+  const intensityMultiplier = getBalancePenaltyMultiplier(balanceIntensity);
+  console.log(`[LPBuilder] Balance intensity: ${balanceIntensity} (multiplier: ${intensityMultiplier}x)`);
+
+  // Calculate totals from actual data
   const totalARR = allAccountsInProblem.reduce((sum, a) => sum + a.aggregated_arr, 0);
   const totalATR = allAccountsInProblem.reduce((sum, a) => sum + a.aggregated_atr, 0);
   const totalPipeline = allAccountsInProblem.reduce((sum, a) => sum + a.pipeline_value, 0);
   const numReps = reps.length;
 
-  // Protect against division by zero
-  const arrTarget = numReps > 0 ? totalARR / numReps : 0;
-  const atrTarget = numReps > 0 ? totalATR / numReps : 0;
-  const pipelineTarget = numReps > 0 ? totalPipeline / numReps : 0;
+  // Use configured targets if provided, otherwise calculate from data
+  // Config targets are set by user in the UI and should be the source of truth
+  const calculatedArrTarget = numReps > 0 ? totalARR / numReps : 0;
+  const calculatedPipelineTarget = numReps > 0 ? totalPipeline / numReps : 0;
+  
+  const arrTarget = configTargetArr && configTargetArr > 0 ? configTargetArr : calculatedArrTarget;
+  const atrTarget = numReps > 0 ? totalATR / numReps : 0;  // ATR always calculated (no config target)
+  const pipelineTarget = configTargetPipeline && configTargetPipeline > 0 ? configTargetPipeline : calculatedPipelineTarget;
 
-  console.log(`[LPBuilder] Big-M Penalty Config: ARR target=${arrTarget.toFixed(0)}, min=${arrMin}, max=${arrMax}, variance=${arrVariance}`);
+  console.log(`[LPBuilder] Targets: ARR=${arrTarget.toFixed(0)} (config: ${configTargetArr || 'N/A'}), Pipeline=${pipelineTarget.toFixed(0)} (config: ${configTargetPipeline || 'N/A'})`);
+  console.log(`[LPBuilder] Big-M Penalty Config (${assignmentType}):
+    ARR: target=${arrTarget.toFixed(0)}, min=${arrMin}, max=${arrMax}, variance=${arrVariance}
+    ATR: target=${atrTarget.toFixed(0)}, min=${atrMin}, max=${atrMax}, variance=${atrVariance}
+    Pipeline: target=${pipelineTarget.toFixed(0)}, min=${pipelineMin}, max=${pipelineMax}, variance=${pipelineVariance}
+    Intensity: ${balanceIntensity} (${intensityMultiplier}x)`);
 
   // Store all penalty slack bounds for later use in LP generation
   const penaltySlackBounds: { varName: string; lower: number; upper: number | null }[] = [];
@@ -281,7 +301,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     if (balanceConfig.arr_balance_enabled && arrTarget > 0) {
       const metricWeight = assignmentType === 'customer' ? CUSTOMER_WEIGHTS.arr : PROSPECT_WEIGHTS.pipeline;
       const penaltyTerms = buildMetricPenaltyTerms(
-        'arr', rep.rep_id, arrTarget, arrVariance, arrMin, arrMax, metricWeight
+        'arr', rep.rep_id, arrTarget, arrVariance, arrMin, arrMax, metricWeight, intensityMultiplier
       );
 
       // Add penalties to objective
@@ -305,7 +325,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     // ATR balance with Big-M penalty (customers only)
     if (balanceConfig.atr_balance_enabled && assignmentType === 'customer' && atrTarget > 0) {
       const penaltyTerms = buildMetricPenaltyTerms(
-        'atr', rep.rep_id, atrTarget, atrVariance, atrMin, atrMax, CUSTOMER_WEIGHTS.atr
+        'atr', rep.rep_id, atrTarget, atrVariance, atrMin, atrMax, CUSTOMER_WEIGHTS.atr, intensityMultiplier
       );
 
       for (const [varName, penalty] of penaltyTerms.penalties) {
@@ -325,7 +345,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     // Pipeline balance with Big-M penalty (prospects only)
     if (balanceConfig.pipeline_balance_enabled && assignmentType === 'prospect' && pipelineTarget > 0) {
       const penaltyTerms = buildMetricPenaltyTerms(
-        'pipeline', rep.rep_id, pipelineTarget, pipelineVariance, pipelineMin, pipelineMax, PROSPECT_WEIGHTS.pipeline
+        'pipeline', rep.rep_id, pipelineTarget, pipelineVariance, pipelineMin, pipelineMax, PROSPECT_WEIGHTS.pipeline, intensityMultiplier
       );
 
       for (const [varName, penalty] of penaltyTerms.penalties) {
@@ -340,6 +360,12 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
         underVar: penaltyTerms.slacks.alphaUnder,
         target: pipelineTarget
       });
+      
+      // Debug: Log first rep's pipeline penalties to verify BigM is correct
+      if (balanceSlacks.filter(s => s.metric === 'pipeline').length === 1) {
+        const bigMPenalty = PENALTY.BIG_M * PROSPECT_WEIGHTS.pipeline * intensityMultiplier;
+        console.log(`[LPBuilder] Pipeline BigM penalty for ${rep.rep_id}: ${bigMPenalty.toFixed(2)} (PENALTY.BIG_M=${PENALTY.BIG_M}, weight=${PROSPECT_WEIGHTS.pipeline}, intensity=${intensityMultiplier})`);
+      }
     }
   }
   
@@ -381,7 +407,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
         const tierVariance = 0.50; // 50% variance for tier counts
         
         const penaltyTerms = buildMetricPenaltyTerms(
-          `tier${tierNum}`, rep.rep_id, tierTarget, tierVariance, tierMin, tierMax, tierWeight
+          `tier${tierNum}`, rep.rep_id, tierTarget, tierVariance, tierMin, tierMax, tierWeight, intensityMultiplier
         );
         
         for (const [varName, penalty] of penaltyTerms.penalties) {
@@ -392,17 +418,18 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     }
   }
   
-  // Feasibility slack variables
-  const feasibilitySlacks: { repId: string; name: string }[] = [];
-  const feasibilityPenalty = config.lp_solver_params.feasibility_penalty;
+  // NOTE: Feasibility slack variables removed - Big-M penalty system handles capacity symmetrically
+  // @see MASTER_LOGIC.mdc §11.3 - Symmetric balance via Big-M for both over and under allocation
   
-  console.log(`[LPBuilder] Feasibility penalty from config: ${feasibilityPenalty}`);
-  
-  for (const rep of reps) {
-    const slackVar = `feas_${rep.rep_id}`;
-    feasibilitySlacks.push({ repId: rep.rep_id, name: slackVar });
-    objectiveCoefficients.set(slackVar, -feasibilityPenalty);
+  // Log penalty summary - helps debug which constraints are actually active
+  const arrPenaltyCount = balanceSlacks.filter(s => s.metric === 'arr').length;
+  const atrPenaltyCount = balanceSlacks.filter(s => s.metric === 'atr').length;
+  const pipelinePenaltyCount = balanceSlacks.filter(s => s.metric === 'pipeline').length;
+  console.log(`[LPBuilder] Balance constraints for ${assignmentType}: ARR=${arrPenaltyCount}, ATR=${atrPenaltyCount}, Pipeline=${pipelinePenaltyCount}`);
+  if (assignmentType === 'prospect' && pipelinePenaltyCount === 0) {
+    console.warn(`[LPBuilder] ⚠️ Prospect build but NO pipeline constraints! pipeline_balance_enabled=${balanceConfig.pipeline_balance_enabled}, pipelineTarget=${pipelineTarget}`);
   }
+  console.log(`[LPBuilder] Total penalty slacks: ${penaltySlackBounds.length} (expected: ${reps.length} reps × 6 slacks × active metrics)`);
   
   // Build constraints
   const constraints: LPConstraint[] = [];
@@ -436,34 +463,17 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     }
   }
   
-  // 3. Capacity constraints with feasibility slack
-  // Include ALL accounts (locked accounts also consume capacity)
-  if (config.lp_constraints.capacity_hard_cap_enabled) {
-    for (const rep of reps) {
-      const vars = allAccountsInProblem.map(account => ({
-        name: `x_${account.sfdc_account_id}_${rep.rep_id}`,
-        coefficient: account.aggregated_arr
-      }));
-      
-      // Add feasibility slack (positive contribution to LHS)
-      vars.push({
-        name: `feas_${rep.rep_id}`,
-        coefficient: -1 // Slack reduces effective load
-      });
-      
-      constraints.push({
-        name: `cap_${rep.rep_id}`,
-        type: 'le',
-        variables: vars,
-        rhs: hardCapArr
-      });
-    }
-  }
+  // NOTE: Hard capacity constraint removed - Big-M penalty system now handles capacity symmetrically
+  // Both over-allocation (M+) and under-allocation (M-) are penalized via soft constraints
+  // @see MASTER_LOGIC.mdc §11.3 - Symmetric balance constraints
   
-  // 4. Balance decomposition constraints using Big-M penalty system
+  // 3. Balance decomposition constraints using Big-M penalty system
   // NUMERICAL STABILITY: All values normalized by target to keep coefficients in 0-2 range
   // Decomposition formula: actual/target = 1 + alpha_over - alpha_under + beta_over - beta_under + bigM_over - bigM_under
   // Rearranged: (actual/target) - alpha_over + alpha_under - beta_over + beta_under - bigM_over + bigM_under = 1
+  // 
+  // This handles BOTH over-allocation and under-allocation symmetrically via soft penalties.
+  // No hard capacity constraint needed - the BigM zone penalizes extreme deviations in either direction.
   
   // ARR balance (all account types)
   if (balanceConfig.arr_balance_enabled && arrTarget > 0) {
@@ -492,7 +502,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     }
   }
   
-  // 5. ATR balance constraints (customers only) with Big-M - NORMALIZED
+  // 4. ATR balance constraints (customers only) with Big-M - NORMALIZED
   if (balanceConfig.atr_balance_enabled && assignmentType === 'customer' && atrTarget > 0) {
     const atrNormFactor = atrTarget;
     for (const rep of reps) {
@@ -518,7 +528,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     }
   }
   
-  // 6. Pipeline balance constraints (prospects only) with Big-M - NORMALIZED
+  // 5. Pipeline balance constraints (prospects only) with Big-M - NORMALIZED
   if (balanceConfig.pipeline_balance_enabled && assignmentType === 'prospect' && pipelineTarget > 0) {
     const pipelineNormFactor = pipelineTarget;
     for (const rep of reps) {
@@ -544,7 +554,7 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
     }
   }
   
-  // 7. Tier balance constraints with Big-M (each tier individually) - NORMALIZED
+  // 6. Tier balance constraints with Big-M (each tier individually) - NORMALIZED
   for (const tierNum of [1, 2, 3, 4] as const) {
     const tierKey = `tier${tierNum}` as keyof typeof tierTargets;
     const tierTarget = tierTargets[tierKey];
@@ -583,13 +593,12 @@ export function buildLPProblem(input: BuildProblemInput): ProblemBuildResult {
   const problem: LPProblem = {
     assignmentVars,
     balanceSlacks,
-    feasibilitySlacks,
     slackBounds: penaltySlackBounds,  // Include all Big-M penalty slack bounds
     constraints,
     objectiveCoefficients,
     numAccounts: allAccountsInProblem.length,
     numReps: reps.length,
-    numVariables: assignmentVars.length + penaltySlackBounds.length + feasibilitySlacks.length,
+    numVariables: assignmentVars.length + penaltySlackBounds.length,
     numConstraints: constraints.length
   };
   

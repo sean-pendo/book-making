@@ -733,9 +733,9 @@ export const BuildDetail = () => {
                     <Cog className="h-10 w-10 text-primary-foreground" />
                   </div>
                   <div>
-                    <h3 className="text-2xl font-semibold text-gradient mb-2">Ready for Territory Assignment</h3>
+                    <h3 className="text-2xl font-semibold text-gradient mb-2">Ready for Book Assignments</h3>
                     <p className="text-muted-foreground text-lg max-w-md mx-auto">
-                      All data imported successfully. Run the assignment engine to optimize territory distribution.
+                      All data imported successfully. Run the assignment engine to optimize book distribution.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-3 justify-center">

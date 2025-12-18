@@ -19,9 +19,7 @@ interface Opportunity {
   owner_id: string | null;
   available_to_renew: number | null;
   net_arr: number | null;
-  stage: string | null;
-  close_date: string | null;
-  created_date: string | null;
+  // DEPRECATED: stage, close_date, created_date - removed in v1.3.9
   renewal_event_date: string | null;
   cre_status: string | null;
 }
@@ -34,18 +32,12 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(0);
   const [filters, setFilters] = useState<FilterValues>({});
-  const [sortField, setSortField] = useState<keyof Opportunity>('close_date');
+  const [sortField, setSortField] = useState<keyof Opportunity>('renewal_event_date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const pageSize = 50;
 
+  // DEPRECATED: stage filter - removed in v1.3.9
   const filterConfigs: FilterConfig[] = [
-    {
-      key: 'stage',
-      label: 'Stage',
-      type: 'select',
-      options: [], // Will be populated from data
-      placeholder: 'All stages'
-    },
     {
       key: 'cre_status',
       label: 'CRE Status',
@@ -64,16 +56,7 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
       options: [], // Will be populated from data
       placeholder: 'All types'
     },
-    {
-      key: 'close_date_from',
-      label: 'Close Date From',
-      type: 'date'
-    },
-    {
-      key: 'close_date_to',
-      label: 'Close Date To',
-      type: 'date'
-    },
+    // DEPRECATED: close_date filters - removed in v1.3.9
     {
       key: 'atr_min',
       label: 'Min ATR ($)',
@@ -124,31 +107,24 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
         .from('opportunities')
         .select(`
           sfdc_opportunity_id, sfdc_account_id, opportunity_name, opportunity_type,
-          owner_name, owner_id, available_to_renew, net_arr, stage, close_date, 
-          created_date, renewal_event_date, cre_status
+          owner_name, owner_id, available_to_renew, net_arr, 
+          renewal_event_date, cre_status
         `)
         .eq('build_id', buildId);
 
       if (searchTerm) {
-        oppQuery = oppQuery.or(`opportunity_name.ilike.%${searchTerm}%,owner_name.ilike.%${searchTerm}%,stage.ilike.%${searchTerm}%,cre_status.ilike.%${searchTerm}%`);
+        oppQuery = oppQuery.or(`opportunity_name.ilike.%${searchTerm}%,owner_name.ilike.%${searchTerm}%,cre_status.ilike.%${searchTerm}%`);
       }
 
       // Apply filters
-      if (filters.stage) {
-        oppQuery = oppQuery.eq('stage', filters.stage as string);
-      }
+      // DEPRECATED: stage filter - removed in v1.3.9
       if (filters.cre_status) {
         oppQuery = oppQuery.ilike('cre_status', `%${filters.cre_status}%`);
       }
       if (filters.opportunity_type) {
         oppQuery = oppQuery.eq('opportunity_type', filters.opportunity_type as string);
       }
-      if (filters.close_date_from) {
-        oppQuery = oppQuery.gte('close_date', filters.close_date_from as string);
-      }
-      if (filters.close_date_to) {
-        oppQuery = oppQuery.lte('close_date', filters.close_date_to as string);
-      }
+      // DEPRECATED: close_date filters - removed in v1.3.9
       if (filters.atr_min) {
         oppQuery = oppQuery.gte('available_to_renew', filters.atr_min as number);
       }
@@ -158,19 +134,20 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
 
       // Apply sorting at database level
       const ascending = sortDirection === 'asc';
+      // DEPRECATED: stage, close_date, created_date sorting - removed in v1.3.9
       if (sortField === 'opportunity_name' || sortField === 'owner_name' || 
-          sortField === 'stage' || sortField === 'cre_status') {
+          sortField === 'cre_status') {
         oppQuery = oppQuery.order(sortField as string, { ascending, nullsFirst: false });
       } else if (sortField === 'available_to_renew' || sortField === 'net_arr') {
         oppQuery = oppQuery.order(sortField as string, { ascending, nullsFirst: false });
-      } else if (sortField === 'close_date' || sortField === 'created_date' || sortField === 'renewal_event_date') {
+      } else if (sortField === 'renewal_event_date') {
         oppQuery = oppQuery.order(sortField as string, { ascending, nullsFirst: false });
       } else if (sortField === 'account_name') {
         // For account_name, we'll need to sort after joining with accounts
         oppQuery = oppQuery.order('opportunity_name', { ascending, nullsFirst: false });
       } else {
         // Default sorting
-        oppQuery = oppQuery.order('close_date', { ascending: false, nullsFirst: false });
+        oppQuery = oppQuery.order('renewal_event_date', { ascending: false, nullsFirst: false });
       }
 
       // Apply pagination after all filtering and sorting
@@ -241,12 +218,7 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
     }
   };
 
-  const getStageColor = (stage: string | null) => {
-    if (!stage) return 'secondary';
-    if (stage.toLowerCase().includes('closed won') || stage.toLowerCase().includes('won')) return 'default';
-    if (stage.toLowerCase().includes('closed lost') || stage.toLowerCase().includes('lost')) return 'destructive';
-    return 'outline';
-  };
+  // DEPRECATED: getStageColor - stage field removed in v1.3.9
 
   const getCREStatusBadge = (cre_status: string | null) => {
     if (!cre_status) return <Badge variant="secondary">No Status</Badge>;
@@ -337,24 +309,7 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
                     {getSortIcon('available_to_renew')}
                   </div>
                 </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort('stage')}
-                >
-                  <div className="flex items-center gap-1">
-                    Stage
-                    {getSortIcon('stage')}
-                  </div>
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort('close_date')}
-                >
-                  <div className="flex items-center gap-1">
-                    Timeline
-                    {getSortIcon('close_date')}
-                  </div>
-                </TableHead>
+                {/* DEPRECATED: stage and timeline (close_date/created_date) columns - removed in v1.3.9 */}
                 <TableHead 
                   className="cursor-pointer hover:bg-muted/50 select-none"
                   onClick={() => handleSort('cre_status')}
@@ -426,27 +381,9 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell>
-                        {opp.stage ? (
-                          <Badge variant={getStageColor(opp.stage)}>
-                            {opp.stage}
-                          </Badge>
-                        ) : '-'}
-                      </TableCell>
+                      {/* DEPRECATED: stage and timeline cells - removed in v1.3.9 */}
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          {opp.created_date && (
-                            <div className="text-xs">
-                              <span className="text-muted-foreground">Created: </span>
-                              <span>{formatDate(opp.created_date)}</span>
-                            </div>
-                          )}
-                          {opp.close_date && (
-                            <div className="text-xs">
-                              <span className="text-muted-foreground">Close: </span>
-                              <span className="font-medium">{formatDate(opp.close_date)}</span>
-                            </div>
-                          )}
                           {opp.renewal_event_date && (
                             <div className="text-xs">
                               <span className="text-muted-foreground">Renewal: </span>

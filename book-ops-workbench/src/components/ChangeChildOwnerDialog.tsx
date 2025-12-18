@@ -26,6 +26,7 @@ import { AlertTriangle, UserCheck, Search } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { AccountDetail } from '@/hooks/useEnhancedBalancing';
+import { useInvalidateAnalytics } from '@/hooks/useInvalidateAnalytics';
 
 interface ChangeChildOwnerDialogProps {
   open: boolean;
@@ -49,6 +50,7 @@ export const ChangeChildOwnerDialog = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const invalidateAnalytics = useInvalidateAnalytics();
 
   const handleChangeOwner = async () => {
     if (!childAccount || !newOwnerId) return;
@@ -113,6 +115,9 @@ export const ChangeChildOwnerDialog = ({
 
       // Trigger recalculation of account values (respects split ownership)
       await supabase.rpc('update_account_calculated_values', { p_build_id: buildId });
+
+      // Invalidate analytics queries so KPIs and charts update
+      await invalidateAnalytics(buildId);
 
       toast({
         title: "Success",

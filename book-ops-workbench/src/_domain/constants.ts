@@ -462,29 +462,84 @@ export const LP_SCORING_FACTORS = {
  * Three-tier penalty system for balance constraints.
  * @see MASTER_LOGIC.mdc §11.3 Three-Tier Penalty System
  * 
- * Values are normalized for HiGHS WASM numerical stability.
- * Original conceptual values (0.01, 1.0, 1000.0) caused coefficient
- * magnitude mismatch with assignment scores (0.1-1.0 range).
- * The relative ratios (1:10:100) are preserved.
+ * BigM is intentionally HUGE (100.0) to dominate assignment scores.
+ * Assignment scores range 0-110 per account, so BigM must exceed this
+ * significantly to prevent accumulation of small violations.
+ * 
+ * At VERY_HEAVY intensity (25x), BigM penalty reaches 1250.0 per normalized unit,
+ * completely preventing any violation of max limits.
+ * 
+ * Ratios: Alpha:Beta:BigM = 1:10:1000
  * 
  * Used by: lpProblemBuilder.ts, simplifiedAssignmentEngine.ts
  */
 export const LP_PENALTY = {
   /** Alpha: Small penalty for deviation within variance band */
-  ALPHA: 0.001,
+  ALPHA: 0.01,
   
   /** Beta: Medium penalty for deviation in buffer zone (between variance and hard cap) */
-  BETA: 0.01,
+  BETA: 0.1,
   
-  /** BigM: Large penalty for deviation beyond absolute limits */
-  BIG_M: 0.1,
+  /** BigM: HUGE penalty for deviation beyond absolute limits - must dominate all assignment scores */
+  BIG_M: 100.0,
 } as const;
+
+/**
+ * BALANCE INTENSITY PRESETS
+ * -------------------------
+ * Controls the trade-off between continuity and balance.
+ * Higher multiplier = balance matters more, continuity may be sacrificed.
+ * 
+ * Applied to all LP_PENALTY values (Alpha, Beta, BigM) for:
+ * - ARR balance
+ * - ATR balance (customers)
+ * - Pipeline balance (prospects)
+ * - Tier balance (all)
+ * 
+ * At HEAVY (10x), the BigM penalty (100.0) becomes 500.0 per normalized unit,
+ * which strongly discourages exceeding max limits.
+ * 
+ * At VERY_HEAVY (100x), the BigM penalty (100.0) becomes 5000.0 per normalized unit,
+ * completely dominating any assignment score (0.1-1.0 range per account),
+ * making max limits effectively hard constraints.
+ * 
+ * @see MASTER_LOGIC.mdc §11.3.1
+ */
+export const BALANCE_INTENSITY_PRESETS = {
+  VERY_LIGHT: { label: 'Very Light', multiplier: 0.1, description: 'Preserve fit; balance rarely overrides' },
+  LIGHT: { label: 'Light', multiplier: 0.5, description: 'Slight preference for balance' },
+  NORMAL: { label: 'Normal', multiplier: 1.0, description: 'Balanced trade-off (default)' },
+  HEAVY: { label: 'Heavy', multiplier: 10.0, description: 'Strong preference for even distribution' },
+  VERY_HEAVY: { label: 'Very Heavy', multiplier: 100.0, description: 'Force even distribution; max limits strictly enforced' },
+} as const;
+
+export type BalanceIntensity = keyof typeof BALANCE_INTENSITY_PRESETS;
+
+/**
+ * Get the penalty multiplier for a given balance intensity
+ * @see MASTER_LOGIC.mdc §11.3.1
+ */
+export function getBalancePenaltyMultiplier(intensity: BalanceIntensity): number {
+  return BALANCE_INTENSITY_PRESETS[intensity].multiplier;
+}
+
+/**
+ * SOLVER MODE
+ * -----------
+ * Controls routing strategy for LP solver calls.
+ * 
+ * - 'browser': Use HiGHS WASM in browser (fast, fallback: GLPK → Cloud Run)
+ * - 'cloud': Use Cloud Run native HiGHS (reliable, no fallback)
+ * 
+ * @see MASTER_LOGIC.mdc §11.11 Solver Routing Strategy
+ */
+export type SolverMode = 'browser' | 'cloud';
 
 /**
  * LP SCALE LIMITS
  * ---------------
  * Maximum problem sizes for HiGHS WASM in browser.
- * @see MASTER_LOGIC.mdc §11.5 Scale Limits
+ * @see MASTER_LOGIC.mdc §11.10 Scale Limits
  * 
  * HiGHS WASM can hang on very large problems due to:
  * - Dense constraint matrices (each balance constraint references all accounts)
@@ -507,3 +562,53 @@ export const LP_SCALE_LIMITS = {
   /** Warning threshold - log performance warning above this */
   WARN_ACCOUNTS_THRESHOLD: 3000,
 } as const;
+
+// =============================================================================
+// WORKLOAD SCORING (Legacy AssignmentService)
+// =============================================================================
+
+/**
+ * WORKLOAD SCORE NORMALIZATION FACTORS
+ * ------------------------------------
+ * Used by legacy assignmentService.ts to normalize account count and tier count
+ * to be comparable with ARR values in a composite workload score.
+ * 
+ * Formula: workloadScore = (ARR × 0.6) + (accountCount × ACCOUNT_WEIGHT × 0.3) + (tier1Count × TIER1_WEIGHT × 0.1)
+ * 
+ * These weights convert count-based metrics to dollar-equivalent values:
+ * - Each account is worth ~$50K in workload terms
+ * - Each Tier 1 account is worth ~$25K additional workload
+ * 
+ * Note: This is used by the LEGACY assignmentService.ts, not the primary
+ * simplifiedAssignmentEngine.ts which uses LP solver for balancing.
+ */
+export const WORKLOAD_SCORE_WEIGHTS = {
+  /** Dollar-equivalent weight per account for workload scoring */
+  ACCOUNT_WEIGHT: 50_000,
+  
+  /** Dollar-equivalent weight per Tier 1 account for workload scoring */
+  TIER1_WEIGHT: 25_000,
+} as const;
+
+// =============================================================================
+// MODEL VERSIONING
+// =============================================================================
+
+/**
+ * OPTIMIZATION MODEL VERSION
+ * --------------------------
+ * Semantic version for tracking optimization model changes.
+ * Bump when changing scoring functions, penalties, or constraints.
+ * 
+ * Version Bump Rules:
+ * - Major (X.0.0): Breaking changes to scoring formula structure
+ *   Example: New scoring factor added, constraint type removed
+ * - Minor (0.X.0): New optional features, significant algorithm changes
+ *   Example: New balance metric, solver routing change
+ * - Patch (0.0.X): Threshold/weight value changes
+ *   Example: LP_PENALTY.ALPHA change, DEFAULT_LP_GEOGRAPHY_PARAMS tweak
+ * 
+ * Used by: optimizationTelemetry.ts
+ * @see MASTER_LOGIC.mdc §14.2 Model Versioning
+ */
+export const OPTIMIZATION_MODEL_VERSION = '1.0.1';

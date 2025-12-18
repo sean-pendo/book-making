@@ -37,8 +37,9 @@ ${availableRegions.map(r => `- ${r}`).join('\n')}
 ## Territory to Region Mappings (exact regional breakdown)
 
 ### West (includes British Columbia, Canada)
-States: WA, OR, CA, NV, UT, AZ, ID, AK, HI
-Cities/Areas: Seattle, Portland, San Francisco, Los Angeles, San Diego, Sacramento, Las Vegas, Phoenix, Tucson, Salt Lake City, Vancouver, Pacific Northwest, NorCal, SoCal, Bay Area
+States: WA, OR, CA, NV, UT, AZ, ID, AK, HI, NM
+Cities/Areas: Seattle, Portland, San Francisco, Los Angeles, San Diego, Sacramento, Las Vegas, Phoenix, Tucson, Salt Lake City, Vancouver, Pacific Northwest, NorCal, SoCal, Bay Area, Southwest, South West, Albuquerque
+Note: "Southwest" territories (AZ, NM, NV, UT) belong to West region, NOT Southeast
 
 ### Central (includes Alberta, Canada)
 States: MT, ND, SD, NE, KS, MO, IA, MN, WI, IL, IN, MI, OH, CO, WY, NM, ID
@@ -65,6 +66,7 @@ Respond ONLY with a valid JSON array. Each object should have:
 Example response:
 [
   {"territory": "BOSTON", "region": "North East", "confidence": "high", "reasoning": "Boston is a major city in the northeastern US."},
+  {"territory": "SOUTHWEST", "region": "West", "confidence": "high", "reasoning": "Southwest US (AZ, NM, NV) is part of the West region, not Southeast."},
   {"territory": "Australia", "region": "NOT_APPLICABLE", "confidence": "high", "reasoning": "No Australian or APAC region available in the options."}
 ]
 

@@ -4,6 +4,36 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Layers } from 'lucide-react';
 import { usePriorityDistribution, type PriorityDistributionItem } from '@/hooks/useBuildData';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+
+/**
+ * Fallback names for priority codes when name is missing
+ * 
+ * NOTE: Priority names are DYNAMIC based on the rationale string.
+ * The hook parses the actual name from "P1: Geography Match → Rep Name"
+ * This is only a fallback when the rationale doesn't include a name.
+ * 
+ * RO = Residual Optimization (balance-driven fallback assignments)
+ */
+const FALLBACK_PRIORITY_NAMES: Record<string, string> = {
+  'P0': 'Manual Holdover',
+  'RO': 'Residual Optimization',
+  'Other': 'Other',
+};
+
+/**
+ * Get a clean display name for a priority
+ * Uses the name parsed from rationale; fallback only if missing
+ */
+function getDisplayName(item: PriorityDistributionItem): string {
+  // If priorityName is already set and not just the code, use it (cleaned)
+  if (item.priorityName && item.priorityName !== item.priorityId && !item.priorityName.match(/^(P\d+|RO)$/)) {
+    // Clean any duplicate prefix like "P1: " from the start
+    return item.priorityName.replace(/^(P\d+|RO):\s*/i, '');
+  }
+  // Fallback for codes without names
+  return FALLBACK_PRIORITY_NAMES[item.priorityId] || item.priorityId;
+}
 
 interface PriorityDistributionPieProps {
   buildId: string;
@@ -27,9 +57,10 @@ const PRIORITY_COLORS = [
 const CustomTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload as PriorityDistributionItem;
+    const displayName = getDisplayName(data);
     return (
       <div className="bg-background border rounded-lg px-3 py-2 shadow-lg text-sm max-w-xs">
-        <p className="font-semibold text-foreground">{data.priorityId}: {data.priorityName}</p>
+        <p className="font-semibold text-foreground">{data.priorityId}: {displayName}</p>
         {data.priorityDescription && (
           <p className="text-xs text-muted-foreground mt-1">{data.priorityDescription}</p>
         )}
@@ -142,29 +173,62 @@ export const PriorityDistributionPie: React.FC<PriorityDistributionPieProps> = (
 
           {/* Legend - shows priority name with count */}
           <div className="flex-1 space-y-1 min-w-0">
-            {chartData.slice(0, 5).map((item) => (
-              <div key={item.priorityId} className="flex items-center justify-between text-xs gap-2">
-                <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                  <div
-                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                    style={{ backgroundColor: item.fill }}
-                  />
-                  <span
-                    className="text-muted-foreground truncate"
-                    title={`${item.priorityId}: ${item.priorityName}`}
-                  >
-                    {item.priorityId}: {item.priorityName}
-                  </span>
-                </div>
-                <span className="font-medium tabular-nums flex-shrink-0">
-                  {item.count.toLocaleString()}
-                </span>
-              </div>
-            ))}
+            {chartData.slice(0, 5).map((item) => {
+              const displayName = getDisplayName(item);
+              return (
+                <UITooltip key={item.priorityId}>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center justify-between text-xs gap-2 cursor-default">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <div
+                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: item.fill }}
+                        />
+                        <span className="text-muted-foreground truncate">
+                          {item.priorityId}: {displayName}
+                        </span>
+                      </div>
+                      <span className="font-medium tabular-nums flex-shrink-0">
+                        {item.count.toLocaleString()}
+                      </span>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="left" className="max-w-xs">
+                    <p className="font-semibold">{item.priorityId}: {displayName}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {item.count.toLocaleString()} accounts ({item.percentage.toFixed(1)}%)
+                    </p>
+                  </TooltipContent>
+                </UITooltip>
+              );
+            })}
             {chartData.length > 5 && (
-              <div className="text-xs text-muted-foreground">
-                +{chartData.length - 5} more
-              </div>
+              <UITooltip>
+                <TooltipTrigger asChild>
+                  <div className="text-xs text-muted-foreground cursor-default">
+                    +{chartData.length - 5} more
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="left" className="max-w-xs">
+                  <div className="space-y-1">
+                    {chartData.slice(5).map((item) => {
+                      const displayName = getDisplayName(item);
+                      return (
+                        <div key={item.priorityId} className="flex items-center justify-between gap-3 text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <div
+                              className="w-2 h-2 rounded-full flex-shrink-0"
+                              style={{ backgroundColor: item.fill }}
+                            />
+                            <span>{item.priorityId}: {displayName}</span>
+                          </div>
+                          <span className="font-medium tabular-nums">{item.count.toLocaleString()}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </TooltipContent>
+              </UITooltip>
             )}
           </div>
         </div>

@@ -31,6 +31,8 @@ export interface LoadedBuildData {
   lpConfig: LPConfiguration;
   targetArr: number;
   hardCapArr: number;
+  targetPipeline: number;  // Prospect pipeline target from config
+  hardCapPipeline: number; // Prospect pipeline max from config
 }
 
 // ARR calculation: imported from @/_domain (single source of truth)
@@ -233,9 +235,14 @@ export async function loadBuildData(buildId: string): Promise<LoadedBuildData> {
   // Parse LP configuration with defaults
   const lpConfig = parseLPConfiguration(rawConfig);
   
-  // Get capacity limits
+  // Get capacity limits from config
   const targetArr = rawConfig?.customer_target_arr ?? 2000000;
   const hardCapArr = rawConfig?.customer_max_arr ?? 3000000;
+  const targetPipeline = rawConfig?.prospect_target_arr ?? 2000000;
+  const hardCapPipeline = rawConfig?.prospect_max_arr ?? 3000000;
+  
+  console.log(`[DataLoader] Targets from config: ARR=${targetArr}, Pipeline=${targetPipeline}`);
+  console.log(`[DataLoader] Max caps from config: ARR=${hardCapArr}, Pipeline=${hardCapPipeline}`);
   
   return {
     accounts,
@@ -248,7 +255,9 @@ export async function loadBuildData(buildId: string): Promise<LoadedBuildData> {
     territoryMappings: (rawConfig?.territory_mappings as Record<string, string>) || {},
     lpConfig,
     targetArr,
-    hardCapArr
+    hardCapArr,
+    targetPipeline,
+    hardCapPipeline
   };
 }
 
@@ -291,7 +300,9 @@ function parseLPConfiguration(config: any): LPConfiguration {
       atr_variance: atrVariance,
       pipeline_min: config.prospect_min_arr ?? defaults.lp_balance_config.pipeline_min,
       pipeline_max: config.prospect_max_arr ?? defaults.lp_balance_config.pipeline_max,
-      pipeline_variance: pipelineVariance
+      pipeline_variance: pipelineVariance,
+      // Balance intensity controls continuity vs balance trade-off @see MASTER_LOGIC.mdc §11.3.1
+      balance_intensity: config.balance_intensity ?? 'NORMAL'
     },
     lp_constraints: {
       ...defaults.lp_constraints,

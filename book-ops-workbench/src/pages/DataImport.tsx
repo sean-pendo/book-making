@@ -166,6 +166,40 @@ import { EnhancedValidationResults } from '@/components/EnhancedValidationResult
 import { ImportProgressMonitor } from '@/components/ImportProgressMonitor';
 import { loadDataImportState, saveDataImportState, clearDataImportState } from '@/utils/persistenceUtils';
 
+/**
+ * Fetch sample data from Supabase for preview when parsedData is not available
+ * @returns Object with data array and headers array
+ */
+const fetchPreviewDataFromDatabase = async (
+  buildId: string,
+  dataType: 'accounts' | 'opportunities' | 'sales_reps'
+): Promise<{ data: any[]; headers: string[] }> => {
+  const tableName = dataType === 'accounts' ? 'accounts' 
+    : dataType === 'opportunities' ? 'opportunities' 
+    : 'sales_reps';
+  
+  // Fetch 100 sample rows for preview
+  const { data, error } = await supabase
+    .from(tableName)
+    .select('*')
+    .eq('build_id', buildId)
+    .limit(100);
+  
+  if (error) {
+    throw new Error(`Failed to fetch ${dataType}: ${error.message}`);
+  }
+  
+  if (!data || data.length === 0) {
+    return { data: [], headers: [] };
+  }
+  
+  // Extract headers from the first row, excluding internal fields
+  const excludedFields = ['id', 'build_id', 'created_at', 'updated_at'];
+  const headers = Object.keys(data[0]).filter(key => !excludedFields.includes(key));
+  
+  return { data, headers };
+};
+
 interface ImportFile {
   id: string;
   name: string;
@@ -266,6 +300,8 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
   const [newBuildName, setNewBuildName] = useState('');
   const [importingFileIds, setImportingFileIds] = useState<Set<string>>(new Set());
   const [previewFile, setPreviewFile] = useState<ImportFile | null>(null);
+  const [dbPreviewData, setDbPreviewData] = useState<{ data: any[]; headers: string[] } | null>(null);
+  const [isLoadingDbPreview, setIsLoadingDbPreview] = useState(false);
   const [errorViewFile, setErrorViewFile] = useState<ImportFile | null>(null);
   const [dataRefreshKey, setDataRefreshKey] = useState(0);
   
@@ -748,12 +784,12 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'sfdc_account_id', required: true, mapped: false, priority: 'essential', description: 'Unique Salesforce Account ID (18-digit)' },
     { csvField: '', schemaField: 'account_name', required: true, mapped: false, priority: 'essential', description: 'Company or organization name' },
     
-    // High priority fields - Important for territory assignment and revenue tracking (but not blocking)
+    // High priority fields - Important for book assignment and revenue tracking (but not blocking)
     { csvField: '', schemaField: 'owner_id', required: false, mapped: false, priority: 'high', description: 'Account owner user ID' },
     { csvField: '', schemaField: 'owner_name', required: false, mapped: false, priority: 'high', description: 'Account owner full name' },
     { csvField: '', schemaField: 'ultimate_parent_id', required: false, mapped: false, priority: 'high', description: 'Ultimate parent account ID for hierarchy (empty for parent accounts)' },
     { csvField: '', schemaField: 'ultimate_parent_name', required: false, mapped: false, priority: 'high', description: 'Ultimate parent account name (empty for parent accounts)' },
-    { csvField: '', schemaField: 'sales_territory', required: false, mapped: false, priority: 'high', description: 'Sales territory assignment' },
+    { csvField: '', schemaField: 'sales_territory', required: false, mapped: false, priority: 'high', description: 'Sales territory for geo matching' },
     { csvField: '', schemaField: 'hq_country', required: false, mapped: false, priority: 'high', description: 'Headquarters country for geo assignment' },
     { csvField: '', schemaField: 'arr', required: false, mapped: false, priority: 'high', description: 'Annual Recurring Revenue' },
     { csvField: '', schemaField: 'hierarchy_bookings_arr_converted', required: false, mapped: false, priority: 'high', description: 'Hierarchy Bookings ARR (converted)' },
@@ -761,25 +797,17 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'initial_sale_tier', required: false, mapped: false, priority: 'high', description: 'Initial sale priority tier' },
     
     // Secondary fields - Additional data for analysis and reporting
+    // DEPRECATED fields removed in v1.3.9: ultimate_parent_employee_size, account_type, industry, 
+    // expansion_score, initial_sale_score, in_customer_hierarchy, include_in_emea, is_2_0, inbound_count, idr_count
     { csvField: '', schemaField: 'parent_id', required: false, mapped: false, priority: 'secondary', description: 'Direct parent account ID' },
     { csvField: '', schemaField: 'geo', required: false, mapped: false, priority: 'secondary', description: 'Geographic region' },
-    { csvField: '', schemaField: 'ultimate_parent_employee_size', required: false, mapped: false, priority: 'secondary', description: 'Ultimate parent company size' },
     { csvField: '', schemaField: 'atr', required: false, mapped: false, priority: 'secondary', description: 'Annual Total Revenue' },
     { csvField: '', schemaField: 'renewal_date', required: false, mapped: false, priority: 'secondary', description: 'Contract renewal date' },
     { csvField: '', schemaField: 'expansion_tier', required: false, mapped: false, priority: 'secondary', description: 'Expansion priority tier' },
-    { csvField: '', schemaField: 'account_type', required: false, mapped: false, priority: 'secondary', description: 'Account classification type' },
     { csvField: '', schemaField: 'enterprise_vs_commercial', required: false, mapped: false, priority: 'secondary', description: 'Enterprise or Commercial segment' },
-    { csvField: '', schemaField: 'industry', required: false, mapped: false, priority: 'secondary', description: 'Primary industry vertical' },
-    { csvField: '', schemaField: 'expansion_score', required: false, mapped: false, priority: 'secondary', description: 'Expansion opportunity score' },
-    { csvField: '', schemaField: 'initial_sale_score', required: false, mapped: false, priority: 'secondary', description: 'Initial sales priority score' },
     { csvField: '', schemaField: 'has_customer_hierarchy', required: false, mapped: false, priority: 'secondary', description: 'Account has customer hierarchy' },
-    { csvField: '', schemaField: 'in_customer_hierarchy', required: false, mapped: false, priority: 'secondary', description: 'Part of a customer hierarchy' },
-    { csvField: '', schemaField: 'include_in_emea', required: false, mapped: false, priority: 'secondary', description: 'Include in EMEA region' },
     { csvField: '', schemaField: 'is_parent', required: false, mapped: false, priority: 'secondary', description: 'Is a parent account' },
-    { csvField: '', schemaField: 'is_2_0', required: false, mapped: false, priority: 'secondary', description: 'Version 2.0 flag' },
     { csvField: '', schemaField: 'owners_lifetime_count', required: false, mapped: false, priority: 'secondary', description: 'Total number of owners over time' },
-    { csvField: '', schemaField: 'inbound_count', required: false, mapped: false, priority: 'secondary', description: 'Number of inbound leads' },
-    { csvField: '', schemaField: 'idr_count', required: false, mapped: false, priority: 'secondary', description: 'Inside sales rep count' },
     { csvField: '', schemaField: 'risk_flag', required: false, mapped: false, priority: 'secondary', description: 'Account at-risk flag' },
     { csvField: '', schemaField: 'cre_risk', required: false, mapped: false, priority: 'secondary', description: 'Customer Risk & Expansion flag' },
     { csvField: '', schemaField: 'pe_firm', required: false, mapped: false, priority: 'secondary', description: 'Private Equity firm name (for PE routing rules)' }
@@ -792,20 +820,15 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'sfdc_account_id', required: true, mapped: false, priority: 'essential', description: 'Related Account ID' },
     
     // High priority fields - Important for pipeline management (but not blocking)
+    // DEPRECATED fields removed in v1.3.9: stage, close_date, created_date
     { csvField: '', schemaField: 'opportunity_name', required: false, mapped: false, priority: 'high', description: 'Opportunity name' },
     { csvField: '', schemaField: 'opportunity_type', required: false, mapped: false, priority: 'high', description: 'Opportunity type (New Business, Expansion, Renewal)' },
-    { csvField: '', schemaField: 'stage', required: false, mapped: false, priority: 'high', description: 'Current sales stage' },
-     { csvField: '', schemaField: 'close_date', required: false, mapped: false, priority: 'high', description: 'Expected close date' },
-     { csvField: '', schemaField: 'created_date', required: false, mapped: false, priority: 'high', description: 'Opportunity creation date' },
      { csvField: '', schemaField: 'owner_id', required: false, mapped: false, priority: 'high', description: 'Opportunity owner user ID' },
      { csvField: '', schemaField: 'owner_name', required: false, mapped: false, priority: 'high', description: 'Opportunity owner name' },
      { csvField: '', schemaField: 'available_to_renew', required: false, mapped: false, priority: 'high', description: 'Amount available to renew' },
      { csvField: '', schemaField: 'cre_status', required: false, mapped: false, priority: 'high', description: 'Customer Risk & Expansion status' },
      { csvField: '', schemaField: 'renewal_event_date', required: false, mapped: false, priority: 'high', description: 'Contract renewal event date' },
-     { csvField: '', schemaField: 'net_arr', required: false, mapped: false, priority: 'high', description: 'Net Annual Recurring Revenue' },
-    
-    // Secondary fields - Additional context and historical data
-    { csvField: '', schemaField: 'created_date', required: false, mapped: false, priority: 'secondary', description: 'Opportunity creation date' }
+     { csvField: '', schemaField: 'net_arr', required: false, mapped: false, priority: 'high', description: 'Net Annual Recurring Revenue' }
   ]);
 
   // Sales Rep field mappings focused on organizational structure
@@ -815,7 +838,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'rep_id', required: false, mapped: false, priority: 'essential', description: 'Unique sales rep identifier (User ID). Leave blank for open headcount - ID will be auto-generated.' },
     { csvField: '', schemaField: 'name', required: true, mapped: false, priority: 'essential', description: 'Sales representative full name' },
     
-    // High priority fields - Important for territory assignment and hierarchy (but not blocking)
+    // High priority fields - Important for book assignment and hierarchy (but not blocking)
     { csvField: '', schemaField: 'team', required: false, mapped: false, priority: 'high', description: 'Sales team assignment' },
     { csvField: '', schemaField: 'team_tier', required: false, mapped: false, priority: 'high', description: 'Size tier for team alignment (SMB, Growth, MM, ENT)' },
     { csvField: '', schemaField: 'flm', required: false, mapped: false, priority: 'high', description: 'First Level Manager' },
@@ -823,7 +846,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'region', required: false, mapped: false, priority: 'high', description: 'Geographic region assignment' },
     
     // Secondary fields - Optional/legacy and backfill support
-    { csvField: '', schemaField: 'manager', required: false, mapped: false, priority: 'secondary', description: 'Legacy manager field (use FLM/SLM instead)' },
+    // DEPRECATED: manager - removed in v1.3.9, use flm/slm instead
     { csvField: '', schemaField: 'is_backfill_source', required: false, mapped: false, priority: 'secondary', description: 'Mark rep as leaving (backfill source). Set to TRUE to exclude from assignments.' }
   ]);
 
@@ -1110,6 +1133,54 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
       description: `${filename} has been downloaded`,
     });
   };
+
+  /**
+   * Handle preview button click - fetches data from Supabase if not in memory
+   */
+  const handlePreviewFile = useCallback(async (file: ImportFile) => {
+    // If we have parsed data in memory, use it directly
+    if (file.parsedData && file.headers) {
+      setPreviewFile(file);
+      setDbPreviewData(null);
+      return;
+    }
+    
+    // Otherwise, fetch from database
+    if (!currentBuildId) {
+      toast({
+        title: "Preview Not Available",
+        description: "No build selected",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setPreviewFile(file);
+    setIsLoadingDbPreview(true);
+    setDbPreviewData(null);
+    
+    try {
+      const result = await fetchPreviewDataFromDatabase(currentBuildId, file.type);
+      setDbPreviewData(result);
+      
+      if (result.data.length === 0) {
+        toast({
+          title: "No Data Found",
+          description: `No ${file.type.replace('_', ' ')} found in the database for this build.`,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching preview data:', error);
+      toast({
+        title: "Preview Failed",
+        description: error instanceof Error ? error.message : "Failed to load preview data",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoadingDbPreview(false);
+    }
+  }, [currentBuildId, toast]);
 
   const handleDeleteFile = useCallback(async (fileId: string) => {
     console.log('🗑️ DELETING FILE:', fileId);
@@ -2468,26 +2539,14 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                             <span className="text-sm text-muted-foreground">
                               {file.validRows?.toLocaleString() || file.rowCount?.toLocaleString() || 0} records
                             </span>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span>
-                                  <Button 
-                                    variant="outline" 
-                                    size="sm"
-                                    onClick={() => setPreviewFile(file)}
-                                    disabled={!file.parsedData}
-                                  >
-                                    <FileSearch className="w-4 h-4 mr-1" />
-                                    Preview
-                                  </Button>
-                                </span>
-                              </TooltipTrigger>
-                              {!file.parsedData && (
-                                <TooltipContent>
-                                  <p>Preview unavailable - data already in database</p>
-                                </TooltipContent>
-                              )}
-                            </Tooltip>
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              onClick={() => handlePreviewFile(file)}
+                            >
+                              <FileSearch className="w-4 h-4 mr-1" />
+                              Preview
+                            </Button>
                             <Button 
                               variant="ghost" 
                               size="sm"
@@ -2509,7 +2568,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                       onImport={handleValidateAndImport}
                       onDownloadErrorReport={handleDownloadErrorReport}
                       onReconfigureMapping={() => setActiveTab('mapping')}
-                      onPreview={(f) => setPreviewFile(f)}
+                      onPreview={(f) => handlePreviewFile(f)}
                       onDelete={(f) => handleDeleteFile(f.id)}
                       onViewErrors={(f) => setErrorViewFile(f)}
                       isImporting={importingFileIds.has(file.id)}
@@ -2547,19 +2606,38 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
       </Tabs>
 
       {/* Data Preview Dialog */}
-      <Dialog open={!!previewFile} onOpenChange={(open) => !open && setPreviewFile(null)}>
-        <DialogContent className="max-w-5xl max-h-[80vh] overflow-hidden flex flex-col">
+      <Dialog open={!!previewFile} onOpenChange={(open) => {
+        if (!open) {
+          setPreviewFile(null);
+          setDbPreviewData(null);
+        }
+      }}>
+        <DialogContent className="max-w-[90vw] w-[90vw] max-h-[90vh] h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="w-5 h-5" />
               Preview - {previewFile?.name}
             </DialogTitle>
             <DialogDescription>
-              Showing sample data from your {previewFile?.type?.replace('_', ' ')} file
+              {dbPreviewData ? (
+                <>Showing {dbPreviewData.data.length} sample records from database</>
+              ) : (
+                <>Showing sample data from your {previewFile?.type?.replace('_', ' ')} file</>
+              )}
             </DialogDescription>
           </DialogHeader>
           
-          {previewFile?.parsedData && previewFile?.headers ? (
+          {/* Loading state - fetching from database */}
+          {isLoadingDbPreview && (
+            <div className="py-12 text-center text-muted-foreground">
+              <Loader2 className="w-12 h-12 mx-auto mb-4 animate-spin opacity-50" />
+              <h3 className="text-lg font-medium mb-2">Loading Preview...</h3>
+              <p>Fetching data from database</p>
+            </div>
+          )}
+          
+          {/* In-memory parsed data (from fresh upload) */}
+          {!isLoadingDbPreview && previewFile?.parsedData && previewFile?.headers && (
             <div className="flex-1 overflow-auto">
               <DataPreview 
                 data={previewFile.parsedData}
@@ -2569,11 +2647,26 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                 fieldMappings={previewFile.fieldMappings}
               />
             </div>
-          ) : (
+          )}
+          
+          {/* Database-fetched data (for already-imported files) */}
+          {!isLoadingDbPreview && !previewFile?.parsedData && dbPreviewData && dbPreviewData.data.length > 0 && (
+            <div className="flex-1 overflow-auto">
+              <DataPreview 
+                data={dbPreviewData.data}
+                headers={dbPreviewData.headers}
+                fileName={previewFile?.name || 'Database Preview'}
+                fileType={previewFile?.type || 'accounts'}
+              />
+            </div>
+          )}
+          
+          {/* No data available */}
+          {!isLoadingDbPreview && !previewFile?.parsedData && (!dbPreviewData || dbPreviewData.data.length === 0) && (
             <div className="py-12 text-center text-muted-foreground">
-              <AlertTriangle className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <h3 className="text-lg font-medium mb-2">Preview Not Available</h3>
-              <p>Data was not cached in memory. Re-upload the file to preview.</p>
+              <Database className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <h3 className="text-lg font-medium mb-2">No Data Found</h3>
+              <p>No records found in the database for this file type.</p>
             </div>
           )}
         </DialogContent>

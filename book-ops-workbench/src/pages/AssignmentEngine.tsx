@@ -40,6 +40,8 @@ import { QuickResetButton } from '@/components/QuickResetButton';
 import { FullAssignmentConfig } from '@/components/FullAssignmentConfig';
 import { PriorityConfig, getDefaultPriorityConfig } from '@/config/priorityRegistry';
 import { useMappedFields } from '@/hooks/useMappedFields';
+import { notifyOptimizationComplete } from '@/services/slackNotificationService';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface Account {
   sfdc_account_id: string;
@@ -96,6 +98,7 @@ interface AssignmentEngineProps {
 export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onPendingProposalsChange }) => {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('customers');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedAssignmentType, setSelectedAssignmentType] = useState('all');
@@ -104,6 +107,8 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   const [lockStatusFilter, setLockStatusFilter] = useState('all');
   const [showPreviewDialog, setShowPreviewDialog] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
+  const [showApplyingOverlay, setShowApplyingOverlay] = useState(false);
+  const [applyingStatus, setApplyingStatus] = useState<'saving' | 'refreshing'>('saving');
   const [appliedAssignmentCount, setAppliedAssignmentCount] = useState(0);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [showConfigDialog, setShowConfigDialog] = useState(false);
@@ -150,6 +155,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   });
   
   const [assignmentWarnings, setAssignmentWarnings] = useState<any[]>([]);
+  const [isApplyingAssignments, setIsApplyingAssignments] = useState(false);
   
   // Data flow tracking state
   const [dataFlowSteps, setDataFlowSteps] = useState([]);
@@ -173,6 +179,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     accountsError,
     handleGenerateAssignments,
     handleExecuteAssignments,
+    cancelGeneration,
     refetchAccounts,
     refreshData: hookRefreshData,
     isExecuting,
@@ -209,6 +216,23 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     };
     checkConfiguration();
   }, [buildId, showConfigDialog]); // Re-check when dialog closes
+
+  // Fetch build info for notifications
+  const { data: buildInfo } = useQuery({
+    queryKey: ['build-info', buildId],
+    queryFn: async () => {
+      if (!buildId) return null;
+      const { data, error } = await supabase
+        .from('builds')
+        .select('name')
+        .eq('id', buildId)
+        .maybeSingle();
+      
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!buildId
+  });
 
   // Fetch assignment configuration for priority display
   const { data: assignmentConfig } = useQuery({
@@ -722,6 +746,14 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
 
   // Handle assignment execution with comprehensive tracking
   const onExecuteAssignments = async () => {
+    // Set loading state IMMEDIATELY for responsive UI feedback
+    setIsApplyingAssignments(true);
+    
+    // Close preview dialog and show the applying overlay immediately
+    setShowPreviewDialog(false);
+    setShowApplyingOverlay(true);
+    setApplyingStatus('saving');
+    
     try {
       // Handle both sophisticated and regular assignment results
       const resultToExecute = sophisticatedAssignmentResult || assignmentResult;
@@ -732,6 +764,8 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
           description: "Please generate assignments first.",
           variant: "destructive"
         });
+        setIsApplyingAssignments(false);
+        setShowApplyingOverlay(false);
         return;
       }
 
@@ -749,11 +783,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       // Execute using the hook's function but pass the correct result
       if (sophisticatedAssignmentResult) {
         console.log('[Execute] 🎯 Executing sophisticated assignments...');
-        // Show progress feedback for sophisticated assignments
-        toast({
-          title: "🔄 Executing Assignments",
-          description: `Applying ${proposalCount} assignment${proposalCount !== 1 ? 's' : ''}...`,
-        });
         await executeSophisticatedAssignments(sophisticatedAssignmentResult);
       } else {
         console.log('[Execute] 🎯 Executing regular assignments...');
@@ -762,19 +791,18 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
           // Execution was blocked by imbalance warning - don't continue to success
           // User will see the warning dialog and can choose to proceed or go back
           console.log('[Execute] ⚠️ Execution blocked by imbalance warning');
+          setIsApplyingAssignments(false);
+          setShowApplyingOverlay(false);
           return;
         }
-        // Show progress feedback only after imbalance check passes
-        toast({
-          title: "🔄 Applying Assignments",
-          description: `Saved ${proposalCount} assignment${proposalCount !== 1 ? 's' : ''} to database...`,
-        });
       }
       
-      setShowPreviewDialog(false);
       setSophisticatedAssignmentResult(null);
       
       console.log('[Execute] ✅ Assignment execution completed successfully');
+
+      // Update status to refreshing
+      setApplyingStatus('refreshing');
 
       // Force refresh all data FIRST - before showing success
       console.log('[Execute] 🔄 Triggering final data refresh...');
@@ -785,6 +813,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       
       console.log('[Execute] 🎉 Data refresh complete, showing success dialog');
       
+      // Hide applying overlay and show success dialog
+      setShowApplyingOverlay(false);
+      
       // NOW show success dialog with animated confirmation
       setAppliedAssignmentCount(proposalCount);
       setShowSuccessDialog(true);
@@ -793,11 +824,14 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       
     } catch (error) {
       console.error('[Execute] ❌ Assignment execution failed:', error);
+      setShowApplyingOverlay(false);
       toast({
         title: "❌ Assignment Execution Failed",
         description: error instanceof Error ? error.message : "Unknown error occurred. Please try again.",
         variant: "destructive"
       });
+    } finally {
+      setIsApplyingAssignments(false);
     }
   };
 
@@ -1503,6 +1537,35 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     }
   };
 
+  // Handle Slack notification when optimization completes
+  const handleOptimizationComplete = async (elapsedTime: string, proposalCount: number) => {
+    if (!user?.email) {
+      console.warn('[Slack Notification] No user email available for notification');
+      return;
+    }
+    
+    const buildName = buildInfo?.name || `Build ${buildId?.slice(0, 8)}`;
+    const accountCount = allCustomerAccounts.length + allProspectAccounts.length;
+    
+    try {
+      const result = await notifyOptimizationComplete(
+        user.email,
+        buildName,
+        accountCount,
+        proposalCount,
+        elapsedTime
+      );
+      
+      if (result.success) {
+        console.log('[Slack Notification] Optimization complete notification sent');
+      } else {
+        console.warn('[Slack Notification] Failed to send:', result.error);
+      }
+    } catch (error) {
+      console.error('[Slack Notification] Error sending notification:', error);
+    }
+  };
+
   // Handle account reassignment
   const handleReassignAccount = async () => {
     if (!buildId || !selectedAccount || !selectedOwnerId || !selectedOwnerName) return;
@@ -1687,7 +1750,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
             </Button>
           </div>
           <p className="text-muted-foreground">
-            Configure your assignment rules, then generate territory assignments
+            Configure your assignment rules, then generate book assignments
           </p>
         </div>
       </div>
@@ -1808,7 +1871,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
                   ? 'Settings updated — click to generate assignments with new configuration'
                   : hasExistingAssignments
                     ? 'Run assignment engine again to update assignments'
-                    : 'Generate territory assignments based on your configuration'
+                    : 'Generate book assignments based on your configuration'
               }
             </TooltipContent>
           </Tooltip>
@@ -2141,19 +2204,48 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       <AssignmentGenerationDialog
         open={showAssignmentProgress}
         onOpenChange={setShowAssignmentProgress}
-        progress={hookAssignmentProgress && hookAssignmentProgress.progress > 0 ? {
-          stage: 'applying',
-          progress: hookAssignmentProgress.progress,
-          status: hookAssignmentProgress.status,
-          rulesCompleted: 0,
-          totalRules: 6,
-          accountsProcessed: hookAssignmentProgress.accountsProcessed || 0,
-          totalAccounts: hookAssignmentProgress.totalAccounts || 0,
-          assignmentsMade: hookAssignmentProgress.accountsProcessed || 0,
-          conflicts: 0
-        } : null}
+        progress={(() => {
+          // Merge local and hook progress - use whichever has higher progress value
+          // This ensures smooth animation even when one source updates less frequently
+          const localProgress = assignmentProgress?.progress ?? 0;
+          const hookProgress = hookAssignmentProgress?.progress ?? 0;
+          const useHook = hookProgress >= localProgress && hookAssignmentProgress;
+          
+          if (useHook && hookAssignmentProgress) {
+            return {
+              stage: hookAssignmentProgress.stage || 'applying',
+              progress: hookAssignmentProgress.progress ?? 0,
+              status: hookAssignmentProgress.status || 'Processing...',
+              rulesCompleted: hookAssignmentProgress.rulesCompleted || 0,
+              totalRules: hookAssignmentProgress.totalRules || 6,
+              accountsProcessed: hookAssignmentProgress.accountsProcessed || 0,
+              totalAccounts: hookAssignmentProgress.totalAccounts || 0,
+              assignmentsMade: hookAssignmentProgress.assignmentsMade || 0,
+              conflicts: hookAssignmentProgress.conflicts || 0,
+              error: hookAssignmentProgress.error
+            };
+          } else if (assignmentProgress && localProgress > 0) {
+            return {
+              stage: 'applying',
+              progress: localProgress,
+              status: assignmentProgress.status || 'Processing...',
+              rulesCompleted: 0,
+              totalRules: 6,
+              accountsProcessed: assignmentProgress.accountsProcessed || 0,
+              totalAccounts: assignmentProgress.totalAccounts || 0,
+              assignmentsMade: assignmentProgress.accountsProcessed || 0,
+              conflicts: 0
+            };
+          }
+          return null;
+        })()}
         isGenerating={isGenerating}
-        onCancel={() => setShowAssignmentProgress(false)}
+        onCancel={() => {
+          // Cancel the generation AND hide the dialog
+          cancelGeneration();
+          setShowAssignmentProgress(false);
+        }}
+        onComplete={handleOptimizationComplete}
       />
 
       {/* Assignment Preview Dialog */}
@@ -2165,7 +2257,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
           }}
           onExecute={onExecuteAssignments}
           result={sophisticatedAssignmentResult || assignmentResult}
-          isExecuting={isExecuting}
+          isExecuting={isExecuting || isApplyingAssignments}
           assignmentType={activeTab === 'prospects' ? 'prospect' : 'customer'}
           buildId={buildId}
         />
@@ -2300,6 +2392,37 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
         onCancel={resetProgress.isRunning ? handleCancelReset : undefined}
       />
 
+
+      {/* Applying Assignments Overlay - shows during save process */}
+      <Dialog open={showApplyingOverlay}>
+        <DialogContent className="sm:max-w-md" onPointerDownOutside={(e) => e.preventDefault()}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Loader2 className="h-5 w-5 animate-spin text-green-600" />
+              Applying Assignments
+            </DialogTitle>
+            <DialogDescription>
+              {applyingStatus === 'saving' 
+                ? 'Saving assignments to database...' 
+                : 'Refreshing data...'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-6 flex flex-col items-center gap-4">
+            <div className="relative w-16 h-16">
+              <div className="absolute inset-0 rounded-full border-4 border-gray-200"></div>
+              <div className="absolute inset-0 rounded-full border-4 border-green-600 border-t-transparent animate-spin"></div>
+            </div>
+            <div className="text-center text-sm text-muted-foreground">
+              <p className="font-medium">
+                {applyingStatus === 'saving' 
+                  ? 'Please wait while we save your assignments...' 
+                  : 'Almost done! Refreshing your data...'}
+              </p>
+              <p className="mt-1">This may take a few seconds for large datasets.</p>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Assignment Success Dialog - animated confirmation */}
       <AssignmentSuccessDialog

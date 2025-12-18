@@ -2,6 +2,1344 @@
 
 ---
 
+## [2025-12-18] - Fix: Relaxed Optimization Progress Shows 100% Before Completion
+
+**Problem:** When running relaxed optimization with "all" accounts (customers + prospects), the progress dialog would show 100% complete while the solver was still running. The UI was stuck showing "Processing..." with 100% progress for several minutes.
+
+**Root Cause:** When running both customer and prospect solves sequentially:
+1. Customer solve completes → progress reaches 100%
+2. Dialog's `maxProgress` state captures 100%
+3. Prospect solve starts → LP engine reports progress: 5 (loading)
+4. But `displayProgress = Math.max(5, 100) = 100` due to maxProgress tracking
+5. UI shows 100% even though prospect solve just started
+
+**Solution:**
+1. **Batch-aware progress scaling** - Progress is now scaled within batches:
+   - Batch 1 (customers): 0-50%
+   - Batch 2 (prospects): 50-100%
+2. **Status shows batch info** - Status now shows `[1/2] Loading...` or `[2/2] Solving...`
+3. **Smart maxProgress reset** - Dialog detects when progress drops significantly (>40%) indicating a new batch, and resets maxProgress to allow accurate tracking
+
+**Files Changed:**
+- `src/hooks/useAssignmentEngine.ts` - Added batch tracking and scaled progress in `onLPProgress` callback
+- `src/components/AssignmentGenerationDialog.tsx` - Added new batch detection to reset maxProgress
+
+---
+
+## [2025-12-18] - Fix: Biggest Gains/Losses Chart Bars Not Showing
+
+**Problem:** In the Balancing tab's "Biggest Gains - Top 10" chart, bars were blank/not rendering even though tooltip values appeared correctly on hover. This was the same issue previously fixed in `RepDistributionChart.tsx`.
+
+**Root Cause:** Recharts uses the Y-axis `dataKey` as a unique category identifier. The chart was using `name` (rep initials like "DP", "JR") which caused collisions when multiple reps shared the same initials - Recharts would merge/overwrite their bars.
+
+**Solution:** Changed Y-axis to use `repId` (guaranteed unique) as the dataKey, with a `tickFormatter` to display the initials. This ensures each rep gets their own bar while still showing clean initials on the axis.
+
+**Files Changed:**
+- `src/components/balancing/GainsLossesChart.tsx` - YAxis now uses `repId` as dataKey with tickFormatter lookup
+
+---
+
+## [2025-12-18] - SSOT: Audit & Fix Magic Numbers for Commercial Accounts
+
+**Audit Summary:** Reviewed codebase for SSOT violations - magic numbers and inline business logic that should use `@/_domain` imports.
+
+**Findings:**
+
+| Status | Area | Finding |
+|--------|------|---------|
+| ✅ Good | ARR Calculations | 32 files use `getAccountARR()` from `@/_domain` |
+| ✅ Good | Sales Tools | `simplifiedAssignmentEngine.ts` uses `SALES_TOOLS_ARR_THRESHOLD` |
+| ✅ Good | Tier Classification | 8 files use `classifyTeamTier()` from `@/_domain` |
+| ✅ Documented | `buildDataService.ts` | Uses `hierarchy_bookings_arr_converted > 0` directly (documented exception in `_domain/README.md`) |
+| 🔧 Fixed | `ClashDetector.tsx` | Hardcoded `25000` → Now uses `SALES_TOOLS_ARR_THRESHOLD` |
+| 🔧 Fixed | `FullAssignmentConfig.tsx` | Hardcoded `rs_arr_threshold: 25000` → Now uses `SALES_TOOLS_ARR_THRESHOLD` |
+| 🔧 Fixed | `assignmentService.ts` | Hardcoded `50000`/`25000` workload weights → Now uses `WORKLOAD_SCORE_WEIGHTS` |
+
+**Changes:**
+
+1. **Added `WORKLOAD_SCORE_WEIGHTS` to `_domain/constants.ts`** - Documents legacy workload scoring formula weights
+2. **Fixed `ClashDetector.tsx`** - Imports and uses `SALES_TOOLS_ARR_THRESHOLD` and `formatCurrency` from `@/_domain`
+3. **Fixed `FullAssignmentConfig.tsx`** - Default `rs_arr_threshold` now uses `SALES_TOOLS_ARR_THRESHOLD` constant
+4. **Fixed `assignmentService.ts`** - Imports and uses `WORKLOAD_SCORE_WEIGHTS` for composite workload scoring
+
+**Commercial Mode Status:** ✅ Working correctly
+- Mode detection in `modeDetectionService.ts` properly identifies COMMERCIAL mode when:
+  - Team alignment data exists (employees in accounts + team tier in reps), OR
+  - PE accounts exist
+- Sales Tools routing in `simplifiedAssignmentEngine.ts` correctly routes customer accounts < `SALES_TOOLS_ARR_THRESHOLD` ($25K) to Sales Tools bucket
+
+---
+
+## [2025-12-18] - Fix: Waterfall Telemetry Missing Configuration Data
+
+**Problem:** Waterfall engine telemetry was not capturing configuration parameters like `balance_intensity`, `priority_config`, or `lp_balance_config`. All waterfall runs showed zeros for these values, making it impossible to analyze how configuration changes affected outcomes.
+
+**Root Cause:** The `recordWaterfallRun()` function used hardcoded placeholder values instead of accepting the actual config from the engine. The waterfall engine had access to the config but wasn't passing it to telemetry.
+
+**Solution:**
+1. Extended `WaterfallTelemetryInput` interface to accept a `config` object with:
+   - `balance_intensity` (string)
+   - `priority_config` (array)
+   - `lp_balance_config` (penalties)
+   - `intensity_multiplier` (number)
+
+2. Updated `recordWaterfallRun()` to use provided config values instead of placeholders
+
+3. Updated `simplifiedAssignmentEngine.ts` to store and pass config data to telemetry
+
+4. Fixed outdated intensity multiplier values (HEAVY: 3→10, VERY_HEAVY: 10→100) to match `_domain/constants.ts`
+
+**Files Changed:**
+- `src/services/optimization/telemetry/optimizationTelemetry.ts` - Added WaterfallConfigSnapshot interface, updated recordWaterfallRun
+- `src/services/simplifiedAssignmentEngine.ts` - Store config and pass to telemetry
+
+**Result:** Waterfall runs now capture full configuration in telemetry, enabling proper analysis of balance_intensity effects on outcomes.
+
+---
+
+## [2025-12-18] - Fix: Assignment Reason Display Bug
+
+**Problem:** In Assignment Preview, the "Reason" column was showing warning text (e.g., "Account territory MID-ATLANTIC assigned to Northeast rep: Maintaining continuity with current owner despite geography mismatch") instead of the actual assignment rationale (e.g., "Current/Past Owner - Any Geography").
+
+**Root Cause:** In `useAssignmentEngine.ts`, when an assignment had warnings, the entire `assignmentReason` was replaced with warning text instead of showing the rationale.
+
+**Solution:**
+1. Changed `assignmentReason` to always show the rationale explaining *why* the assignment was made
+2. Added new `warningDetails` field to preserve warning information
+3. Updated `AssignmentPreviewDialog` to show rationale in the Reason column with a tooltip icon when warnings exist - hover to see warning details
+
+**Files Changed:**
+- `src/hooks/useAssignmentEngine.ts` - Fixed proposal mapping to use `p.rationale` and add `warningDetails`
+- `src/services/assignmentService.ts` - Added `warningDetails?: string` to `AssignmentProposal` interface
+- `src/components/AssignmentPreviewDialog.tsx` - Added tooltip to Reason column for warning details on hover
+
+---
+
+## [2025-12-18] - Fix: Chart Bars Misplaced When Reps Share Initials
+
+**Problem:** In Data Overview's ARR/ATR/Pipeline/Account Distribution charts, bars were incorrectly positioned and scaled when multiple reps shared the same initials (e.g., "DP" for both David Parks entries, "MM" for Mac Mitchell/Makie Michaux/Melissa Mosher). A rep with $3.3M ARR could appear at the bottom with a tiny bar while reps with $2M were at the top.
+
+**Root Cause:** Recharts uses the Y-axis `dataKey` as a unique category identifier. The chart was using `name` (rep initials like "DP", "MM") which caused collisions when multiple reps shared initials - Recharts would merge/overwrite their bars.
+
+**Solution:** Changed Y-axis to use `repId` (guaranteed unique) as the dataKey, with a `tickFormatter` to display the initials. This ensures each rep gets their own bar while still showing clean initials on the axis.
+
+**Files Changed:**
+- `src/components/analytics/RepDistributionChart.tsx` - YAxis now uses `repId` as dataKey with tickFormatter lookup
+
+---
+
+## [2025-12-18] - Fix: Pipeline Distribution Chart Using Wrong Thresholds
+
+**Problem:** Pipeline Distribution chart was using ARR thresholds for domain/scale calculation, causing bars to appear incorrectly scaled. When user switched from ARR to Pipeline view, the chart still used ARR's `absoluteMax` ($3.97M) for the domain, making Pipeline bars ($0-$2.5M) look compressed.
+
+**Root Cause:** `TerritoryBalancingDashboard.tsx` passed a single `arrThresholds` config to `RepDistributionChart`, which was used for all metrics regardless of which one was currently selected.
+
+**Solution:**
+1. Added `MetricThresholds` interface to support per-metric threshold configs (ARR, ATR, Pipeline)
+2. Chart now selects the correct threshold based on `currentMetric`
+3. Updated `TerritoryBalancingDashboard.tsx` to pass `metricThresholds` with separate configs for each metric type
+
+**Files Changed:**
+- `src/components/analytics/RepDistributionChart.tsx` - Added `MetricThresholds` interface and metric-aware threshold selection
+- `src/pages/TerritoryBalancingDashboard.tsx` - Now builds and passes per-metric thresholds
+
+---
+
+## [2025-12-18] - Feature: Orphan Opportunity Data Integrity Warning
+
+**Added:** Collapsible warning in Data Overview tab that surfaces orphaned opportunities and their ATR impact.
+
+**What it shows:**
+- Count of opportunities referencing missing accounts (`is_orphaned = true`)
+- Total ATR from orphaned Renewal opportunities that can't roll up to parents
+- Expandable details explaining the cause and impact
+
+**File Changed:**
+- `src/components/DataOverviewAnalytics.tsx` - Added orphan stats query and warning UI
+
+---
+
+## [2025-12-18] - SSOT: Fix ATR Calculation and Hierarchy Rollup
+
+**Problem:** ATR was showing $0 in assignment table, and ATR totals were only $36.4M when they should be ~$48M.
+
+**Root Causes:**
+1. `VirtualizedAccountTable.tsx` imported from non-existent `@/utils/accountCalculations` instead of `@/_domain`
+2. ATR wasn't being calculated/populated for accounts after build copy
+3. Child account ATR wasn't rolling up to parent accounts (missing ~$12M)
+4. **BONUS FIX:** `recalculate_account_values_db()` was incorrectly trying to derive ARR from opportunities - ARR is imported data, not calculated from opps
+
+**Fixes Applied:**
+
+1. **Fixed import path** - `VirtualizedAccountTable.tsx` now imports from `@/_domain` (SSOT)
+
+2. **Updated `recalculate_account_values_db()` database function:**
+   - Now rolls up child ATR to parent accounts (parent ATR = direct + SUM(children))
+   - **Removed ARR calculation** - ARR comes from imported data, not opportunities
+   - Only calculates: `calculated_atr` (from Renewals) and `cre_count` (from CRE status)
+
+3. **Updated MASTER_LOGIC.mdc §2.2** - Documented ATR hierarchy rollup behavior
+
+**Results:**
+| Before | After |
+|--------|-------|
+| Parent ATR: $36.4M | Parent ATR: $47.7M |
+| Missing child rollup | Child ATR included |
+| Matched ~76% of opps | Matched ~99% of opps |
+
+**Files Changed:**
+- `src/components/VirtualizedAccountTable.tsx` - Fixed import
+- `src/_domain/MASTER_LOGIC.mdc` - Documented ATR rollup
+- Database function `recalculate_account_values_db()` - Fixed ATR rollup, removed ARR calc
+
+---
+
+## [2025-12-17] - Feature: Strategic Rep Styling Consistency Across Charts
+
+**Changes:**
+
+Applied strategic rep styling (purple colors, tooltips, sizing) from Overview's `RepDistributionChart` to Before/After charts and Manager Dashboard for visual consistency.
+
+**1. BeforeAfterDistributionChart.tsx (Financial Distribution)**
+- Added `isStrategicRep?: boolean` to `BeforeAfterRepData` interface
+- Strategic reps now display with purple bars (`#a855f7`)
+- Purple-themed tooltips with Users icon for strategic reps
+- "Strategic Rep - balanced separately" status text
+- Strategic rep legend indicator in threshold legend
+
+**2. BeforeAfterAccountChart.tsx (Account Distribution)**
+- Added `isStrategicRep?: boolean` to `BeforeAfterAccountData` interface
+- Two-tone purple for strategic reps: Violet-600 (`#7c3aed`) for customers, Purple-400 (`#c084fc`) for prospects
+- Purple tooltip styling with strategic rep message
+- Strategic rep legend indicator
+
+**3. BeforeAfterTab.tsx (Data Transformation)**
+- Passes `isStrategicRep` from `afterRep` through both distribution and account data transformations
+
+**4. ManagerBeforeAfterComparison.tsx (Manager Dashboard)**
+- Added `BeforeAfterDistributionChart` and `BeforeAfterAccountChart` visualizations above the tables
+- Strategic rep rows in tables now have:
+  - Purple background tint
+  - Users icon with tooltip
+  - Purple "Strategic" badge
+  - Purple text color for rep name
+
+**Files Changed:**
+- `src/components/balancing/BeforeAfterDistributionChart.tsx`
+- `src/components/balancing/BeforeAfterAccountChart.tsx`
+- `src/components/balancing/BeforeAfterTab.tsx`
+- `src/components/ManagerBeforeAfterComparison.tsx`
+
+---
+
+## [2025-12-17] - SSOT: Fix Waterfall Engine Pipeline Balance + Stronger Intensity
+
+**Problem:** Pipeline distribution showed rep GW at $12M when max was $4M, even with HEAVY balance mode.
+
+**Root Causes:**
+1. **CRITICAL BUG:** `simplifiedAssignmentEngine.ts` (Waterfall) was using `getAccountARR(account)` for balance constraints, even for prospects! It should use Pipeline value (net_arr from opportunities).
+2. `pipelineTarget` in Pure Optimization was calculated from data instead of config
+3. HEAVY (5x) and VERY_HEAVY (25x) multipliers weren't aggressive enough
+
+**SSOT Changes:**
+1. **Updated MASTER_LOGIC.mdc §11.3.1** - Updated intensity multiplier table
+2. **Updated `_domain/constants.ts`** - Increased multipliers:
+   - HEAVY: 5.0x → **10.0x**
+   - VERY_HEAVY: 25.0x → **100.0x**
+3. **Updated `dataLoader.ts`** - Now exports `targetPipeline` and `hardCapPipeline` from config
+4. **Updated `lpProblemBuilder.ts`** - Uses configured targets when available
+5. **CRITICAL FIX in `simplifiedAssignmentEngine.ts`**:
+   - Balance constraints now use Pipeline value for prospects, ARR for customers
+   - `currentLoad` now uses `workload.netARR` for prospects
+   - Account value uses `opportunitiesMap.get(account.sfdc_account_id)` for prospects
+   - Added clearer logging showing "Pipeline" vs "ARR" in constraint messages
+
+**New Penalty Values:**
+| Mode | Multiplier | BigM Penalty (Pipeline) |
+|------|------------|------------------------|
+| HEAVY | 10x | 500.0 per normalized unit |
+| VERY_HEAVY | 100x | 5000.0 per normalized unit |
+
+At VERY_HEAVY, exceeding max by 1x target costs 5000 penalty points, completely dominating any assignment scores.
+
+---
+
+## [2025-12-17] - SSOT: Fix LP Penalty Terms Missing from Objective Function
+
+**Problem:** Balance penalties (Big-M system) were not being applied during waterfall optimization. The ARR CV remained at ~60% even with "Very Heavy" balance intensity, meaning reps could be massively over/under target with no solver penalty.
+
+**Root Cause:** In `simplifiedAssignmentEngine.ts`, the objective function was written to the LP problem BEFORE the penalty terms were added:
+- Line 1171: `lines.push('    ' + objectiveTerms.join(' + '))` - objective written
+- Lines 1240-1245: `objectiveTerms.push(...)` - penalty terms added AFTER (never used!)
+
+The slack variables existed in constraints and bounds but had **zero penalty** in the objective.
+
+**SSOT Changes:**
+1. **Updated MASTER_LOGIC.mdc §11.3** - Added critical implementation note about LP assembly order
+2. **Fixed `simplifiedAssignmentEngine.ts`** - Objective line now written AFTER all penalty terms are added
+   - Store placeholder position in `lines[]` array
+   - After balance constraint loop adds penalty terms, replace placeholder with complete objective
+   - Added logging to confirm penalty term count
+
+**Expected Result:**
+- LP objective now includes penalty terms like `- 2500.000000 mo_rep1`
+- CV should drop significantly (from 60% to ~10-20%)
+- Balance intensity slider now properly affects distribution
+
+---
+
+## [2025-12-17] - SSOT: Pipeline Calculation Standardized
+
+**Problem:** Pipeline Distribution chart showed $12M instead of expected $16.37M. The calculation was only including prospect opportunities, missing Expansion and New Subscription opportunities from customer accounts.
+
+**Root Cause:** 
+1. `useEnhancedBalancing.ts` wasn't fetching `net_arr` and `amount` from opportunities table
+2. Pipeline calculation in `enhancedRepMetrics.ts` only included prospect account opportunities, but per MASTER_LOGIC.mdc §2.3, should also include Expansion + New Subscription from customers
+
+**SSOT Changes:**
+1. **Updated MASTER_LOGIC.mdc §2.3** - Documented complete pipeline rules with opportunity type table
+2. **Added to _domain/calculations.ts** - New `isPipelineOpportunity()` function to check for Expansion or New Subscription
+3. **Updated `calculatePipelineWithExpansion()`** - Now uses `isPipelineOpportunity()` SSOT function
+4. **Updated consumers:**
+   - `useEnhancedBalancing.ts` - Added `net_arr`, `amount` to opportunities query
+   - `enhancedRepMetrics.ts` - Imports and uses `isPipelineOpportunity()` and `getOpportunityPipelineValue()` from @/_domain
+
+**Pipeline Rules (per §2.3):**
+| Opportunity Type | Prospect Account | Customer Account |
+|-----------------|------------------|------------------|
+| Expansion | ✅ Pipeline | ✅ Pipeline |
+| New Subscription | ✅ Pipeline | ✅ Pipeline |
+| Renewals | ✅ Pipeline | ❌ ATR (not pipeline) |
+| (Blanks/Other) | ✅ Pipeline | ❌ Exclude |
+
+---
+
+## [2025-12-17] - Fix: Pipeline Distribution Chart Showing $0
+
+**Problem:** The Pipeline Distribution chart on the Territory Balancing Dashboard was showing Total: $0 and Avg: $0 for all reps, even though the database had $16.37M in prospect pipeline.
+
+**Root Cause:** In `TerritoryBalancingDashboard.tsx`, the `repDistributionData` mapping was hardcoding `pipeline: 0` instead of using the calculated `prospectNetARR` from the enhanced metrics.
+
+**Solution:**
+1. Added `prospectNetARR` to the `RepMetrics` interface in `useEnhancedBalancing.ts`
+2. Populated `prospectNetARR` from `enhancedMetrics.prospectNetARR` when building rep metrics data
+3. Updated `TerritoryBalancingDashboard.tsx` to use `rep.prospectNetARR` for the pipeline value
+
+**Files Changed:**
+- `src/hooks/useEnhancedBalancing.ts` - Added `prospectNetARR` to RepMetrics interface and data
+- `src/pages/TerritoryBalancingDashboard.tsx` - Changed `pipeline: 0` to `pipeline: rep.prospectNetARR ?? 0`
+
+---
+
+## [2025-12-17] - Feature: Strategic Reps in KPI Breakdown & Chart Improvements
+
+**Changes:**
+
+1. **Strategic Reps in KPI Tooltip** - The "Reps" KPI card now shows "Normal Reps: X, Strategic Reps: Y" breakdown in its tooltip
+   - Added `is_strategic_rep` to `RepMetrics` interface in `useEnhancedBalancing.ts`
+   - Pass `is_strategic_rep` through from database to rep metrics data
+   - Calculate and display `strategicReps` count in `BalancingKPIRow`
+
+2. **Strategic Rep Tooltip** - Strategic reps now show "Strategic Rep - balanced separately" instead of "Over target zone - needs rebalancing"
+   - Purple-themed tooltip styling for strategic reps
+   - Users icon indicator in tooltip header
+
+3. **Two Purple Shades for Account Distribution** - Strategic reps have distinct colors in stacked bar chart:
+   - Violet-600 (`#7c3aed`) for strategic rep customers
+   - Purple-400 (`#c084fc`) for strategic rep prospects
+   - Legend indicator added for strategic reps
+
+4. **Logarithmic Scaling for Account Distribution** - Uses log scale on X-axis to better visualize distribution when some reps have many more accounts than others
+
+**Files Changed:**
+- `src/hooks/useEnhancedBalancing.ts` - Added `is_strategic_rep` to interface and data flow
+- `src/pages/TerritoryBalancingDashboard.tsx` - Calculate and pass `strategicReps` count, pass `isStrategicRep` to chart
+- `src/components/analytics/RepDistributionChart.tsx` - Strategic rep tooltip, two purple shades, log scale for accounts
+
+---
+
+## [2025-12-17] - Fix: UI Freeze During Large Dataset LP Optimization
+
+**Problem:** Even with cloud solver mode enabled for large datasets, the browser UI would freeze during LP optimization because:
+1. Balance constraint building loop: O(reps × accounts) = 387K iterations blocking main thread
+2. Team alignment loop: Another O(reps × accounts) iterations
+3. Solution parsing: O(variables × accounts × reps) nested loops
+
+**Solution:**
+
+1. **Added lightweight `yieldMicrotask()` helper** (~0-4ms vs 32ms for full `yieldToUI()`):
+```typescript
+async function yieldMicrotask(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0));
+}
+```
+
+2. **Iteration-based yielding in LP building loops** - Yields every 50K iterations to keep UI responsive:
+   - Balance constraint loop: Tracks `lpBuildIterations` counter
+   - Team alignment loop: Continues counting on same counter
+
+3. **Refactored solution parsing with O(1) Map lookup**:
+   - Built pre-lookup Map of `varName -> { account, rep }`
+   - Changed from O(n³) nested loops to O(n) single pass
+
+**Expected Performance:**
+- 8K accounts × 48 reps = 387K iterations per loop
+- ~16 yields during LP building (~64ms overhead total)
+- Solution parsing now O(variables) instead of O(n³)
+
+**Files Changed:**
+- `src/services/simplifiedAssignmentEngine.ts`
+
+---
+
+## [2025-12-17] - SSOT: RO Priority Uses Full LP Solver (No Pre-Filtering)
+
+**Problem:** The Residual Optimization (RO) priority (`arr_balance`) was filtering reps by `hasCapacity()` before passing them to the LP solver. If all reps failed the capacity check, accounts fell through to a simple "least loaded" heuristic that didn't use the LP solver's Big-M penalties at all.
+
+**Design Principle:** The LP solver should run the **same Big-M formulation at every priority level**. RO is the last chance to assign—it should see ALL eligible reps and let the solver decide using graduated penalties.
+
+**Solution (Two Parts):**
+
+1. **Simplified `hasCapacity()`** to only check hard limits (used by P1-P3):
+```typescript
+// Just the hard cap - LP solver handles Alpha/Beta zones
+if (newLoad > capacityLimit) return false;
+```
+
+2. **RO (`batchAssignPriority4`) now passes ALL reps to LP solver**:
+```typescript
+// NO hasCapacity() filter - let LP solver use Big-M penalties
+const allEligibleReps = allReps.filter(rep =>
+  rep.is_active && rep.include_in_assignments && !rep.is_strategic_rep
+);
+// Every account sees ALL eligible reps
+for (const account of accounts) {
+  eligibleRepsPerAccount.set(account.sfdc_account_id, allEligibleReps);
+}
+```
+
+**Zone Handling by Priority:**
+| Zone | P1-P3 (hasCapacity) | P4/RO (no filter) | LP Solver |
+|------|---------------------|-------------------|-----------|
+| Alpha | ✅ eligible | ✅ eligible | α penalty (0.01×) |
+| Beta | ✅ eligible | ✅ eligible | β penalty (0.1×) |
+| Beyond Max | ❌ excluded | ✅ **eligible** | BigM penalty (100.0×) |
+
+**SSOT Changes:**
+1. **Updated MASTER_LOGIC.mdc §12.1.3** - Documented capacity gating & RO design
+2. **Updated simplifiedAssignmentEngine.ts** - `hasCapacity()` simplified, `batchAssignPriority4()` now passes all reps to LP solver
+
+---
+
+## [2025-12-17] - Feature: Strategic Reps Purple Color in Analytics
+
+**Problem:** Strategic reps are balanced separately from normal reps (they handle strategic accounts), but this wasn't visually apparent in the distribution charts. Users couldn't tell why certain reps appeared "unbalanced."
+
+**Solution:** Strategic reps now display with purple bars in the analytics distribution charts, making them instantly identifiable.
+
+**Changes:**
+1. **`src/types/analytics.ts`** - Added `isStrategicRep?: boolean` field to `RepDistributionData` interface
+2. **`src/services/buildDataService.ts`** - Populates `isStrategicRep` from `rep.is_strategic_rep` in `calculateRepDistribution()`
+3. **`src/components/analytics/RepDistributionChart.tsx`** - Added:
+   - `STRATEGIC_REP_COLOR = '#a855f7'` (purple-500) constant
+   - Purple coloring for strategic reps in the bar chart Cell rendering
+   - "Strategic Rep" indicator in the threshold legend (conditionally shown when strategic reps exist)
+
+---
+
+## [2025-12-17] - Fix: UI Freezing on Large Dataset Optimization
+
+**Problem:** When running waterfall optimization on large datasets (8,000+ accounts), the browser UI would freeze because the HiGHS WASM solver runs on the main thread and blocks JavaScript execution.
+
+**Solution:** The waterfall engine now automatically uses Cloud Run (native HiGHS) for large batches:
+- If account count > 3,000: Use `'cloud'` mode (non-blocking network request)
+- If account count ≤ 3,000: Use `'browser'` mode (fast WASM for small LPs)
+
+**Files Changed:**
+- `src/services/simplifiedAssignmentEngine.ts` - Added conditional solver mode selection based on `LP_SCALE_LIMITS.WARN_ACCOUNTS_THRESHOLD`
+
+---
+
+## [2025-12-17] - Fix: Custom Mode Priority Initialization & Holdover Positioning
+
+**Problem 1:** When switching from ENT mode to Custom mode, priorities not in ENT (Sales Tools Bucket, Team Alignment) appeared:
+- Enabled by default instead of disabled
+- At position 999 (bottom) instead of proper sequential positions
+
+**Solution 1:** Updated `handleModeSelect` to handle CUSTOM mode by:
+1. Keeping existing config for priorities already visible
+2. Adding new priorities as DISABLED with sequential positions after existing priorities
+
+**Problem 2:** When enabling a holdover/filter priority (Sales Tools, Stability Accounts), it was added at the bottom instead of above optimization priorities.
+
+**Solution 2:** Updated `handleToggle` to detect holdover-type priorities and insert them after the last enabled holdover, ensuring filter priorities always appear above optimization priorities.
+
+**Files Changed:**
+- `src/components/PriorityWaterfallConfig.tsx` - Updated `handleModeSelect` and `handleToggle` callbacks
+
+---
+
+## [2025-12-17] - SSOT: Fix Waterfall Engine Min/Max ARR Enforcement
+
+**Problem:** Waterfall engine was not properly enforcing configured min/max ARR limits:
+1. Hardcoded `customer_max_arr` was used even for prospect assignments
+2. `getCapacityLimit()` returned undefined when config values weren't set
+3. Configured `customer_min_arr`/`prospect_min_arr` fields existed in DB but weren't used in LP constraints
+
+**Solution:** Following SSOT flow - documented first, then implemented:
+
+1. **Updated MASTER_LOGIC.mdc §12.1.2** - New section documenting waterfall min/max enforcement:
+   - Configuration fields and fallback behavior
+   - Helper methods (`getCapacityLimit()`, `getMinimumFloor()`)
+   - LP constraint zones and asymmetric beta ranges
+   - Safety checks for edge cases
+
+2. **Updated simplifiedAssignmentEngine.ts**:
+   - Added `customer_min_arr` and `prospect_min_arr` to local `AssignmentConfiguration` interface
+   - Updated `getCapacityLimit()` to include `DEFAULT_MAX_ARR_PER_REP` fallback
+   - Added new `getMinimumFloor()` helper with fallback to `getMinimumThreshold()`
+   - Fixed hardcoded `customer_max_arr` → now uses `getCapacityLimit()` 
+   - Added `absoluteMinARR` and `preferredMinARR` calculations
+   - Implemented asymmetric beta ranges (`betaOverRange` vs `betaUnderRange`)
+   - Added safety check: if min >= target, logs warning and uses 0 as floor
+   - Added console logging for visibility of min/max/target values
+
+**Files Changed:**
+- `src/_domain/MASTER_LOGIC.mdc` - Added §12.1.2 (version 1.3.10)
+- `src/services/simplifiedAssignmentEngine.ts` - Interface and LP constraint fixes
+
+---
+
+## [2025-12-17] - SSOT: Big-M Penalty Fix for Max ARR Enforcement (v2)
+
+**Problem:** Even with BigM=10.0, reps were still 232% over target ARR. Analysis showed that assignment scores (0-110 per account) could accumulate and outweigh the per-unit penalty when multiple small accounts were assigned.
+
+**Root Cause:** 
+- Assignment scores: up to 110 points per account
+- Previous BigM penalty: 10.0 × 0.5 × 25 = 125 per normalized unit
+- 5 small accounts (0.2 units each) = 550 score gain vs 125 penalty = still profitable!
+
+**Solution:** Increase BigM to 100.0 (10x more) to completely dominate any accumulation:
+
+1. **Updated MASTER_LOGIC.mdc §11.3** - Documented new penalty values:
+   - BigM: 10.0 → 100.0 (10x increase from previous fix)
+   
+2. **Updated _domain/constants.ts** - Implemented changes:
+   - `LP_PENALTY.BIG_M`: 10.0 → 100.0
+
+**Result at VERY_HEAVY intensity:**
+- Old: BigM penalty = 10.0 × 0.5 × 25.0 = 125.0 (could be outweighed by accumulation)  
+- New: BigM penalty = 100.0 × 0.5 × 25.0 = 1250.0 (10x larger than any assignment score)
+
+**Files Changed:**
+- `src/_domain/MASTER_LOGIC.mdc` - Updated §11.3 and §11.3.1
+- `src/_domain/constants.ts` - Updated LP_PENALTY.BIG_M to 100.0
+
+---
+
+## [2025-12-17] - Feature: Updated Sample CSVs for Commercial/EMEA/APAC Testing
+
+**Purpose:** Add missing fields to sample test data to enable full testing of Commercial mode features (PE firm protection, stability locks, strategic accounts).
+
+**Changes:**
+
+1. **Updated `Book Builder- all accounts- COMM.csv`** - Added columns:
+   - `PE Firm` - 100 accounts have PE ownership (Vista, Thoma Bravo, JMI, etc.)
+   - `CRE Risk` - 9 customer accounts flagged as at-risk
+   - `Is Strategic` - 33 accounts marked as strategic
+   - `Renewal Date` - 42 accounts with renewal dates (21 within 90 days for stability lock testing)
+
+2. **Updated `comm_account_full_size.csv`** - Added same columns:
+   - `PE Firm` - 7,089 accounts (~5%)
+   - `CRE Risk` - 414 accounts
+   - `Is Strategic` - 3,172 accounts
+   - `Renewal Date` - 1,960 accounts
+
+3. **Updated `FY27 Sales Users - COMM Final.csv`** - Added column:
+   - `Is Strategic Rep` - 2 ENT-tier reps marked as strategic
+
+4. **Updated `autoMappingUtils.ts`** - Added "REP" as alias for `name` field to support sales reps CSV format
+
+**Files Changed:**
+- `testing/data/Book Builder- all accounts- COMM.csv`
+- `testing/data/comm_account_full_size.csv`
+- `testing/data/FY27 Sales Users - COMM Final.csv`
+- `src/utils/autoMappingUtils.ts`
+
+---
+
+## [2025-12-17] - Fix: Mode Detection Dead Code Cleanup
+
+**Problem:** The `modeDetectionService.ts` was referencing deprecated `hasRenewalSpecialists` and `renewalSpecialistCount` properties that no longer exist on the `DataCharacteristics` interface (removed in v1.3.9).
+
+**Solution:** Removed all references to deprecated Renewal Specialist properties from the mode detection logic.
+
+**Files Changed:**
+- `src/services/modeDetectionService.ts` - Removed RS references
+
+---
+
+## [2025-12-17] - Fix: Analytics Invalidation for Manual Edits
+
+**Problem:** When users made manual changes in the balancing tab (account reassignments, child owner changes), some components failed to invalidate analytics queries, causing stale data in KPIs and charts.
+
+**Components Affected:**
+- `AccountDetailDialog` - Only invalidated `customer-accounts`, not analytics
+- `ChangeChildOwnerDialog` - Only called `onSuccess()`, no direct invalidation
+- `SalesRepDetailModal` - Only called `onDataRefresh()`, no direct invalidation
+
+**Solution:** Created shared `useInvalidateAnalytics` hook that invalidates all analytics-related queries consistently:
+- `analytics-metrics` (LP success metrics, distributions)
+- `metrics-comparison` (before/after comparison)
+- `enhanced-balancing` (rep balancing data)
+- `priority-distribution` (priority pie chart)
+- `last-assignment-timestamp` (last assignment time)
+- `sales-reps-detail` and `sales-reps` (rep tables)
+
+**Files Changed:**
+- `src/hooks/useInvalidateAnalytics.ts` - **NEW** shared hook for analytics cache invalidation
+- `src/components/AccountDetailDialog.tsx` - Added `useInvalidateAnalytics` after reassignment
+- `src/components/ChangeChildOwnerDialog.tsx` - Added `useInvalidateAnalytics` after child owner change
+- `src/components/SalesRepDetailModal.tsx` - Added `useInvalidateAnalytics` after bulk reassignment
+
+**Impact:** All manual account edits now properly update:
+- Rep ARR bar charts
+- Continuity percentages
+- Priority distribution pie chart
+- Before/after comparison metrics
+
+---
+
+## [2025-12-17] - SSOT: LP Penalty Values Increased 10x (Model v1.0.1)
+
+**Problem:** At VERY_HEAVY balance intensity, reps still exceeded the $4M ARR max ceiling. The LP penalties were too weak (BigM = 0.1) relative to assignment fit scores (~0.9).
+
+**Solution:** Increased LP penalty values by 10x while preserving the 1:10:100 ratio:
+
+| Penalty | Old | New | At VERY_HEAVY (10x) |
+|---------|-----|-----|---------------------|
+| ALPHA | 0.001 | 0.01 | 0.1 (matches fit score) |
+| BETA | 0.01 | 0.1 | 1.0 (overrides fit) |
+| BIG_M | 0.1 | 1.0 | 10.0 (strongly prohibits) |
+
+**Why 10x not 100x:** Original crash was at ~1000.0 values. Staying at 1.0 for BigM keeps us 1000x below the problematic range while still providing strong enforcement.
+
+**Changes (SSOT Flow):**
+1. **MASTER_LOGIC.mdc §11.3** - Updated penalty values and example calculations
+2. **MASTER_LOGIC.mdc §14.2.1** - Added Version History table
+3. **constants.ts** - Updated `LP_PENALTY` values, bumped `OPTIMIZATION_MODEL_VERSION` to 1.0.1
+4. **lpProblemBuilder.ts** - Updated stale example values in comments
+
+**Expected Impact:**
+- Stronger enforcement of min/max balance limits
+- May reduce continuity rate slightly at high intensity
+- Better ARR distribution across team
+
+**Baseline (v1.0.0):** ARR CV 43.7%, Continuity 90.4%, Geo Match 77.3%
+
+---
+
+## [2025-12-17] - Fix: Mode Detection Dead Code Cleanup
+
+**Problem:** The `modeDetectionService.ts` was referencing deprecated `hasRenewalSpecialists` and `renewalSpecialistCount` properties that no longer exist on the `DataCharacteristics` interface (removed in v1.3.9). This caused:
+- Dead code paths that could never execute
+- Confusing logic checking `undefined` values
+- The COMMERCIAL mode detection still worked, but only via `hasTeamAlignmentData` or `hasPEAccounts`
+
+**Solution:** Removed all references to deprecated Renewal Specialist properties from the mode detection logic.
+
+**Files Changed:**
+- `src/services/modeDetectionService.ts` - Removed `hasRenewalSpecialists` and `renewalSpecialistCount` checks
+
+**Also Verified:**
+- EMEA/APAC geography scoring works correctly via `REGION_HIERARCHY` in `_domain/geography.ts`
+- LP optimization engine properly handles EMEA sub-regions (UK, DACH, Nordics, France, etc.)
+- Priority configurations for Commercial, EMEA, and APAC modes are correctly defined
+
+**Note:** The `commercialPriorityHandlers.ts` contains EMEA-specific handlers (`getEMEASubRegion`, `getEMEAEligibleReps`) that are currently unused. EMEA routing works via the standard geography scoring mechanism instead.
+
+---
+
+## [2025-12-17] - Fix: Apply Assignments Loading Overlay
+
+**Problem:** After clicking "Apply Assignments" in the preview dialog, the dialog closed immediately but the user was left looking at stale data showing "X pending assignments not yet applied" for ~10 seconds while the database save and data refresh happened in the background.
+
+**Solution:** Added a dedicated "Applying Assignments" overlay dialog that stays visible during the entire save process, showing:
+- "Saving assignments to database..." during the save phase
+- "Refreshing data..." during the refresh phase
+- A loading spinner animation
+
+**Changes:**
+- `src/pages/AssignmentEngine.tsx`:
+  - Added `showApplyingOverlay` and `applyingStatus` state variables
+  - Modified `onExecuteAssignments` to show overlay immediately when Apply is clicked
+  - Added new `Dialog` component for the applying overlay with animated spinner
+  - Overlay stays visible until save + refresh completes, then shows success dialog
+
+---
+
+## [2025-12-17] - SSOT: Optimization Telemetry System
+
+**Purpose:** Add comprehensive telemetry to track every optimization run, enabling model performance analysis, historical comparison, and AI-assisted parameter tuning.
+
+**Changes:**
+
+1. **Updated MASTER_LOGIC.mdc §14** - Documented telemetry system, model versioning rules, and data model
+2. **Added to _domain/constants.ts** - `OPTIMIZATION_MODEL_VERSION = '1.0.0'` with versioning rules (Major/Minor/Patch)
+3. **Added to optimization/types.ts** - `OptimizationRunRecord`, `OptimizationWeightsSnapshot`, `OptimizationErrorCategory` interfaces
+4. **Created Supabase migration** - `20251217000001_create_optimization_runs.sql` with:
+   - Full run context (build_id, config_id, assignment_type, engine_type, model_version)
+   - Config snapshot (weights_snapshot JSONB, balance_intensity, priority_config_snapshot)
+   - Problem size metrics (num_accounts, num_reps, num_variables, num_constraints, lp_size_kb)
+   - Solver performance (solver_type, solver_status, solve_time_ms, objective_value)
+   - Success metrics (variance %, continuity_rate, geo_match_rate, tier_match_rate, etc.)
+   - Error handling (warnings array, error_message, error_category)
+   - RLS policies matching sandbox_runs pattern
+   - Composite index on (model_version, engine_type) for version comparison queries
+5. **Created telemetry service** - `src/services/optimization/telemetry/optimizationTelemetry.ts`:
+   - `recordLPOptimizationRun()` - Full metrics from LP engine
+   - `recordWaterfallRun()` - Simplified metrics from waterfall engine
+   - Fire-and-forget pattern (non-blocking, errors logged but don't prevent assignments)
+6. **Integrated into LP engine** - `pureOptimizationEngine.ts` calls `recordLPOptimizationRun()` after solve
+7. **Integrated into waterfall engine** - `simplifiedAssignmentEngine.ts`:
+   - Added `calculateTelemetryMetrics()` for lightweight metrics (ARR variance, continuity rate, geo match rate)
+   - Calls `recordWaterfallRun()` after assignments complete
+8. **Added solverType tracking** - `SolverSolution` interface now includes `solverType: 'highs-wasm' | 'cloud-run' | 'glpk'`
+
+**Model Versioning Rules:**
+- Major (X.0.0): Breaking changes to scoring formula structure
+- Minor (0.X.0): New optional features, significant algorithm changes
+- Patch (0.0.X): Threshold/weight value changes
+
+**Files Changed:**
+- `src/_domain/MASTER_LOGIC.mdc` - Section 14 documentation
+- `src/_domain/constants.ts` - OPTIMIZATION_MODEL_VERSION constant
+- `src/services/optimization/types.ts` - Telemetry type definitions
+- `supabase/migrations/20251217000001_create_optimization_runs.sql` - New table
+- `src/services/optimization/telemetry/optimizationTelemetry.ts` - New service
+- `src/services/optimization/index.ts` - Export telemetry functions
+- `src/services/optimization/pureOptimizationEngine.ts` - LP telemetry integration
+- `src/services/optimization/solver/highsWrapper.ts` - Added solverType to SolverSolution
+- `src/services/simplifiedAssignmentEngine.ts` - Waterfall telemetry integration
+
+---
+
+## [2025-12-17] - Fix: LP Engine Progress Animation Freeze
+
+**Problem:** When using the "Relaxed Optimization" model (LP engine), the progress animation was freezing - the stopwatch, spinner, and progress bar all stopped updating during optimization.
+
+**Root Cause:** The `PureOptimizationEngine.reportProgress()` method was synchronous and didn't yield to the browser's event loop. Unlike the waterfall engine (which has async yielding), the LP engine would call progress callbacks but immediately continue without giving the browser time to render or run timer callbacks.
+
+**Solution:** Added the same `yieldToUI()` pattern to the LP engine:
+1. Added `yieldToUI()` helper function with double-frame yield pattern
+2. Changed `reportProgress()` from sync to async with UI yielding
+3. Added `await` to all 13 `this.reportProgress()` calls throughout the engine
+
+**Files Changed:**
+- `src/services/optimization/pureOptimizationEngine.ts` - Added async yielding to all progress updates
+
+---
+
+## [2025-12-17] - Fix: Apply Assignments Button Loading State
+
+**Problem:** When clicking "Apply Assignments" in the preview dialog, nothing happened in the UI for ~10 seconds while the assignments were being saved to the database.
+
+**Root Cause:** The `executeSophisticatedAssignments` function (used for most assignment execution) didn't set any loading state. The `isExecuting` state from the hook was only used by the regular execution path.
+
+**Solution:** Added a local `isApplyingAssignments` state that is set immediately when the user clicks Apply, providing instant visual feedback.
+
+**Changes:**
+1. Added `isApplyingAssignments` state to `AssignmentEngine.tsx`
+2. Set state to `true` at the start of `onExecuteAssignments()` before any async work
+3. Set state to `false` in `finally` block to ensure cleanup on success or error
+4. Pass combined `isExecuting || isApplyingAssignments` to the preview dialog
+
+**User Experience:**
+- Button immediately shows spinner and "Applying..." text when clicked
+- Button is disabled during execution to prevent double-clicks
+- Toast notification also shows progress
+
+**Files Changed:**
+- `src/pages/AssignmentEngine.tsx` - Added `isApplyingAssignments` state and wired to dialog
+
+---
+
+## [2025-12-17] - Fix: Smooth Progress Animation with Priority-Level Updates
+
+**Problem:** 
+1. The loading animation (stopwatch, spinner, progress bar) was completely freezing during assignment generation
+2. Progress bar was jumping in large 20% increments instead of smooth updates
+3. No visibility into which priority waterfall step was executing
+4. Elapsed time counter was frozen because LP solver blocked the main thread
+
+**Root Cause:**
+1. **Animation freeze**: The waterfall engine was running synchronously without yielding to the browser's event loop. Long-running LP solver calls blocked the main thread, preventing CSS animations and timer updates.
+2. **Large jumps**: Progress was only being reported at major milestones (before/after customer assignments, before/after prospect assignments) rather than during each priority step.
+3. **No granular feedback**: The engine didn't have a progress callback mechanism to report which priority was being processed.
+4. **Synchronous solve**: The HiGHS WASM `solve()` call is synchronous and blocks the JavaScript thread completely, preventing `setInterval` timer callbacks from firing.
+
+**Solution:**
+1. **Added progress callback to WaterfallAssignmentEngine**: New `WaterfallProgressCallback` interface allows the engine to report progress at each priority step
+2. **Multi-frame UI yielding**: Enhanced `yieldToUI()` helper uses double-yield pattern:
+   - First `setTimeout(0)` to flush React state updates
+   - Then `requestAnimationFrame` + 16ms delay to ensure browser renders and runs timer callbacks
+3. **Always-yield on progress**: `reportProgress()` now always yields (not just every 100ms) to maximize responsiveness
+4. **LP solver yield**: Wrapped the synchronous `highs.solve()` call in `setTimeout(0)` to yield before/after solving
+5. **Granular progress reporting**: Engine now reports progress before/after each priority execution
+6. **Smooth progress bar transitions**: Updated Progress component with `duration-300 ease-out` transition
+7. **Priority name in UI**: "Optimizing" stage now shows current priority name (e.g., "Continuity + Geography")
+
+**Technical Details:**
+- Progress is mapped from 0-100% across all enabled priorities (each priority gets equal share)
+- For "all" account type: customers get 10-50%, prospects get 50-90%
+- For single type: 10-90% range for the waterfall
+- `yieldToUI()` uses double-frame yield pattern for maximum browser responsiveness
+- LP solver is wrapped in Promise/setTimeout to yield event loop before blocking solve
+
+**Files Changed:**
+- `src/services/simplifiedAssignmentEngine.ts` - Added `WaterfallProgress` interface, enhanced `yieldToUI()` with double-yield, always-yield in `reportProgress()`
+- `src/services/optimization/solver/highsWrapper.ts` - Wrapped synchronous `highs.solve()` in setTimeout to yield before/after
+- `src/hooks/useAssignmentEngine.ts` - Added `waterfallToAssignmentProgress()` converter and wired progress callbacks
+- `src/components/ui/progress.tsx` - Added smooth CSS transition (`duration-300 ease-out`)
+- `src/components/AssignmentGenerationDialog.tsx` - Shows current priority name in "Optimizing" stage description
+
+**Limitation:** The LP solver (HiGHS WASM) still blocks the main thread during the actual solve. For datasets with complex LP problems, the timer may still pause for 1-3 seconds between yields. True non-blocking would require running the solver in a Web Worker.
+
+---
+
+## [2025-12-17] - Fix: Assignment Progress Animation Freezing & Flash to 0%
+
+**Problem:** 
+1. The loading animation was freezing during assignment generation
+2. After completion, the screen would flash to a 0% state for ~3 seconds before showing proposals
+
+**Root Cause:**
+1. **Freezing**: The dialog was using `hookAssignmentProgress` from the hook, but the local `assignmentProgress` state in AssignmentEngine.tsx was being updated more frequently. When the hook's progress wasn't updating (during LP solver execution), the animation appeared frozen.
+2. **Flash to 0%**: The hook was calling `setAssignmentProgress(null)` immediately after completion, causing the progress to reset to null/0 before the dialog transition happened.
+
+**Solution:**
+1. **Merged progress sources**: Dialog now uses whichever progress source (local or hook) has the higher value, ensuring smooth animation
+2. **Removed premature null reset**: Hook no longer clears progress to null - instead sets it to 100% and lets the UI handle the transition
+3. **Fixed progress passthrough**: Dialog now properly passes all progress fields including stage, status, and error
+
+**Files Changed:**
+- `src/pages/AssignmentEngine.tsx` - Merged local and hook progress sources for dialog
+- `src/hooks/useAssignmentEngine.ts` - Removed `setAssignmentProgress(null)` calls after completion
+
+---
+
+## [2025-12-17] - UI: Add Apply Button at Top of Assignment Preview Dialog
+
+**Change:** Added an "Apply Assignments" button at the top of the Assignment Preview dialog (next to the summary stats) so users don't have to scroll to the bottom to apply.
+
+**Files Changed:**
+- `src/components/AssignmentPreviewDialog.tsx`
+
+---
+
+## [2025-12-17] - Fix: Priority Pie Chart Showing "P1: P1" Instead of Proper Names
+
+**Problem:** The Priority Distribution pie chart was showing labels like "P1: P1", "P2: P2", etc. instead of the proper priority names like "P1: Sales Tools Bucket", "P2: Stability Accounts".
+
+**Root Cause:** 
+1. When LP solver generates rationales like `"P4: Geography + Continuity → Rep Name"`, the `extractPriorityCode()` function extracts just `"P4"` as `ruleApplied`
+2. When saving to database, the code concatenated `"${ruleApplied}: ${assignmentReason}"` = `"P4: P4: Geography + Continuity → ..."`
+3. The parser then saw the double-prefix and extracted just `"P4"` as the name
+
+**Solution:**
+1. **Parser fix** (`useBuildData.ts`): Added `DEFAULT_PRIORITY_NAMES` fallback map with all P0-P7 names. Parser now detects and handles double-prefix case gracefully.
+2. **Source fix** (`assignmentService.ts`, `rebalancingAssignmentService.ts`): Before concatenating `ruleApplied: assignmentReason`, check if `assignmentReason` already starts with a priority code prefix. If so, use `assignmentReason` directly without double-prefixing.
+
+**Files Changed:**
+- `src/hooks/useBuildData.ts` - Enhanced `parsePriorityFromRationale()` with fallback names
+- `src/services/assignmentService.ts` - Prevent double-prefix in `saveAssignmentProposals()` and `executeAssignments()`
+- `src/services/rebalancingAssignmentService.ts` - Prevent double-prefix in `saveAssignmentProposals()`
+
+**Note:** Existing assignments with double-prefixed rationales will now display correctly thanks to the parser fix.
+
+---
+
+## [2025-12-16] - Fix: Southwest Territory Mapping to West Region
+
+**Problem:** The Gemini AI auto-mapping was incorrectly mapping "Southwest" territories. When available regions were `["Northeast", "Southeast", "West"]`, "Southwest" was being mapped incorrectly (possibly to Southeast due to the word "South").
+
+**Root Cause:** 
+1. The Gemini prompt didn't have an explicit example showing "Southwest" → "West"
+2. Multiple files had conflicting mappings (`TerritoryMappingInterface.tsx` had `'SOUTHWEST': 'Central'`)
+3. Geographically, Southwest US (AZ, NM, NV, UT) belongs to the West region
+
+**Solution:**
+1. Updated Gemini prompt to explicitly include "Southwest" in the West region description
+2. Added explicit example: `{"territory": "SOUTHWEST", "region": "West", ...}`
+3. Fixed `TerritoryMappingInterface.tsx` to map SOUTHWEST → West (was incorrectly Central)
+4. Fixed `SimplifiedAssignmentConfig.tsx` to include SOUTHWEST in West territories
+
+**Files Changed:**
+- `supabase/functions/gemini-territory-mapping/index.ts` - Added Southwest to West examples
+- `src/components/TerritoryMappingInterface.tsx` - Fixed SOUTHWEST mapping
+- `src/components/SimplifiedAssignmentConfig.tsx` - Fixed SOUTHWEST in West array
+
+**Note:** `_domain/geography.ts` already had the correct mapping (`SOUTHWEST` → `West`).
+
+---
+
+## [2025-12-16] - Fix: Priority Pie Chart Showing Wrong Names (RO: Geography + Continuity)
+
+**Problem:** The Priority Distribution pie chart was showing "RO: Geography + Continuity" for 1,794 accounts. This made no sense because:
+1. "RO" stands for "Residual Optimization" (balance-driven fallback), NOT Geography + Continuity
+2. The chart was using stale hardcoded `PRIORITY_NAMES` mapping instead of the dynamic names parsed from rationale strings
+
+**Root Cause:** `PriorityDistributionPie.tsx` had an outdated static mapping that incorrectly mapped `'RO': 'Geography + Continuity'`. Priority names are actually dynamic and parsed from the rationale string (e.g., "P4: Geography + Continuity → Rep Name").
+
+**Solution:** 
+- Removed the stale `PRIORITY_NAMES` mapping with incorrect values
+- Added minimal `FALLBACK_PRIORITY_NAMES` only for codes that truly need fallbacks (P0, RO, Other)
+- Updated `getDisplayName()` to prefer the name already parsed from rationale
+
+**Files Changed:**
+- `src/components/balancing/PriorityDistributionPie.tsx`
+
+---
+
+## [2025-12-16] - Fix: Cancel Generation Now Properly Stops UI Spinner
+
+**Problem:** When canceling assignment generation mid-job, the service was signaled to stop but the "Processing..." spinner on the Re-generate button kept spinning because `isGenerating` state wasn't being reset.
+
+**Solution:**
+1. Added `cancelGeneration()` function to `useAssignmentEngine` hook that:
+   - Calls `EnhancedAssignmentService.cancelGeneration()` to signal abort
+   - Immediately sets `isGenerating` to `false`
+   - Clears `assignmentProgress`
+   - Shows a toast confirming cancellation
+2. Updated `AssignmentEngine.tsx` to use this new function in `onCancel` callback
+
+**Files Changed:**
+- `src/hooks/useAssignmentEngine.ts` - Added `cancelGeneration()` export
+- `src/pages/AssignmentEngine.tsx` - `onCancel` now calls `cancelGeneration()` before hiding dialog
+
+---
+
+## [2025-12-16] - UI: Balance Intensity Slider & Constraint Toggle Cleanup
+
+**Changes:**
+
+**1. `FullAssignmentConfig.tsx` - Balance Intensity now uses a 5-point slider:**
+- Replaced RadioGroup with a horizontal Slider component
+- Shows current selection label, multiplier, and description above the slider
+- Labels: Continuity ← Balanced → Balance
+- More compact UI, better UX for quick adjustment
+
+**2. `ConstraintToggles.tsx` - Removed Capacity Hard Cap toggle:**
+- Removed the "Capacity Hard Cap" toggle since Big-M system now handles capacity symmetrically
+- Added comment explaining removal
+
+---
+
+## [2025-12-16] - SSOT: Symmetric Balance Constraints via Big-M
+
+**Problem:** The LP model was asymmetric - over-allocation was forbidden (hard capacity constraint) while under-allocation was only penalized (soft constraint). This created inconsistent behavior.
+
+**Solution:** Removed the hard capacity constraint entirely, leaving only the symmetric Big-M penalty system which handles both over-allocation and under-allocation identically via soft penalties.
+
+**Before (asymmetric):**
+```
+Hard:  Σ ARR × x ≤ cap         (can't exceed - forbidden)
+Soft:  BigM penalties for M+/M- (penalized only)
+```
+
+**After (symmetric):**
+```
+Soft:  Σ ARR × x / T = 1 + α+ - α- + β+ - β- + M+ - M-   (both directions penalized)
+```
+
+**Files Changed:**
+
+**1. `lpProblemBuilder.ts`:**
+- Removed hard capacity constraint (lines 447-469)
+- Removed feasibility slack system (lines 402-413)
+- Updated problem object to exclude `feasibilitySlacks`
+- Renumbered constraint sections (3-7 → 3-6)
+
+**2. `types.ts`:**
+- Removed `capacity_hard_cap_enabled` from `LPConstraintsConfig`
+- Removed `feasibility_penalty` from `LPSolverParams`
+- Removed `feasibilitySlacks` from `LPProblem`
+- Updated default configs
+
+**3. `highsWrapper.ts`:**
+- Removed feasibility slack handling from LP format generation
+- Removed feasibility slack bounds generation
+- Removed feasibility slack handling from GLPK fallback
+
+**4. `MASTER_LOGIC.mdc` §11.3:**
+- Documented symmetric Big-M system
+- Removed hard capacity constraint from LP formulation
+- Updated balance config table (Hard Cap → BigM Zone Boundary)
+- Added design note explaining the change
+
+**Benefits:**
+- Reps with locked high-ARR accounts can now receive assignments (solver finds feasible solution with penalties)
+- Consistent penalty treatment for all deviations
+- Simpler LP model (fewer constraint types)
+
+---
+
+## [2025-12-16] - SSOT: Deprecated Fields Cleanup v1.3.9
+
+**Problem:** Many importable fields existed in the codebase but served no business logic purpose - they were either display-only, legacy, or never implemented (like `sub_region`).
+
+**Solution:** Following SSOT flow, documented all deprecated fields in `MASTER_LOGIC.mdc` appendix first, then removed them from import processing, transforms, and UI components.
+
+**Accounts - Fields Removed (10):**
+- `ultimate_parent_employee_size` - Never used (tier uses account's `employees`)
+- `account_type` - Display-only, no business logic
+- `industry` - Display-only, no business logic
+- `expansion_score` - Never used in business logic
+- `initial_sale_score` - Never used in business logic
+- `in_customer_hierarchy` - Never used (hierarchy from `ultimate_parent_id`)
+- `include_in_emea` - Never used
+- `is_2_0` - Legacy flag, never implemented
+- `inbound_count` - Never used in business logic
+- `idr_count` - Never used in business logic
+
+**Opportunities - Fields Removed (4):**
+- `stage` - Display-only, no business logic
+- `amount` - Fallback for `net_arr`, rarely needed
+- `close_date` - Display-only, no business logic
+- `created_date` - Display-only, no business logic
+
+**KEPT:** `opportunity_name` (display value useful for identification)
+
+**Sales Reps - Fields Removed (3):**
+- `manager` - Legacy field, use `flm`/`slm` instead
+- `sub_region` - Never implemented (EMEA uses `region` field directly)
+- `is_renewal_specialist` - RS routing feature never used in production
+
+**Also Removed - Commercial Mode RS Routing:**
+- `shouldRouteToRenewalSpecialist()` - Function removed
+- `getEligibleRepsForAccount()` - Function removed  
+- `calculateRSWorkloadMetrics()` - Function removed
+- `RSWorkloadMetrics` interface - Interface removed
+
+**EMEA Sub-Region Update:**
+- `getEMEAEligibleReps()` now uses `rep.region` instead of deprecated `sub_region`
+
+**Files Changed:**
+- `src/_domain/MASTER_LOGIC.mdc` - Added "Appendix: Deprecated Fields" section
+- `src/utils/autoMappingUtils.ts` - Removed 15 field aliases
+- `src/utils/importUtils.ts` - Removed fields from transform functions
+- `src/utils/exportUtils.ts` - Removed deprecated fields from export interfaces
+- `src/components/data-tables/AccountsTable.tsx` - Removed industry/account_type columns
+- `src/components/data-tables/OpportunitiesTable.tsx` - Removed stage/timeline columns
+- `src/components/data-tables/SalesRepDetailDialog.tsx` - Removed industry and sub_region references
+- `src/components/SalesRepDetailModal.tsx` - Removed industry references
+- `src/pages/ComprehensiveReview.tsx` - Removed manager fallback
+- `src/pages/DataImport.tsx` - Removed deprecated field mappings
+- `src/services/commercialPriorityHandlers.ts` - Removed RS routing functions
+- `src/services/modeDetectionService.ts` - Removed is_renewal_specialist detection
+- `src/services/optimization/types.ts` - Removed sub_region and is_renewal_specialist from SalesRep interface
+- `src/hooks/useMappedFields.ts` - Removed deprecated field checks
+
+---
+
+## [2025-12-16] - Fix: Add Missing `is_strategic` Column to Accounts Table
+
+**Problem:** The `is_strategic` field was fully implemented in the application code (TypeScript types, auto-mapping, import transform, strategic pool handler, UI toggle) but the database column was never created. This caused the strategic flag to be silently lost during import.
+
+**Root Cause:** The column was added to TypeScript interfaces but the corresponding migration was never committed.
+
+**Solution:** Added migration to create the `is_strategic` column on the `accounts` table.
+
+**Changes:**
+1. **Created migration** - `20251216000002_add_is_strategic_to_accounts.sql`
+   - Adds `is_strategic BOOLEAN DEFAULT false` column
+   - Creates partial index on `build_id` for strategic accounts
+   - Uses nullable to match existing boolean column patterns
+
+**Files:**
+- `supabase/migrations/20251216000002_add_is_strategic_to_accounts.sql`
+
+**Usage:** Users can now mark accounts as strategic via:
+- CSV Upload: Include column `Is_Strategic`, `Strategic`, or `is_strategic` with `true`/`yes`/`1`
+- Manual Toggle: Click strategic toggle in Accounts Table after import
+
+---
+
+## [2025-12-16] - Fix: Data Preview Works After Import
+
+**Problem:** The Preview button on imported data files was disabled with tooltip "Preview unavailable - data already in database". Once data was imported to Supabase, users could not preview it because the in-memory `parsedData` was no longer available. Additionally, clicking Preview required a second click on "Show Preview" button inside the dialog.
+
+**Solution:** Added functionality to fetch sample data from Supabase when Preview is clicked on already-imported files. Made the preview show immediately without requiring a second click.
+
+**Changes:**
+1. **Added `fetchPreviewDataFromDatabase()` helper** - Fetches 100 sample rows from the appropriate table (accounts, opportunities, or sales_reps) by `build_id`
+2. **Added `handlePreviewFile()` handler** - Checks if in-memory data exists; if not, fetches from database
+3. **Added state for DB preview data** - `dbPreviewData` and `isLoadingDbPreview` state variables
+4. **Updated Preview dialog** - Now shows:
+   - Loading spinner while fetching from database
+   - In-memory data (for fresh uploads)
+   - Database-fetched data (for already-imported files)
+   - Empty state with Database icon when no data found
+5. **Removed disabled state** - Preview button is always clickable now
+6. **Enlarged dialog** - Changed from `max-w-5xl max-h-[80vh]` to `max-w-[90vw] w-[90vw] max-h-[90vh] h-[90vh]` for near full-screen preview
+7. **Refactored `DataPreview` component** - Removed the nested "Show Preview" toggle button; data now shows immediately. Increased table height with `calc(100vh - 400px)` min-height. Shows up to 100 rows by default (was 5). Limits to 15 columns with "+N more" indicator for wide datasets.
+8. **Added Empty Fields section** - Shows fields that exist in the database but have no data (weren't mapped during import). Collapsible section with count badge. Updated summary row to show "Fields with Data" vs "Empty Fields" counts.
+
+**Files:**
+- `src/pages/DataImport.tsx`
+- `src/components/DataPreview.tsx`
+
+---
+
+## [2025-12-16] - SSOT: Balance Intensity Configuration
+
+**Problem:** LP solver balance penalties were hardcoded, limiting user control over the continuity vs. balance trade-off. Some teams want to preserve relationships even with uneven books; others need strictly balanced books and will sacrifice continuity.
+
+**Solution:** Added a configurable "Balance Intensity" dial with 5 presets that multiply all balance penalties (Alpha, Beta, BigM) for ARR, ATR, Pipeline, and Tier metrics.
+
+| Intensity | Multiplier | Effect |
+|-----------|------------|--------|
+| Very Light | 0.1x | Continuity almost always wins |
+| Light | 0.5x | Slight preference for balance |
+| Normal | 1.0x | Current behavior (default) |
+| Heavy | 3.0x | Balance often overrides continuity |
+| Very Heavy | 10.0x | Balance dominates |
+
+**Changes:**
+
+1. **Updated `_domain/MASTER_LOGIC.mdc` §11.3.1** - Documented balance intensity feature
+2. **Added to `_domain/constants.ts`** - `BALANCE_INTENSITY_PRESETS`, `BalanceIntensity` type, `getBalancePenaltyMultiplier()`
+3. **Created migration** - `20251216000001_add_balance_intensity.sql` with CHECK constraint
+4. **Updated `optimization/types.ts`** - Added `balance_intensity` to `LPBalanceConfig`
+5. **Updated `dataLoader.ts`** - `parseLPConfiguration()` reads `balance_intensity` from DB
+6. **Updated `lpProblemBuilder.ts`** - Apply intensity multiplier to ARR/ATR/Pipeline/Tier penalties
+7. **Updated `simplifiedAssignmentEngine.ts`** - Apply intensity multiplier to ARR penalties in waterfall mode
+8. **Updated `FullAssignmentConfig.tsx`** - Added Balance Intensity radio group with tooltip
+
+**Note:** In waterfall mode, balance intensity only affects ARR balance. ATR/Pipeline/Tier balance is only available in relaxed_optimization mode.
+
+---
+
+## [2025-12-16] - Cloud Run Solver Performance Optimization
+
+**Problem:** Full prospect-size LP problems (366K variables) were taking ~13 seconds to solve on Cloud Run.
+
+**Solution:** Optimized HiGHS solver configuration and Cloud Run deployment settings.
+
+**Changes:**
+
+**1. Updated `cloud-run-solver/server-native.js`:**
+- Added `SOLVER_CONFIG` with tuned HiGHS options:
+  - `mip_rel_gap: 0.02` (2% gap - faster termination while maintaining quality)
+  - `parallel: on` with `threads: 2` (utilize multi-core)
+  - `presolve: on` (simplify problem before solving)
+  - `time_limit: 240` (4 min safety limit)
+- Use `/dev/shm` (RAM disk) for temp files when available
+- Options passed via options file (more reliable than CLI args)
+
+**2. Updated Cloud Run deployment:**
+- `--min-instances 1` - Eliminates cold starts
+- `--cpu 2` - Matches solver thread count
+
+**Benchmark Results:**
+
+| Problem | Before | After | Improvement |
+|---------|--------|-------|-------------|
+| Customer (432×48, 20K vars) | 655ms | 627ms | ~4% |
+| Medium (2000×48, 96K vars) | 3,568ms | 1,734ms | **51%** |
+| Full Prospect (7619×48, 366K vars) | 13,279ms | 7,422ms | **44%** |
+
+**Files:**
+- `cloud-run-solver/server-native.js` - Solver configuration
+- Cloud Run service `highs-solver` - Deployment settings
+
+---
+
+## [2025-12-16] - SSOT: Dynamic Balance Max Calculation & Documentation Fixes
+
+**Problem:** 
+1. `enhancedAssignmentService.ts` used hardcoded `$8M` fallback for `maxARRPerRep` instead of following MASTER_LOGIC.mdc §12.1.1 formula
+2. MASTER_LOGIC.mdc §11.10 documented wrong values (3,000/2,000) but code had (8,000/3,000)
+3. `simplifiedAssignmentEngine.ts` used hardcoded `90` instead of `DEFAULT_CONTINUITY_DAYS`
+
+**Solution:**
+
+**1. Added `calculateBalanceMax()` to `_domain/calculations.ts`:**
+```typescript
+// Formula: MAX(target × 1.5, largestAccount × 1.2)
+// @see MASTER_LOGIC.mdc §12.1.1
+export function calculateBalanceMax(
+  target: number,
+  largestAccountValue: number,
+  targetMultiplier: number = 1.5,
+  largestMultiplier: number = 1.2
+): number
+```
+
+**2. Fixed `enhancedAssignmentService.ts` SMART_BALANCE rule:**
+- Now calculates `maxARRPerRep` dynamically: `totalARR / repCount` → `calculateBalanceMax()`
+- Falls back to configured value if user provides one
+- Added detailed logging showing total ARR, target/rep, largest account, and whether limit is calculated or configured
+
+**3. Fixed MASTER_LOGIC.mdc §11.10 documentation drift:**
+- Updated `MAX_ACCOUNTS_FOR_GLOBAL_LP`: 3,000 → **8,000**
+- Updated `WARN_ACCOUNTS_THRESHOLD`: 2,000 → **3,000**
+- Updated section title from "HiGHS WASM" to "Solver Routing" (reflects Cloud Run capability)
+- Updated calculation example and error message to use correct values
+- Fixed SSOT example in §2 to show 8000 instead of 3000
+
+**4. Updated `highsWrapper.ts` comment:**
+- Removed stale "~3000 accounts" reference
+- Added `@see MASTER_LOGIC.mdc §11.10` reference
+
+**5. Fixed `simplifiedAssignmentEngine.ts` hardcoded 90 days:**
+- Added `DEFAULT_CONTINUITY_DAYS` import from `@/_domain`
+- Replaced hardcoded `90` with `DEFAULT_CONTINUITY_DAYS` in renewal_soon and recent_owner_change checks
+- Added `@see MASTER_LOGIC.mdc §10.8` comments
+
+**Files:**
+- `src/_domain/calculations.ts` - Added `calculateBalanceMax()`
+- `src/_domain/MASTER_LOGIC.mdc` - Fixed §11.10 documentation drift
+- `src/services/enhancedAssignmentService.ts` - Dynamic maxARRPerRep calculation
+- `src/services/simplifiedAssignmentEngine.ts` - Use DEFAULT_CONTINUITY_DAYS
+- `src/services/optimization/solver/highsWrapper.ts` - Updated comment
+
+**Known Minor Issue (Low Priority):**
+- `assignmentService.ts` line 2062 has undocumented workload scoring formula with magic numbers
+- This is internal assignment ordering logic, not user-facing business logic
+- Formula: `(ARR × 0.6) + (accounts × 50000 × 0.3) + (tier1 × 25000 × 0.1)`
+- Consider documenting in MASTER_LOGIC.mdc §12.4 if this formula is intentional
+
+**SSOT Compliance:** ✅ Followed correct order (docs first, then implementation, then consumers)
+
+---
+
+## [2025-12-16] - Docs: Created Dedicated SSOT Cursor Rule
+
+**Changes:**
+- Created `.cursor/rules/SSOT.mdc` - Dedicated rule file for Single Source of Truth enforcement
+- Extracted and expanded SSOT flow documentation from main `CURSOR.mdc`
+- Rule applies to all `src/**/*.ts` and `src/**/*.tsx` files with `alwaysApply: true`
+
+**Purpose:** Makes SSOT enforcement more visible and ensures the AI assistant always follows the documentation-first workflow when modifying business logic.
+
+**Key Sections:**
+- SSOT Flow (3-step process: MASTER_LOGIC.mdc → _domain/*.ts → consumers)
+- Pre-Implementation Checklist
+- Violation detection patterns
+- Gradual refactoring rules
+- Debug Mode + SSOT integration
+
+---
+
+## [2025-12-16] - Feature: Optimization UX Improvements
+
+**Problem:** Long-running optimization processes (5-6+ minutes for large datasets) lacked transparency and user feedback.
+
+**Solution:** Added three key UX improvements to the AssignmentGenerationDialog:
+
+**Changes:**
+
+1. **Benchmark-based time estimation** (`AssignmentGenerationDialog.tsx`):
+   - Shows "Est. Total" at start based on account count benchmark (35K accounts ≈ 6 min)
+   - Switches to "Est. Remaining" once progress data is available
+   - Formula: `SECONDS_PER_ACCOUNT = 360 / 35000 ≈ 0.01s per account`
+
+2. **Completion success banner**:
+   - Green celebration banner with PartyPopper icon when optimization completes
+   - Shows total assignments generated and elapsed time
+   - **Amber warning**: "Don't close this tab! Assignments are not saved until you click Apply"
+
+3. **Slack notification option** (`slackNotificationService.ts`):
+   - Checkbox appears for datasets > 500 accounts during generation
+   - Preference persisted to localStorage (`book-builder-notify-on-complete`)
+   - Added `notifyOptimizationComplete()` helper function
+   - Sends DM with: build name, account count, proposal count, elapsed time
+   - Includes reminder to return and click Apply
+
+4. **Wired up in AssignmentEngine.tsx**:
+   - Added `onComplete` callback to dialog
+   - Fetches build name for notification context
+   - Uses user email from AuthContext for Slack routing
+
+**Files:**
+- `src/components/AssignmentGenerationDialog.tsx` - Time estimates, success banner, Slack checkbox
+- `src/services/slackNotificationService.ts` - `notifyOptimizationComplete()` helper
+- `src/pages/AssignmentEngine.tsx` - `handleOptimizationComplete()` callback, build info query
+
+**UX Summary:**
+| Feature | Behavior |
+|---------|----------|
+| Time estimation | "Est. Total: ~5-8 min" → "Est. Remaining: ~2-5 min" |
+| Completion banner | Green success + amber warning about Apply |
+| Slack notification | Opt-in for large datasets, persisted preference |
+
+---
+
+## [2025-12-16] - SSOT: Solver Routing Strategy (WASM for Waterfall, Cloud Run for Global)
+
+**Problem:** Waterfall engine had its own HiGHS loader with no Cloud Run fallback. Global optimization always used Cloud Run via `ALWAYS_USE_CLOUD_RUN` flag. This created inconsistent routing and no fallback for waterfall if WASM failed.
+
+**Solution:** Unified solver routing with mode-based strategy.
+
+**SSOT Flow:**
+1. **Updated MASTER_LOGIC.mdc §11.11** - Documented solver routing strategy
+2. **Added `SolverMode` type to constants.ts** - `'browser' | 'cloud'`
+3. **Updated highsWrapper.ts** - Added mode parameter, removed `ALWAYS_USE_CLOUD_RUN` flag
+4. **Added `solveLPString()` export** - Simpler interface for waterfall engine
+5. **Refactored simplifiedAssignmentEngine.ts** - Now uses `solveLPString('browser')` via highsWrapper
+6. **Updated pureOptimizationEngine.ts** - Explicitly passes `mode='cloud'`
+
+**Routing Logic:**
+| Mode | Primary Solver | Fallback Chain | Use Case |
+|------|---------------|----------------|----------|
+| `browser` | HiGHS WASM | GLPK → Cloud Run | Waterfall (fast, small LPs) |
+| `cloud` | Cloud Run | None | Global optimization (reliable, large LPs) |
+
+**Files Changed:**
+- `src/_domain/MASTER_LOGIC.mdc` - Added §11.11
+- `src/_domain/constants.ts` - Added `SolverMode` type
+- `src/services/optimization/solver/highsWrapper.ts` - Mode param, `solveLPString()`
+- `src/services/simplifiedAssignmentEngine.ts` - Removed duplicate HiGHS loader
+- `src/services/optimization/pureOptimizationEngine.ts` - Explicit cloud mode
+
+**Impact:** Waterfall now has Cloud Run fallback if WASM fails. Global optimization explicitly uses Cloud Run for reliability.
+
+---
+
+## [2025-12-16] - SSOT: Enhanced SSOT Flow Enforcement in Documentation
+
+**Problem:** Analysis of recent changelog entries showed ~25% of business logic changes were skipping the SSOT documentation step, leading to magic numbers and undocumented logic.
+
+**Solution:** Strengthened SSOT flow documentation in both CURSOR.mdc and MASTER_LOGIC.mdc.
+
+**Changes:**
+
+1. **Updated CURSOR.mdc** (already done in previous session):
+   - Added prominent `🚨 SSOT FLOW - CRITICAL ENFORCEMENT` section
+   - Added pre-implementation checklist with checkboxes
+   - Added `SSOT:` changelog labeling convention
+   - Added violation examples table
+   - Added "STOP AND ASK" guidance
+
+2. **Updated MASTER_LOGIC.mdc**:
+   - Added new "🚨 SSOT WORKFLOW - READ THIS FIRST" section after Table of Contents
+   - Added pre-implementation checklist
+   - Added example of correct vs incorrect order
+   - Added "What Belongs in This Document" table
+   - Enhanced Maintenance Rules section with SSOT workflow quick reference
+   - Added SSOT violations table
+   - Updated version to 1.3.8
+
+**New SSOT Flow Documentation Locations:**
+- `CURSOR.mdc` → Section "🚨 SSOT FLOW - CRITICAL ENFORCEMENT" (lines 53-147)
+- `MASTER_LOGIC.mdc` → Section "🚨 SSOT WORKFLOW - READ THIS FIRST" (after ToC)
+- `MASTER_LOGIC.mdc` → Appendix "SSOT Workflow" section
+
+**Impact:** Future AI assistants and developers will see SSOT requirements prominently, with clear examples and checklists to follow.
+
+---
+
 ## [2025-12-16] - Release v1.4.0 - Cloud Run Solver (Bug Ridden State)
 
 **Major milestone release with known issues to address.**
