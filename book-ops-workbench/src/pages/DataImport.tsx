@@ -1878,17 +1878,25 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
           {remaining > 0 && (
             <p className="text-xs text-muted-foreground italic">...and {remaining} more</p>
           )}
-          <p className="text-xs text-muted-foreground mt-2 border-t pt-1">Click "View Errors" for full details</p>
+          <p className="text-xs font-semibold mt-2 border-t pt-1">Click badge to view all</p>
         </div>
       );
     };
 
-    const wrapWithTooltip = (badge: React.ReactNode, content: React.ReactNode | null) => {
-      if (!content) return badge;
+    const wrapWithTooltipAndClick = (badge: React.ReactNode, content: React.ReactNode | null) => {
+      if (!content || !file) return badge;
       return (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="cursor-help">{badge}</span>
+            <span 
+              className="cursor-pointer" 
+              onClick={(e) => {
+                e.stopPropagation();
+                setErrorViewFile(file);
+              }}
+            >
+              {badge}
+            </span>
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-sm">
             {content}
@@ -1901,13 +1909,13 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
       case 'completed':
         return <Badge className="bg-green-500"><Check className="w-3 h-3 mr-1" />Completed</Badge>;
       case 'error':
-        return wrapWithTooltip(
-          <Badge variant="destructive"><AlertTriangle className="w-3 h-3 mr-1" />Errors Found</Badge>,
+        return wrapWithTooltipAndClick(
+          <Badge variant="destructive" className="cursor-pointer hover:bg-destructive/80"><AlertTriangle className="w-3 h-3 mr-1" />Errors Found</Badge>,
           getTooltipContent()
         );
       case 'warning':
-        return wrapWithTooltip(
-          <Badge className="bg-yellow-500 text-white"><AlertTriangle className="w-3 h-3 mr-1" />Warnings</Badge>,
+        return wrapWithTooltipAndClick(
+          <Badge className="bg-yellow-500 text-white cursor-pointer hover:bg-yellow-600"><AlertTriangle className="w-3 h-3 mr-1" />Warnings</Badge>,
           getTooltipContent()
         );
       case 'validating':
