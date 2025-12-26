@@ -2,7 +2,8 @@ import React from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, XCircle, Settings2, Loader2, Eye, Trash2, Database, FileText, Users, Upload, AlertTriangle } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { CheckCircle2, XCircle, Settings2, Loader2, Eye, Trash2, Database, FileText, Users, Upload, AlertTriangle, ChevronDown } from "lucide-react";
 
 interface EnhancedValidationResultsProps {
   file: {
@@ -77,6 +78,8 @@ export const EnhancedValidationResults: React.FC<EnhancedValidationResultsProps>
   onViewErrors,
   isImporting = false
 }) => {
+  const [showWarnings, setShowWarnings] = React.useState(false);
+  
   if (!file.validationResult) {
     return null;
   }
@@ -181,6 +184,33 @@ export const EnhancedValidationResults: React.FC<EnhancedValidationResultsProps>
               style={{ width: `${successRate}%` }}
             />
           </div>
+        )}
+
+        {/* Expandable Warnings Section */}
+        {validationResult.warnings.length > 0 && (
+          <Collapsible open={showWarnings} onOpenChange={setShowWarnings} className="mb-4">
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="sm" className="w-full justify-between text-amber-600 hover:text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/20">
+                <span className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" />
+                  {validationResult.warnings.length} Warning{validationResult.warnings.length !== 1 ? 's' : ''}
+                </span>
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${showWarnings ? 'rotate-180' : ''}`} />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-2 space-y-1">
+              {validationResult.warnings.slice(0, 5).map((warning, i) => (
+                <div key={i} className="text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded px-3 py-2 border border-amber-200 dark:border-amber-800">
+                  {warning}
+                </div>
+              ))}
+              {validationResult.warnings.length > 5 && (
+                <div className="text-xs text-muted-foreground text-center py-1">
+                  +{validationResult.warnings.length - 5} more warning{validationResult.warnings.length - 5 !== 1 ? 's' : ''}
+                </div>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
         )}
 
         {/* Action Buttons */}

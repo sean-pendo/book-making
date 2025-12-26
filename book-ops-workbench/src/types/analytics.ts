@@ -168,25 +168,22 @@ export interface LPSuccessMetrics {
  * Detailed continuity metrics for UI display
  * 
  * Provides actual counts (not just the percentage) so tooltips
- * can show accurate "Retained: X / Changed: Y / Excluded: Z" breakdowns.
+ * can show accurate "Retained: X / Changed: Y / Total: Z" breakdowns.
  * 
  * @see MASTER_LOGIC.mdc §13.7.1 - Continuity Metrics Structure
  */
 export interface ContinuityMetrics {
-  /** The continuity score (0-1), same as retainedCount / eligibleCount */
+  /** The continuity score (0-1), same as retainedCount / totalCount */
   score: number;
   
   /** Accounts staying with same owner (new_owner_id = owner_id OR new_owner_id IS NULL) */
   retainedCount: number;
   
-  /** Accounts moving to different owner (eligibleCount - retainedCount) */
+  /** Accounts moving to different owner (totalCount - retainedCount) */
   changedCount: number;
   
-  /** Total accounts eligible for continuity tracking (owner exists in reps, not backfill source) */
-  eligibleCount: number;
-  
-  /** Accounts excluded from tracking (owner not in reps file) */
-  excludedCount: number;
+  /** Total parent accounts */
+  totalCount: number;
 }
 
 // ============================================
@@ -238,6 +235,33 @@ export interface TierAlignmentBreakdown {
   unknown: number;
 }
 
+/**
+ * Stability lock breakdown for pie chart visualization.
+ * Shows accounts locked from optimization by lock type.
+ * 
+ * Only includes locked accounts - unlocked accounts are not shown.
+ * Lock types defined in services/optimization/constraints/stabilityLocks.ts
+ * 
+ * @see MASTER_LOGIC.mdc §13.4.3 - Stability Lock Breakdown
+ * @see MASTER_LOGIC.mdc §11.5 - Account Locking Priorities
+ */
+export interface StabilityLockBreakdown {
+  /** Manually excluded from reassignment */
+  manualLock: number;
+  /** Owner leaving, migrating to replacement */
+  backfillMigration: number;
+  /** At-risk accounts stay with experienced owner */
+  creRisk: number;
+  /** Renewing within configured days */
+  renewalSoon: number;
+  /** PE-owned accounts routed to dedicated rep */
+  peFirm: number;
+  /** Recently changed owner, minimize churn */
+  recentChange: number;
+  /** Total locked accounts (sum of all types) */
+  total: number;
+}
+
 export interface ArrBucket {
   bucket: string;
   count: number;
@@ -253,17 +277,6 @@ export interface RegionMetrics {
   atr: number;
   pipeline: number;
   repCount: number;
-}
-
-export interface OwnerCoverage {
-  /** Accounts with a valid owner_id that exists in sales_reps */
-  withOwner: number;
-  
-  /** Accounts without owner or with owner not in sales_reps */
-  orphaned: number;
-  
-  /** Coverage percentage */
-  coverageRate: number;
 }
 
 // ============================================
@@ -292,9 +305,6 @@ export interface MetricsSnapshot {
   
   /** Tier alignment breakdown (exact match vs mismatches) */
   tierAlignmentBreakdown: TierAlignmentBreakdown;
-  
-  /** Owner coverage stats */
-  ownerCoverage: OwnerCoverage;
   
   /** Per-rep distribution data for charts */
   repDistribution: RepDistributionData[];
@@ -381,9 +391,25 @@ export interface RepDistributionData {
   childProspects: number;
   // Strategic rep flag for distinct chart coloring
   isStrategicRep?: boolean;
+  
+  // Tier breakdown (Tier 1-4 from expansion_tier or initial_sale_tier)
+  tier1Accounts: number;
+  tier2Accounts: number;
+  tier3Accounts: number;
+  tier4Accounts: number;
+  tierNAAccounts: number;  // Missing tier data
+  
+  // CRE Risk breakdown (based on cre_count thresholds from @/_domain)
+  creNoneAccounts: number;   // 0 CRE
+  creLowAccounts: number;    // 1-2 CRE
+  creMediumAccounts: number; // 3-5 CRE
+  creHighAccounts: number;   // 6+ CRE
 }
 
 export type RepDistributionMetric = 'arr' | 'atr' | 'pipeline' | 'accounts';
+
+/** Sub-mode for account distribution chart (Counts vs Tiers vs CRE) */
+export type AccountSubMode = 'counts' | 'tiers' | 'cre';
 
 // ============================================
 // COMPONENT PROPS

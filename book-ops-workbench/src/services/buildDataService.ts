@@ -1,5 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
-import { getAccountARR, getAccountATR, classifyTeamTier, isRenewalOpportunity, getOpportunityPipelineValue, isParentAccount, calculateGeoMatchScore, SALES_TOOLS_REP_ID, SALES_TOOLS_REP_NAME, getValidRepIdsForContinuity, isEligibleForContinuityTracking, GEO_MATCH_SCORES } from '@/_domain';
+import { getAccountARR, getAccountATR, classifyTeamTier, isRenewalOpportunity, getOpportunityPipelineValue, isParentAccount, calculateGeoMatchScore, SALES_TOOLS_REP_ID, SALES_TOOLS_REP_NAME, GEO_MATCH_SCORES, getAccountExpansionTier, getCRERiskLevel, SUPABASE_LIMITS } from '@/_domain';
 import { getFiscalQuarter, isCurrentFiscalYear } from '@/utils/fiscalYearCalculations';
 import { calculateEnhancedRepMetrics, type EnhancedRepMetrics } from '@/utils/enhancedRepMetrics';
 import type {
@@ -7,15 +7,18 @@ import type {
   GeoAlignmentMetrics,
   TierDistribution,
   TierAlignmentBreakdown,
+  StabilityLockBreakdown,
   ArrBucket,
   RegionMetrics,
-  OwnerCoverage,
   MetricsSnapshot,
   MetricsComparison,
   BalanceMetricsDetail,
   RepLoadDistribution,
   ContinuityMetrics
 } from '@/types/analytics';
+import { identifyLockedAccounts } from '@/services/optimization/constraints/stabilityLocks';
+import { DEFAULT_LP_STABILITY_CONFIG } from '@/services/optimization/types';
+import type { LPStabilityConfig, AggregatedAccount, EligibleRep } from '@/services/optimization/types';
 import { ARR_BUCKETS, GEO_SCORE_WEIGHTS, TEAM_ALIGNMENT_WEIGHTS } from '@/types/analytics';
 
 // Progress tracking for large data loads
@@ -184,11 +187,11 @@ class BuildDataService {
         throw countError;
       }
       
-      // Supabase has a hard server-side limit of 1000 rows per request
-      // Use 1000-row batches with limited concurrency to avoid overwhelming the server
-      const pageSize = 1000;
+      // Use SSOT constants from @/_domain for pagination
+      // Supabase max_rows must be configured to 10,000 in project settings
+      const pageSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
       const totalPages = Math.ceil((totalCount || 0) / pageSize);
-      const maxConcurrent = 10; // Limit concurrent requests to avoid 500 errors
+      const maxConcurrent = SUPABASE_LIMITS.MAX_CONCURRENT_REQUESTS;
       console.log(`[BuildDataService] 📊 Total accounts: ${totalCount}, fetching in ${totalPages} batches (max ${maxConcurrent} concurrent)`);
 
       const allAccounts: any[] = [];
@@ -196,30 +199,43 @@ class BuildDataService {
       // Emit initial progress
       emitProgress({ current: 0, total: totalCount || 0, stage: 'Loading accounts' });
 
+      // Helper function to fetch a single batch with retry
+      const fetchBatchWithRetry = async (pageIndex: number, retries = 3): Promise<any[]> => {
+        for (let attempt = 1; attempt <= retries; attempt++) {
+          const { data: pageData, error } = await supabase
+            .from('accounts')
+            .select('*')
+            .eq('build_id', buildId)
+            .order('account_name')
+            .range(pageIndex * pageSize, (pageIndex + 1) * pageSize - 1);
+          
+          if (!error && pageData) {
+            return pageData;
+          }
+          
+          if (attempt < retries) {
+            console.warn(`[BuildDataService] ⚠️ Batch ${pageIndex + 1} failed (attempt ${attempt}/${retries}), retrying in ${attempt * 500}ms...`);
+            await new Promise(resolve => setTimeout(resolve, attempt * 500));
+          } else {
+            console.error(`[BuildDataService] ❌ Batch ${pageIndex + 1} failed after ${retries} attempts:`, error);
+            throw error;
+          }
+        }
+        return [];
+      };
+
       // Process in chunks of maxConcurrent
       for (let chunkStart = 0; chunkStart < totalPages; chunkStart += maxConcurrent) {
         const chunkEnd = Math.min(chunkStart + maxConcurrent, totalPages);
         const chunkPromises = [];
 
         for (let pageIndex = chunkStart; pageIndex < chunkEnd; pageIndex++) {
-          chunkPromises.push(
-            supabase
-              .from('accounts')
-              .select('*')
-              .eq('build_id', buildId)
-              .order('account_name')
-              .range(pageIndex * pageSize, (pageIndex + 1) * pageSize - 1)
-          );
+          chunkPromises.push(fetchBatchWithRetry(pageIndex));
         }
 
         const chunkResults = await Promise.all(chunkPromises);
 
-        for (let i = 0; i < chunkResults.length; i++) {
-          const { data: pageData, error } = chunkResults[i];
-          if (error) {
-            console.error(`[BuildDataService] ❌ Error loading accounts batch ${chunkStart + i + 1}:`, error);
-            throw error;
-          }
+        for (const pageData of chunkResults) {
           if (pageData) {
             allAccounts.push(...pageData);
           }
@@ -364,16 +380,17 @@ class BuildDataService {
       console.log(`- Total sales reps: ${salesReps.length}`);
       console.log(`- Total assignments: ${assignments.length}`);
       
-      // Debug account classification (use hierarchy ARR logic like Assignment Engine)
-      const parentAccounts = accounts.filter(a => a.is_parent);
-      const customerAccounts = parentAccounts.filter(a => a.hierarchy_bookings_arr_converted && a.hierarchy_bookings_arr_converted > 0);
-      const prospectAccounts = parentAccounts.filter(a => !a.hierarchy_bookings_arr_converted || a.hierarchy_bookings_arr_converted <= 0);
+      // Debug account classification (use SSOT getAccountARR() logic)
+      // @see MASTER_LOGIC.mdc §3.1 - Customer = getAccountARR() > 0
+      const parentAccounts = accounts.filter(isParentAccount);
+      const customerAccounts = parentAccounts.filter(a => getAccountARR(a) > 0);
+      const prospectAccounts = parentAccounts.filter(a => getAccountARR(a) === 0);
       
-      console.log(`[BuildDataService] Account filtering results (using hierarchy ARR logic):`);
+      console.log(`[BuildDataService] Account filtering results (using SSOT getAccountARR logic):`);
       console.log(`- Total accounts: ${accounts.length}`);
-      console.log(`- Parent accounts (is_parent=true): ${parentAccounts.length}`);
-      console.log(`- Customer accounts (hierarchy_bookings_arr_converted > 0): ${customerAccounts.length}`);
-      console.log(`- Prospect accounts (hierarchy_bookings_arr_converted <= 0): ${prospectAccounts.length}`);
+      console.log(`- Parent accounts: ${parentAccounts.length}`);
+      console.log(`- Customer accounts (getAccountARR > 0): ${customerAccounts.length}`);
+      console.log(`- Prospect accounts (getAccountARR === 0): ${prospectAccounts.length}`);
 
         // Calculate fiscal year quarterly renewals
         const renewals = { Q1: 0, Q2: 0, Q3: 0, Q4: 0 };
@@ -521,7 +538,7 @@ class BuildDataService {
       
       const totalAccounts = accountCount.count || 0;
       const totalOpps = oppCount.count || 0;
-      const pageSize = 5000;
+      const pageSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
       
       console.log(`[Build Data Service] 📊 Total records: ${totalAccounts} accounts, ${totalOpps} opportunities`);
       
@@ -538,7 +555,7 @@ class BuildDataService {
       );
       
       // Fetch sales reps (usually under 1000, single query is fine)
-      const salesRepsPromise = supabase.from('sales_reps').select('*').eq('build_id', buildId).limit(5000);
+      const salesRepsPromise = supabase.from('sales_reps').select('*').eq('build_id', buildId).limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE);
       
       // Execute ALL fetches in parallel
       const [accountResults, oppResults, salesRepsRes] = await Promise.all([
@@ -835,66 +852,42 @@ class BuildDataService {
   /**
    * Calculate Continuity Metrics - full breakdown with counts for UI display
    * 
-   * IMPORTANT: Only counts accounts whose original owner is in the current reps list.
-   * Accounts whose owner left the company (not in salesReps) or is a backfill source
-   * are excluded from the denominator - they can never be "retained".
+   * Simplified formula: parent accounts with same owner / total parent accounts
    * 
-   * This prevents artificial deflation of the continuity percentage.
-   * 
-   * For "before" state, this is 100% (all eligible accounts retained)
+   * For "before" state, this is 100% (all parent accounts with original owner)
    * For "after" state, it's the % where new_owner_id === owner_id
    * 
-   * @see _domain/calculations.ts - getValidRepIdsForContinuity, isEligibleForContinuityTracking
    * @see MASTER_LOGIC.mdc §13.7.1 - Continuity Metrics Structure
    */
-  private calculateContinuityMetrics(accounts: any[], salesReps: any[], useProposed: boolean): ContinuityMetrics {
+  private calculateContinuityMetrics(accounts: any[], _salesReps: any[], useProposed: boolean): ContinuityMetrics {
+    // Keep parent-only filter
     const parentAccounts = accounts.filter(a => a.is_parent);
     
     if (parentAccounts.length === 0) {
-      return { score: 0, retainedCount: 0, changedCount: 0, eligibleCount: 0, excludedCount: 0 };
-    }
-    
-    // Build set of valid rep IDs (excludes backfill sources who are leaving)
-    const validRepIds = getValidRepIdsForContinuity(salesReps);
-    
-    // Filter to only accounts whose original owner is eligible for continuity tracking
-    const eligibleAccounts = parentAccounts.filter(a => 
-      isEligibleForContinuityTracking(a.owner_id, validRepIds)
-    );
-    
-    const excludedCount = parentAccounts.length - eligibleAccounts.length;
-    
-    // If no eligible accounts, return score=1 (no relationships to lose)
-    if (eligibleAccounts.length === 0) {
-      return { score: 1, retainedCount: 0, changedCount: 0, eligibleCount: 0, excludedCount };
+      return { score: 0, retainedCount: 0, changedCount: 0, totalCount: 0 };
     }
     
     if (!useProposed) {
-      // Before state: all eligible accounts are with original owner = 100%
+      // Before state: all parent accounts with original owner = 100%
       return {
         score: 1,
-        retainedCount: eligibleAccounts.length,
+        retainedCount: parentAccounts.length,
         changedCount: 0,
-        eligibleCount: eligibleAccounts.length,
-        excludedCount
+        totalCount: parentAccounts.length
       };
     }
     
-    // After state: count eligible accounts where new_owner_id matches owner_id
-    const retainedCount = eligibleAccounts.filter(a => {
+    // After state: count parent accounts where new_owner_id matches owner_id
+    const retainedCount = parentAccounts.filter(a => {
       if (!a.new_owner_id) return true; // No change = retained
       return a.new_owner_id === a.owner_id;
     }).length;
     
-    const changedCount = eligibleAccounts.length - retainedCount;
-    const score = retainedCount / eligibleAccounts.length;
-    
     return {
-      score,
+      score: retainedCount / parentAccounts.length,
       retainedCount,
-      changedCount,
-      eligibleCount: eligibleAccounts.length,
-      excludedCount
+      changedCount: parentAccounts.length - retainedCount,
+      totalCount: parentAccounts.length
     };
   }
 
@@ -1113,7 +1106,7 @@ class BuildDataService {
       // Get account territory - try sales_territory first (more specific), then geo
       const accountTerritoryRaw = (account.sales_territory || account.geo || '').toString().trim();
       // Get rep region
-      const repRegionRaw = (rep.region || rep.team || '').toString().trim();
+      const repRegionRaw = (rep.region || '').toString().trim();
       const regionKey = repRegionRaw || 'Unknown';
 
       // Ensure region is in the map
@@ -1278,29 +1271,79 @@ class BuildDataService {
   }
 
   /**
-   * Calculate Owner Coverage
+   * Calculate stability lock breakdown for pie chart
+   * Uses the same logic as the assignment engine for consistency
+   * 
+   * @see MASTER_LOGIC.mdc §11.5 - Account Locking Priorities
    */
-  private calculateOwnerCoverage(accounts: any[], salesReps: any[], useProposed: boolean): OwnerCoverage {
-    const validRepIds = new Set(salesReps.map(r => r.rep_id));
+  private calculateStabilityLockBreakdown(
+    accounts: any[],
+    salesReps: any[],
+    stabilityConfig: LPStabilityConfig
+  ): StabilityLockBreakdown {
     const parentAccounts = accounts.filter(a => a.is_parent);
     
-    let withOwner = 0;
-    let orphaned = 0;
+    // Convert raw DB types to optimization types (only fields needed for stability check)
+    const aggregatedAccounts: AggregatedAccount[] = parentAccounts.map(a => ({
+      sfdc_account_id: a.sfdc_account_id,
+      account_name: a.account_name || '',
+      aggregated_arr: getAccountARR(a),
+      aggregated_atr: getAccountATR(a),
+      pipeline_value: 0,
+      child_ids: [],
+      is_parent: true,
+      owner_id: a.owner_id,
+      owner_name: a.owner_name,
+      owner_change_date: a.owner_change_date,
+      owners_lifetime_count: a.owners_lifetime_count,
+      is_customer: getAccountARR(a) > 0,
+      is_strategic: a.is_strategic || false,
+      sales_territory: a.sales_territory,
+      geo: a.geo,
+      employees: a.employees,
+      enterprise_vs_commercial: a.enterprise_vs_commercial,
+      tier: null,
+      expansion_tier: a.expansion_tier,
+      initial_sale_tier: a.initial_sale_tier,
+      cre_risk: a.cre_risk,
+      renewal_date: a.renewal_date,
+      pe_firm: a.pe_firm,
+      exclude_from_reassignment: a.exclude_from_reassignment,
+    }));
     
-    parentAccounts.forEach(account => {
-      const ownerId = useProposed ? (account.new_owner_id || account.owner_id) : account.owner_id;
-      
-      if (ownerId && validRepIds.has(ownerId)) {
-        withOwner++;
-      } else {
-        orphaned++;
-      }
-    });
+    const eligibleReps: EligibleRep[] = salesReps.map(r => ({
+      rep_id: r.rep_id,
+      name: r.name,
+      region: r.region,
+      team_tier: r.team_tier,
+      pe_firms: r.pe_firms,
+      is_active: r.is_active ?? true,
+      include_in_assignments: r.include_in_assignments ?? true,
+      is_strategic_rep: r.is_strategic_rep || false,
+      is_backfill_source: r.is_backfill_source,
+      is_backfill_target: r.is_backfill_target,
+      backfill_target_rep_id: r.backfill_target_rep_id,
+      current_arr: 0,
+    }));
     
-    const total = withOwner + orphaned;
-    const coverageRate = total > 0 ? (withOwner / total) * 100 : 0;
+    // Use existing function - it already computes lockStats!
+    const { lockStats } = identifyLockedAccounts(
+      aggregatedAccounts,
+      eligibleReps,
+      stabilityConfig
+    );
     
-    return { withOwner, orphaned, coverageRate };
+    const total = Object.values(lockStats).reduce((sum, count) => sum + count, 0);
+    
+    return {
+      manualLock: lockStats.manual_lock || 0,
+      backfillMigration: lockStats.backfill_migration || 0,
+      creRisk: lockStats.cre_risk || 0,
+      renewalSoon: lockStats.renewal_soon || 0,
+      peFirm: lockStats.pe_firm || 0,
+      recentChange: lockStats.recent_change || 0,
+      total,
+    };
   }
 
   /**
@@ -1448,19 +1491,12 @@ class BuildDataService {
     };
 
     // Helper to calculate metrics for a set of accounts
+    // @see MASTER_LOGIC.mdc §3.1 - Customer = getAccountARR() > 0
     const calculateAccountMetrics = (repParentAccounts: any[], repChildAccounts: any[]) => {
-      const parentCustomerAccounts = repParentAccounts.filter(a =>
-        (a.hierarchy_bookings_arr_converted || 0) > 0
-      );
-      const parentProspectAccounts = repParentAccounts.filter(a =>
-        (a.hierarchy_bookings_arr_converted || 0) === 0
-      );
-      const childCustomerAccounts = repChildAccounts.filter(a =>
-        (a.hierarchy_bookings_arr_converted || 0) > 0
-      );
-      const childProspectAccounts = repChildAccounts.filter(a =>
-        (a.hierarchy_bookings_arr_converted || 0) === 0
-      );
+      const parentCustomerAccounts = repParentAccounts.filter(a => getAccountARR(a) > 0);
+      const parentProspectAccounts = repParentAccounts.filter(a => getAccountARR(a) === 0);
+      const childCustomerAccounts = repChildAccounts.filter(a => getAccountARR(a) > 0);
+      const childProspectAccounts = repChildAccounts.filter(a => getAccountARR(a) === 0);
 
       const arr = parentCustomerAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
       const atr = repParentAccounts.reduce((sum, a) => {
@@ -1471,6 +1507,27 @@ class BuildDataService {
       const pipeline = repParentAccounts.reduce((sum, a) =>
         sum + (oppByAccount.get(a.sfdc_account_id) || 0), 0
       );
+
+      // Tier breakdown (parent accounts only - children inherit parent tier)
+      let tier1 = 0, tier2 = 0, tier3 = 0, tier4 = 0, tierNA = 0;
+      repParentAccounts.forEach(a => {
+        const tier = getAccountExpansionTier(a);
+        if (tier === 'Tier 1') tier1++;
+        else if (tier === 'Tier 2') tier2++;
+        else if (tier === 'Tier 3') tier3++;
+        else if (tier === 'Tier 4') tier4++;
+        else tierNA++;
+      });
+
+      // CRE Risk breakdown (parent accounts only)
+      let creNone = 0, creLow = 0, creMedium = 0, creHigh = 0;
+      repParentAccounts.forEach(a => {
+        const level = getCRERiskLevel(a.cre_count || 0);
+        if (level === 'none') creNone++;
+        else if (level === 'low') creLow++;
+        else if (level === 'medium') creMedium++;
+        else creHigh++;
+      });
 
       return {
         arr,
@@ -1483,6 +1540,17 @@ class BuildDataService {
         childCustomers: childCustomerAccounts.length,
         parentProspects: parentProspectAccounts.length,
         childProspects: childProspectAccounts.length,
+        // Tier breakdown
+        tier1Accounts: tier1,
+        tier2Accounts: tier2,
+        tier3Accounts: tier3,
+        tier4Accounts: tier4,
+        tierNAAccounts: tierNA,
+        // CRE Risk breakdown
+        creNoneAccounts: creNone,
+        creLowAccounts: creLow,
+        creMediumAccounts: creMedium,
+        creHighAccounts: creHigh,
       };
     };
 
@@ -1542,10 +1610,10 @@ class BuildDataService {
 
   /**
    * Helper to fetch raw build data with pagination (for large datasets)
-   * Supabase has a 1000 row limit per query
+   * Uses SSOT constants from @/_domain for pagination
    */
   private async fetchRawBuildData(buildId: string): Promise<{ accounts: any[]; opportunities: any[]; salesReps: any[] }> {
-    const pageSize = 1000;
+    const pageSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
     
     // Get counts to determine pagination needs
     const [accountCount, oppCount] = await Promise.all([
@@ -1575,7 +1643,7 @@ class BuildDataService {
     const [accountResults, oppResults, salesRepsRes] = await Promise.all([
       Promise.all(accountPromises),
       Promise.all(oppPromises),
-      supabase.from('sales_reps').select('*').eq('build_id', buildId).limit(1000)
+      supabase.from('sales_reps').select('*').eq('build_id', buildId).limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE)
     ]);
     
     // Combine results
@@ -1606,10 +1674,10 @@ class BuildDataService {
     // Fetch raw data with proper pagination
     const { accounts, opportunities, salesReps } = await this.fetchRawBuildData(buildId);
     
-    // Fetch territory mappings from configuration (use maybeSingle to handle no rows gracefully)
+    // Fetch territory mappings and stability config from configuration (use maybeSingle to handle no rows gracefully)
     const { data: configData } = await supabase
       .from('assignment_configuration')
-      .select('territory_mappings')
+      .select('territory_mappings, lp_stability_config')
       .eq('build_id', buildId)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -1617,12 +1685,18 @@ class BuildDataService {
     
     const territoryMappings: Record<string, string> = (configData?.territory_mappings as Record<string, string>) || {};
     
+    // Merge stability config with defaults
+    const stabilityConfig: LPStabilityConfig = {
+      ...DEFAULT_LP_STABILITY_CONFIG,
+      ...(configData?.lp_stability_config as Partial<LPStabilityConfig> || {})
+    };
+    
     console.log(`[MetricsSnapshot] Processing ${accounts.length} accounts, ${opportunities.length} opps, ${salesReps.length} reps`);
     console.log(`[MetricsSnapshot] Territory mappings loaded: ${Object.keys(territoryMappings).length} mappings`, territoryMappings);
     
     // Debug: Show unique account territories and rep regions for comparison
     const accountTerritories = new Set(accounts.filter(a => a.is_parent).map(a => a.geo || a.sales_territory).filter(Boolean));
-    const repRegions = new Set(salesReps.map(r => r.region || r.team).filter(Boolean));
+    const repRegions = new Set(salesReps.map(r => r.region).filter(Boolean));
     console.log(`[MetricsSnapshot] Unique account territories (${accountTerritories.size}):`, Array.from(accountTerritories).slice(0, 10));
     console.log(`[MetricsSnapshot] Unique rep regions (${repRegions.size}):`, Array.from(repRegions));
     
@@ -1637,7 +1711,7 @@ class BuildDataService {
       arrBuckets: this.calculateArrBuckets(accounts),
       tierDistribution: this.calculateTierDistribution(accounts),
       tierAlignmentBreakdown: this.calculateTierAlignmentBreakdown(accounts, salesReps, useProposed),
-      ownerCoverage: this.calculateOwnerCoverage(accounts, salesReps, useProposed),
+      stabilityLockBreakdown: this.calculateStabilityLockBreakdown(accounts, salesReps, stabilityConfig),
       repDistribution: this.calculateRepDistribution(accounts, salesReps, opportunities, useProposed),
       totals: {
         accounts: parentAccounts.length,

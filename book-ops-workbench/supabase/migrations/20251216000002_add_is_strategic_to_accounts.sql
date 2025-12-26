@@ -16,3 +16,4 @@ CREATE INDEX IF NOT EXISTS idx_accounts_is_strategic
 ON public.accounts(build_id) WHERE is_strategic = true;
 
 
+

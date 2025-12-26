@@ -304,6 +304,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
   const [isLoadingDbPreview, setIsLoadingDbPreview] = useState(false);
   const [errorViewFile, setErrorViewFile] = useState<ImportFile | null>(null);
   const [dataRefreshKey, setDataRefreshKey] = useState(0);
+  const [validatingFileId, setValidatingFileId] = useState<string | null>(null);
   
   // Sync with propBuildId when it changes (for embedded mode)
   useEffect(() => {
@@ -406,10 +407,10 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
       } else {
         // Check if all files are completed (imported to Supabase)
         const allCompleted = files.every(f => f.status === 'completed');
-        // Check if any files need mapping
-        const needsMapping = files.some(f => f.status === 'uploaded');
+        // Check if any files need mapping (uploaded or mapped but not validated)
+        const needsMapping = files.some(f => f.status === 'uploaded' || f.status === 'mapped');
         // Check if any files are ready for review (validated but not imported)
-        const needsReview = files.some(f => f.status === 'validated' || f.status === 'mapped');
+        const needsReview = files.some(f => f.status === 'validated' || f.status === 'warning' || f.status === 'error');
         
         if (allCompleted) {
           console.log('📍 Auto-nav: All files completed, showing Review tab');
@@ -776,6 +777,10 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
   interface PriorityFieldMapping extends FieldMapping {
     priority: 'essential' | 'high' | 'secondary';
     description?: string;
+    /** Group name for related fields that form a fallback chain (e.g., 'geography', 'arr') */
+    fallbackGroup?: 'geography' | 'arr';
+    /** Order within the fallback chain: 1 = primary (used first), 2 = secondary, 3 = tertiary */
+    fallbackOrder?: 1 | 2 | 3;
   }
 
   // Account field mappings organized by priority for account management focus
@@ -789,18 +794,16 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'owner_name', required: false, mapped: false, priority: 'high', description: 'Account owner full name' },
     { csvField: '', schemaField: 'ultimate_parent_id', required: false, mapped: false, priority: 'high', description: 'Ultimate parent account ID for hierarchy (empty for parent accounts)' },
     { csvField: '', schemaField: 'ultimate_parent_name', required: false, mapped: false, priority: 'high', description: 'Ultimate parent account name (empty for parent accounts)' },
-    { csvField: '', schemaField: 'sales_territory', required: false, mapped: false, priority: 'high', description: 'Sales territory for geo matching' },
-    { csvField: '', schemaField: 'hq_country', required: false, mapped: false, priority: 'high', description: 'Headquarters country for geo assignment' },
-    { csvField: '', schemaField: 'arr', required: false, mapped: false, priority: 'high', description: 'Annual Recurring Revenue' },
-    { csvField: '', schemaField: 'hierarchy_bookings_arr_converted', required: false, mapped: false, priority: 'high', description: 'Hierarchy Bookings ARR (converted)' },
+    { csvField: '', schemaField: 'sales_territory', required: false, mapped: false, priority: 'high', fallbackGroup: 'geography', fallbackOrder: 1, description: 'Most specific location (e.g., "US-West", "EMEA-UK"). Used first for geo matching.' },
+    { csvField: '', schemaField: 'hq_country', required: false, mapped: false, priority: 'high', fallbackGroup: 'geography', fallbackOrder: 2, description: 'Country name. Used when sales_territory is missing.' },
+    { csvField: '', schemaField: 'hierarchy_bookings_arr_converted', required: false, mapped: false, priority: 'high', fallbackGroup: 'arr', fallbackOrder: 1, description: 'Rolled-up ARR that prevents double-counting from child accounts. Use this if available.' },
+    { csvField: '', schemaField: 'arr', required: false, mapped: false, priority: 'high', fallbackGroup: 'arr', fallbackOrder: 2, description: 'Raw ARR value. Used when hierarchy_bookings_arr_converted is missing.' },
     { csvField: '', schemaField: 'employees', required: false, mapped: false, priority: 'high', description: 'Number of employees at this account' },
     { csvField: '', schemaField: 'initial_sale_tier', required: false, mapped: false, priority: 'high', description: 'Initial sale priority tier' },
     
     // Secondary fields - Additional data for analysis and reporting
-    // DEPRECATED fields removed in v1.3.9: ultimate_parent_employee_size, account_type, industry, 
-    // expansion_score, initial_sale_score, in_customer_hierarchy, include_in_emea, is_2_0, inbound_count, idr_count
     { csvField: '', schemaField: 'parent_id', required: false, mapped: false, priority: 'secondary', description: 'Direct parent account ID' },
-    { csvField: '', schemaField: 'geo', required: false, mapped: false, priority: 'secondary', description: 'Geographic region' },
+    { csvField: '', schemaField: 'geo', required: false, mapped: false, priority: 'secondary', fallbackGroup: 'geography', fallbackOrder: 3, description: 'Broad region (AMER/EMEA/APAC). Last resort when territory and country are both missing.' },
     { csvField: '', schemaField: 'atr', required: false, mapped: false, priority: 'secondary', description: 'Annual Total Revenue' },
     { csvField: '', schemaField: 'renewal_date', required: false, mapped: false, priority: 'secondary', description: 'Contract renewal date' },
     { csvField: '', schemaField: 'expansion_tier', required: false, mapped: false, priority: 'secondary', description: 'Expansion priority tier' },
@@ -810,7 +813,9 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'owners_lifetime_count', required: false, mapped: false, priority: 'secondary', description: 'Total number of owners over time' },
     { csvField: '', schemaField: 'risk_flag', required: false, mapped: false, priority: 'secondary', description: 'Account at-risk flag' },
     { csvField: '', schemaField: 'cre_risk', required: false, mapped: false, priority: 'secondary', description: 'Customer Risk & Expansion flag' },
-    { csvField: '', schemaField: 'pe_firm', required: false, mapped: false, priority: 'secondary', description: 'Private Equity firm name (for PE routing rules)' }
+    { csvField: '', schemaField: 'pe_firm', required: false, mapped: false, priority: 'secondary', description: 'Private Equity firm name (for PE routing rules)' },
+    { csvField: '', schemaField: 'exclude_from_reassignment', required: false, mapped: false, priority: 'secondary', description: 'Lock account - exclude from reassignment (true/false)' },
+    { csvField: '', schemaField: 'lock_reason', required: false, mapped: false, priority: 'secondary', description: 'Reason for locking the account' }
   ]);
 
   // Opportunity field mappings optimized for pipeline and revenue tracking
@@ -820,7 +825,6 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'sfdc_account_id', required: true, mapped: false, priority: 'essential', description: 'Related Account ID' },
     
     // High priority fields - Important for pipeline management (but not blocking)
-    // DEPRECATED fields removed in v1.3.9: stage, close_date, created_date
     { csvField: '', schemaField: 'opportunity_name', required: false, mapped: false, priority: 'high', description: 'Opportunity name' },
     { csvField: '', schemaField: 'opportunity_type', required: false, mapped: false, priority: 'high', description: 'Opportunity type (New Business, Expansion, Renewal)' },
      { csvField: '', schemaField: 'owner_id', required: false, mapped: false, priority: 'high', description: 'Opportunity owner user ID' },
@@ -839,15 +843,14 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
     { csvField: '', schemaField: 'name', required: true, mapped: false, priority: 'essential', description: 'Sales representative full name' },
     
     // High priority fields - Important for book assignment and hierarchy (but not blocking)
-    { csvField: '', schemaField: 'team', required: false, mapped: false, priority: 'high', description: 'Sales team assignment' },
     { csvField: '', schemaField: 'team_tier', required: false, mapped: false, priority: 'high', description: 'Size tier for team alignment (SMB, Growth, MM, ENT)' },
     { csvField: '', schemaField: 'flm', required: false, mapped: false, priority: 'high', description: 'First Level Manager' },
     { csvField: '', schemaField: 'slm', required: false, mapped: false, priority: 'high', description: 'Second Level Manager' },
     { csvField: '', schemaField: 'region', required: false, mapped: false, priority: 'high', description: 'Geographic region assignment' },
     
     // Secondary fields - Optional/legacy and backfill support
-    // DEPRECATED: manager - removed in v1.3.9, use flm/slm instead
-    { csvField: '', schemaField: 'is_backfill_source', required: false, mapped: false, priority: 'secondary', description: 'Mark rep as leaving (backfill source). Set to TRUE to exclude from assignments.' }
+    { csvField: '', schemaField: 'is_backfill_source', required: false, mapped: false, priority: 'secondary', description: 'Mark rep as leaving (backfill source). Set to TRUE to exclude from assignments.' },
+    { csvField: '', schemaField: 'pe_firms', required: false, mapped: false, priority: 'secondary', description: 'Comma-separated PE firm names this rep handles. PE-owned accounts route to dedicated PE rep (see §10.7).' }
   ]);
 
   const csvFields = [
@@ -1427,11 +1430,16 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
   }, []);
 
   const validateMappedFile = async (file: ImportFile) => {
+    // Close dialog immediately - file reference is already captured
+    setShowMappingDialog(false);
+    setValidatingFileId(file.id);
+    
     console.log('🔍 validateMappedFile called for:', file.name, 'with data length:', file.data?.length, 'isLargeFile:', file.isLargeFile);
 
     // Skip validation for auto-loaded existing data (already in Supabase)
     if (file.id.startsWith('existing-')) {
       console.log('⏭️ Skipping validation for existing Supabase data:', file.name);
+      setValidatingFileId(null);
       return;
     }
 
@@ -1442,6 +1450,7 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
         description: `Please map fields for "${file.name}" before validation.`,
         variant: "destructive",
       });
+      setValidatingFileId(null);
       return;
     }
 
@@ -1597,6 +1606,8 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
         description: "There was an error validating the data",
         variant: "destructive",
       });
+    } finally {
+      setValidatingFileId(null);
     }
   };
 
@@ -2456,11 +2467,6 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                           {/* Only show edit controls for non-completed files */}
                           {file.status !== 'completed' && (
                             <>
-                              {file.autoMappings && Object.keys(file.autoMappings).length > 0 && (
-                                <Button size="sm" variant="outline" onClick={() => autoMapAllFields(file)}>
-                                  Auto Map All
-                                </Button>
-                              )}
                               {file.fieldMappings && Object.keys(file.fieldMappings).length > 0 && (
                                 <Button size="sm" variant="ghost" onClick={() => clearAllMappings(file)}>
                                   Clear All
@@ -2470,10 +2476,26 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                                 Configure Mapping
                               </Button>
                               {file.status === 'mapped' && (
-                                <Button size="sm" onClick={() => validateMappedFile(file)}>
-                                  Validate Data
+                                <Button 
+                                  size="sm" 
+                                  onClick={() => validateMappedFile(file)}
+                                  disabled={validatingFileId === file.id}
+                                >
+                                  {validatingFileId === file.id ? (
+                                    <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Validating...</>
+                                  ) : (
+                                    'Validate Data'
+                                  )}
                                 </Button>
                               )}
+                              <Button 
+                                size="sm" 
+                                variant="ghost" 
+                                onClick={() => handleDeleteFile(file.id)}
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
                             </>
                           )}
                         </div>
@@ -2884,22 +2906,62 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
                        <TableRow key={`${mapping.priority}-${index}`} className={mapping.priority === 'essential' ? 'bg-red-50/50 dark:bg-red-950/20' : mapping.priority === 'high' ? 'bg-yellow-50/50 dark:bg-yellow-950/20' : ''}>
                          <TableCell className="font-medium">
                            <div className="space-y-1">
-                             <div className="flex items-center gap-2">
-                               <span className={mapping.priority === 'essential' ? 'text-red-700 dark:text-red-400 font-semibold' : mapping.priority === 'high' ? 'text-yellow-700 dark:text-yellow-400' : ''}>
-                                 {mapping.schemaField}
-                               </span>
-                               {mapping.priority === 'essential' && (
-                                 <Badge variant="destructive" className="text-xs">Essential</Badge>
-                               )}
-                               {mapping.priority === 'high' && (
-                                 <Badge variant="secondary" className="text-xs bg-yellow-100 dark:bg-yellow-950/50 text-yellow-800 dark:text-yellow-300">High</Badge>
-                               )}
-                             </div>
-                             {mapping.description && (
-                               <div className="text-xs text-muted-foreground">
-                                 {mapping.description}
-                               </div>
-                             )}
+                            <div className="flex items-center gap-2">
+                              <span className={mapping.priority === 'essential' ? 'text-red-700 dark:text-red-400 font-semibold' : mapping.priority === 'high' ? 'text-yellow-700 dark:text-yellow-400' : ''}>
+                                {mapping.schemaField}
+                              </span>
+                              {mapping.priority === 'essential' && (
+                                <Badge variant="destructive" className="text-xs">Essential</Badge>
+                              )}
+                              {mapping.priority === 'high' && (
+                                <Badge variant="secondary" className="text-xs bg-yellow-100 dark:bg-yellow-950/50 text-yellow-800 dark:text-yellow-300">High</Badge>
+                              )}
+                              {/* Fallback order badges for fields in a priority chain */}
+                              {mapping.fallbackOrder === 1 && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Badge variant="outline" className="text-xs bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800 cursor-help">
+                                      1st Choice
+                                    </Badge>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="max-w-xs">
+                                    <p className="font-semibold">Primary source for {mapping.fallbackGroup === 'geography' ? 'geographic matching' : 'ARR calculation'}</p>
+                                    <p className="text-xs mt-1">This field is checked first. Map this if your data has it.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
+                              {mapping.fallbackOrder === 2 && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Badge variant="outline" className="text-xs bg-slate-50 dark:bg-slate-950/50 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 cursor-help">
+                                      2nd Choice
+                                    </Badge>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="max-w-xs">
+                                    <p className="font-semibold">Fallback for {mapping.fallbackGroup === 'geography' ? 'geographic matching' : 'ARR calculation'}</p>
+                                    <p className="text-xs mt-1">Used when the primary field is empty or not mapped.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
+                              {mapping.fallbackOrder === 3 && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Badge variant="outline" className="text-xs bg-gray-50 dark:bg-gray-900/50 text-gray-500 dark:text-gray-500 border-gray-200 dark:border-gray-700 cursor-help">
+                                      3rd Choice
+                                    </Badge>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="max-w-xs">
+                                    <p className="font-semibold">Last resort for {mapping.fallbackGroup === 'geography' ? 'geographic matching' : 'ARR calculation'}</p>
+                                    <p className="text-xs mt-1">Only used when both primary and secondary fields are empty.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
+                            </div>
+                            {mapping.description && (
+                              <div className="text-xs text-muted-foreground">
+                                {mapping.description}
+                              </div>
+                            )}
                              {autoMapping && (
                                <div className="text-xs text-green-600">
                                  Auto-suggested: {autoMapping[0]} ({Math.round(autoMapping[1].confidence * 100)}%)
@@ -3047,8 +3109,15 @@ export const DataImport = ({ buildId: propBuildId, onImportComplete, onDataChang
               <Button variant="outline" onClick={() => setShowMappingDialog(false)}>
                 Cancel
               </Button>
-              <Button onClick={() => selectedFile && validateMappedFile(selectedFile)}>
-                Validate Data
+              <Button 
+                onClick={() => selectedFile && validateMappedFile(selectedFile)}
+                disabled={validatingFileId === selectedFile?.id}
+              >
+                {validatingFileId === selectedFile?.id ? (
+                  <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Validating...</>
+                ) : (
+                  'Validate Data'
+                )}
               </Button>
             </DialogFooter>
           </DialogContent>

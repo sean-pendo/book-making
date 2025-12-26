@@ -277,10 +277,9 @@ export const usePriorityDistribution = (buildId: string | undefined) => {
   return useQuery<PriorityDistributionItem[]>({
     queryKey: ['priority-distribution', buildId],
     queryFn: async () => {
-      // Fetch all approved assignments using pagination
-      // Supabase defaults to 1000 rows per request
+      // Fetch all approved assignments using pagination with SSOT page size
       const allAssignments: { rationale: string | null }[] = [];
-      const pageSize = SUPABASE_LIMITS.DEFAULT_PAGE_SIZE;
+      const pageSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
       let from = 0;
       let hasMore = true;
 

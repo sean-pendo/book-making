@@ -301,10 +301,10 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
         }
       }
       
-      // Central territories
+      // Central territories (Great Lakes only - MIDWEST/MOUNTAIN go to West per business rules)
       const centralTerritories = [
         'CHICAGO', 'GREAT LAKES N-CA', 'GREAT LAKES N-US', 'GREAT LAKES S', 
-        'GREATER ONTARIO-CA', 'MID-WEST', 'MIDWEST', 'MOUNTAIN'
+        'GREATER ONTARIO-CA'
       ];
       if (centralTerritories.some(t => territoryUpper.includes(t))) {
         const match = repRegions.find(r => r.toLowerCase().includes('central'));
@@ -314,10 +314,12 @@ export const SimplifiedAssignmentConfig: React.FC = () => {
         }
       }
       
-      // West territories (includes Southwest - AZ, NM, NV, UT are part of West)
+      // West territories (includes Southwest, Midwest, Mountain per business rules)
+      // @see MASTER_LOGIC.mdc §4.2
       const westTerritories = [
         'LOS ANGELES', 'NOR CAL', 'PAC NW-CA', 'PAC NW-US', 
-        'SAN FRANCISCO', 'SO CAL', 'SOUTHWEST', 'SOUTH WEST'
+        'SAN FRANCISCO', 'SO CAL', 'SOUTHWEST', 'SOUTH WEST',
+        'MID-WEST', 'MIDWEST', 'MOUNTAIN'
       ];
       if (westTerritories.some(t => territoryUpper.includes(t))) {
         const match = repRegions.find(r => r.toLowerCase().includes('west'));

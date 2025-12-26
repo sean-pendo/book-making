@@ -44,6 +44,7 @@
  */
 
 import { GEO_MATCH_SCORES } from './constants';
+import { normalizeRegion } from './normalization';
 
 // =============================================================================
 // TYPES
@@ -204,14 +205,16 @@ export const US_REGION_CONFIG: Record<AMERSubRegion, RegionConfig> = {
     keywords: ['SOUTH EAST', 'SOUTHEAST', 'GULF COAST', 'MID-ATLANTIC', 'AUSTIN – HOUSTON', 'AUSTIN - HOUSTON', 'CHESAPEAKE'],
   },
   'Central': {
-    states: ['ND', 'SD', 'NE', 'KS', 'MO', 'IA', 'MN', 'WI', 'IL', 'IN', 'OH', 'MI', 'CO', 'WY', 'MT', 'ID'],
-    cities: ['CHICAGO', 'MINNEAPOLIS', 'ST LOUIS', 'KANSAS CITY', 'CLEVELAND', 'COLUMBUS', 'DETROIT', 'DENVER', 'CALGARY', 'EDMONTON'],
-    keywords: ['GREAT LAKES', 'MIDWEST', 'MOUNTAIN', 'ALBERTA', 'CENTRAL'],
+    states: ['ND', 'SD', 'NE', 'KS', 'MO', 'IA', 'MN', 'WI', 'IL', 'IN', 'OH', 'MI'],
+    cities: ['CHICAGO', 'MINNEAPOLIS', 'ST LOUIS', 'KANSAS CITY', 'CLEVELAND', 'COLUMBUS', 'DETROIT', 'CALGARY', 'EDMONTON'],
+    keywords: ['GREAT LAKES', 'ALBERTA', 'CENTRAL'],
   },
   'West': {
-    states: ['WA', 'OR', 'CA', 'NV', 'UT', 'AZ', 'AK', 'HI', 'NM'],
-    cities: ['SEATTLE', 'PORTLAND', 'SAN FRANCISCO', 'SAN DIEGO', 'LOS ANGELES', 'SACRAMENTO', 'LAS VEGAS', 'PHOENIX', 'TUCSON', 'SALT LAKE CITY', 'VANCOUVER', 'ALBUQUERQUE'],
-    keywords: ['NOR CAL', 'SO CAL', 'PAC NW', 'PACIFIC NORTHWEST', 'BRITISH COLUMBIA', 'SOUTHWEST', 'SOUTH WEST'],
+    // Note: MIDWEST, MID-WEST, and MOUNTAIN map to West per business rules (not Central)
+    // @see MASTER_LOGIC.mdc §4.2
+    states: ['WA', 'OR', 'CA', 'NV', 'UT', 'AZ', 'AK', 'HI', 'NM', 'CO', 'WY', 'MT', 'ID'],
+    cities: ['SEATTLE', 'PORTLAND', 'SAN FRANCISCO', 'SAN DIEGO', 'LOS ANGELES', 'SACRAMENTO', 'LAS VEGAS', 'PHOENIX', 'TUCSON', 'SALT LAKE CITY', 'VANCOUVER', 'ALBUQUERQUE', 'DENVER'],
+    keywords: ['NOR CAL', 'SO CAL', 'PAC NW', 'PACIFIC NORTHWEST', 'BRITISH COLUMBIA', 'SOUTHWEST', 'SOUTH WEST', 'MIDWEST', 'MID-WEST', 'MOUNTAIN'],
   },
 };
 
@@ -285,16 +288,23 @@ export function autoMapTerritoryToParentRegion(territory: string): ParentRegion 
 
 /**
  * Get the parent region for a sub-region
+ * 
+ * NOTE: Input is normalized before lookup to handle variations
+ * like "Northeast" vs "North East".
  */
 export function getParentRegion(region: string): ParentRegion | null {
+  // Normalize first to handle variations like "Northeast" → "North East"
+  const normalized = normalizeRegion(region);
+  if (normalized === 'UNMAPPED') return null;
+  
   for (const [parent, children] of Object.entries(REGION_HIERARCHY)) {
-    if (children.includes(region)) {
+    if (children.includes(normalized)) {
       return parent as ParentRegion;
     }
   }
   // Check if it's already a parent region
-  if (region in REGION_HIERARCHY) {
-    return region as ParentRegion;
+  if (normalized in REGION_HIERARCHY) {
+    return normalized as ParentRegion;
   }
   return null;
 }
@@ -310,6 +320,9 @@ export function getParentRegion(region: string): ParentRegion | null {
  * 4. Rep is Global (NYC → Global): 0.40
  * 5. Cross-region (NYC → EMEA): 0.20
  * 
+ * NOTE: Both inputs are normalized before comparison to handle variations
+ * like "Northeast" vs "North East". See normalizeRegion() in normalization.ts.
+ * 
  * @see src/_domain/MASTER_LOGIC.mdc#geo-match-scoring
  */
 export function calculateGeoMatchScore(
@@ -318,33 +331,40 @@ export function calculateGeoMatchScore(
 ): number {
   if (!accountRegion || !repRegion) return GEO_MATCH_SCORES.UNKNOWN;
   
-  const normAccount = accountRegion.trim().toLowerCase();
-  const normRep = repRegion.trim().toLowerCase();
+  // Normalize both regions to canonical format BEFORE comparison
+  // This handles variations like "Northeast" → "North East"
+  const normalizedAccount = normalizeRegion(accountRegion);
+  const normalizedRep = normalizeRegion(repRegion);
+  
+  // Handle UNMAPPED results - can't determine alignment
+  if (normalizedAccount === 'UNMAPPED' || normalizedRep === 'UNMAPPED') {
+    return GEO_MATCH_SCORES.UNKNOWN;
+  }
   
   // Check if rep is "Global" - can take anything but lowest priority
-  if (normRep === 'global' || normRep === 'worldwide') {
+  if (normalizedRep === 'Global' || normalizedRep.toLowerCase() === 'worldwide') {
     return GEO_MATCH_SCORES.GLOBAL_FALLBACK;
   }
   
-  // 1. Exact match (most specific)
-  if (normAccount === normRep) {
+  // 1. Exact match (most specific) - compare normalized values
+  if (normalizedAccount === normalizedRep) {
     return GEO_MATCH_SCORES.EXACT_MATCH;
   }
   
-  // Get parent regions for both
-  const accountParent = getParentRegion(accountRegion);
-  const repParent = getParentRegion(repRegion);
+  // Get parent regions for both (using normalized values)
+  const accountParent = getParentRegion(normalizedAccount);
+  const repParent = getParentRegion(normalizedRep);
   
   // Check if rep's region is a parent and account is within that parent
   // e.g., Rep is "AMER", Account is "North East" → SAME_PARENT (0.65)
-  if (repRegion.toUpperCase() === accountParent) {
+  if (normalizedRep.toUpperCase() === accountParent) {
     return GEO_MATCH_SCORES.SAME_PARENT;
   }
   
   // 2. Account is in same sub-region as rep
   // e.g., Rep is "North East", Account territory maps to "North East"
   const accountSubRegion = autoMapTerritoryToUSRegion(accountRegion);
-  if (accountSubRegion && accountSubRegion.toLowerCase() === normRep) {
+  if (accountSubRegion && accountSubRegion === normalizedRep) {
     return GEO_MATCH_SCORES.SAME_SUB_REGION;
   }
   

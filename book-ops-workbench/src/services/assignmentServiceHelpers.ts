@@ -1,4 +1,177 @@
 import type { Account, SalesRep, AssignmentProposal } from './assignmentService';
+import { supabase } from '@/integrations/supabase/client';
+
+// =============================================================================
+// HIERARCHY CASCADE UTILITIES
+// =============================================================================
+
+/**
+ * Get hierarchy information for an account
+ * @param accountId - Account ID to check
+ * @param buildId - Build ID
+ * @returns Parent info for children, or children info for parents
+ * @see MASTER_LOGIC.mdc §13.4.2
+ */
+export async function getHierarchyInfo(
+  accountId: string,
+  buildId: string
+): Promise<{
+  isParent: boolean;
+  isChild: boolean;
+  isStandalone: boolean;
+  childCount: number;
+  lockedChildCount: number;
+  lockedChildren: Array<{ sfdc_account_id: string; account_name: string; owner_name: string | null }>;
+  parentInfo: { sfdc_account_id: string; account_name: string; owner_id: string | null; owner_name: string | null } | null;
+}> {
+  // Get the account first
+  const { data: account, error: accountError } = await supabase
+    .from('accounts')
+    .select('sfdc_account_id, account_name, is_parent, ultimate_parent_id, child_count')
+    .eq('sfdc_account_id', accountId)
+    .eq('build_id', buildId)
+    .single();
+
+  if (accountError || !account) {
+    return {
+      isParent: false,
+      isChild: false,
+      isStandalone: true,
+      childCount: 0,
+      lockedChildCount: 0,
+      lockedChildren: [],
+      parentInfo: null,
+    };
+  }
+
+  const isParent = account.is_parent || !account.ultimate_parent_id;
+  const isChild = !!account.ultimate_parent_id;
+
+  // For parent accounts, get children info
+  if (isParent) {
+    const { data: children, error: childError } = await supabase
+      .from('accounts')
+      .select('sfdc_account_id, account_name, owner_name, exclude_from_reassignment')
+      .eq('ultimate_parent_id', accountId)
+      .eq('build_id', buildId)
+      .neq('is_parent', true);
+
+    if (childError || !children) {
+      return {
+        isParent: true,
+        isChild: false,
+        isStandalone: true,
+        childCount: 0,
+        lockedChildCount: 0,
+        lockedChildren: [],
+        parentInfo: null,
+      };
+    }
+
+    const lockedChildren = children.filter(c => c.exclude_from_reassignment === true);
+
+    return {
+      isParent: true,
+      isChild: false,
+      isStandalone: children.length === 0,
+      childCount: children.length,
+      lockedChildCount: lockedChildren.length,
+      lockedChildren: lockedChildren.map(c => ({
+        sfdc_account_id: c.sfdc_account_id,
+        account_name: c.account_name,
+        owner_name: c.owner_name,
+      })),
+      parentInfo: null,
+    };
+  }
+
+  // For child accounts, get parent info
+  const { data: parent, error: parentError } = await supabase
+    .from('accounts')
+    .select('sfdc_account_id, account_name, owner_id, owner_name')
+    .eq('sfdc_account_id', account.ultimate_parent_id)
+    .eq('build_id', buildId)
+    .single();
+
+  return {
+    isParent: false,
+    isChild: true,
+    isStandalone: false,
+    childCount: 0,
+    lockedChildCount: 0,
+    lockedChildren: [],
+    parentInfo: parentError ? null : {
+      sfdc_account_id: parent?.sfdc_account_id || '',
+      account_name: parent?.account_name || '',
+      owner_id: parent?.owner_id || null,
+      owner_name: parent?.owner_name || null,
+    },
+  };
+}
+
+/**
+ * Cascade reassignment from parent to children
+ * @param parentId - Parent account ID
+ * @param newOwnerId - New owner rep_id
+ * @param newOwnerName - New owner name
+ * @param buildId - Build ID
+ * @param overrideLocks - If true, also reassign locked children
+ * @returns Count of children updated
+ * @see MASTER_LOGIC.mdc §13.4.2
+ */
+export async function cascadeToChildren(
+  parentId: string,
+  newOwnerId: string,
+  newOwnerName: string,
+  buildId: string,
+  overrideLocks: boolean = false
+): Promise<number> {
+  let query = supabase
+    .from('accounts')
+    .update({
+      new_owner_id: newOwnerId,
+      new_owner_name: newOwnerName
+    })
+    .eq('ultimate_parent_id', parentId)
+    .eq('build_id', buildId)
+    .neq('is_parent', true);
+  
+  if (!overrideLocks) {
+    query = query.or('exclude_from_reassignment.is.null,exclude_from_reassignment.eq.false');
+  }
+  
+  const { data, error } = await query.select('sfdc_account_id');
+  if (error) throw error;
+  return data?.length || 0;
+}
+
+/**
+ * Calculate total ARR for a hierarchy (parent + children)
+ * @param parentId - Parent account ID
+ * @param buildId - Build ID
+ * @returns Total ARR across hierarchy
+ */
+export async function getHierarchyTotalARR(
+  parentId: string,
+  buildId: string
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('accounts')
+    .select('hierarchy_bookings_arr_converted, calculated_arr, arr')
+    .or(`sfdc_account_id.eq.${parentId},ultimate_parent_id.eq.${parentId}`)
+    .eq('build_id', buildId);
+
+  if (error || !data) return 0;
+
+  return data.reduce((sum, acc) => {
+    const arr = acc.hierarchy_bookings_arr_converted || acc.calculated_arr || acc.arr || 0;
+    return sum + arr;
+  }, 0);
+}
+
+// =============================================================================
+// LEGACY ASSIGNMENT SERVICE HELPERS
+// =============================================================================
 
 /**
  * Helper methods for the Assignment Service
@@ -70,7 +243,7 @@ export class AssignmentServiceHelpers {
         proposedOwnerName: selectedRep.name,
         assignmentReason: 'Tier 1 distribution balancing with ARR consideration',
         ruleApplied: 'TIER_BALANCING',
-        conflictRisk: 'LOW'
+        confidence: 'HIGH'
       });
       
       // Update workload
@@ -114,7 +287,7 @@ export class AssignmentServiceHelpers {
         proposedOwnerName: selectedRep.name,
         assignmentReason: 'Balanced round-robin distribution',
         ruleApplied: 'ROUND_ROBIN',
-        conflictRisk: 'LOW'
+        confidence: 'HIGH'
       });
       
       // Update workload for next iteration

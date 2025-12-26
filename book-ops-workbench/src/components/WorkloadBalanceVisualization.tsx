@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { TrendingUp, TrendingDown, Users, DollarSign } from 'lucide-react';
+import { APPROACHING_CAPACITY_THRESHOLD } from '@/_domain';
 
 interface RepWorkload {
   repId: string;
@@ -59,11 +60,11 @@ export const WorkloadBalanceVisualization: React.FC<WorkloadBalanceVisualization
   const repsAboveMin = repWorkloads.filter(w => w.proposedARR >= minARRPerRep).length;
   const repsBelowMin = repWorkloads.length - repsAboveMin;
 
-  // Color coding for bars
+  // Color coding for bars - uses APPROACHING_CAPACITY_THRESHOLD from @/_domain for consistency
   const getBarColor = (arr: number, target: number, min: number) => {
     if (arr < min / 1000000) return '#ef4444'; // Red - below minimum
     if (arr < target / 1000000 * 0.8) return '#f97316'; // Orange - below 80% of target
-    if (arr > target / 1000000 * 1.2) return '#eab308'; // Yellow - above 120% of target
+    if (arr > target / 1000000 * APPROACHING_CAPACITY_THRESHOLD) return '#eab308'; // Yellow - above threshold of target
     return '#22c55e'; // Green - balanced
   };
 
@@ -299,12 +300,12 @@ export const WorkloadBalanceVisualization: React.FC<WorkloadBalanceVisualization
                     variant={
                       data.proposedARR < minARRPerRep / 1000000 ? "destructive" :
                       data.proposedARR < targetARRPerRep / 1000000 * 0.8 ? "secondary" :
-                      data.proposedARR > targetARRPerRep / 1000000 * 1.2 ? "outline" : "success"
+                      data.proposedARR > targetARRPerRep / 1000000 * APPROACHING_CAPACITY_THRESHOLD ? "outline" : "success"
                     }
                   >
                     {data.proposedARR < minARRPerRep / 1000000 ? 'Below Min' :
                      data.proposedARR < targetARRPerRep / 1000000 * 0.8 ? 'Light' :
-                     data.proposedARR > targetARRPerRep / 1000000 * 1.2 ? 'Heavy' : 'Balanced'}
+                     data.proposedARR > targetARRPerRep / 1000000 * APPROACHING_CAPACITY_THRESHOLD ? 'Heavy' : 'Balanced'}
                   </Badge>
                 </div>
               </div>

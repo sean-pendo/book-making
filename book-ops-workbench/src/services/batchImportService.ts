@@ -1,5 +1,6 @@
 // Batch processing service for large file imports
 import { supabase } from '@/integrations/supabase/client';
+import { isOpenHeadcountName } from '@/_domain';
 
 export interface BatchConfig {
   batchSize: number;
@@ -23,6 +24,7 @@ export interface BatchImportResult {
   recordsProcessed: number;
   recordsImported: number;
   errors: string[];
+  warnings: string[];
   duration: number;
   averageRps: number;
 }
@@ -227,6 +229,7 @@ export class BatchImportService {
       recordsProcessed: processed,
       recordsImported: imported,
       errors,
+      warnings: [],
       duration,
       averageRps
     };
@@ -360,6 +363,7 @@ export class BatchImportService {
       recordsProcessed: processed,
       recordsImported: imported,
       errors,
+      warnings: [],
       duration,
       averageRps
     };
@@ -506,6 +510,7 @@ export class BatchImportService {
       recordsProcessed: processed,
       recordsImported: imported,
       errors,
+      warnings: [],
       duration,
       averageRps
     };
@@ -522,19 +527,47 @@ export class BatchImportService {
     
     console.log(`🚀 Starting sales reps batch import: ${data.length} records, batch size: ${finalConfig.batchSize} (pure INSERT)`);
 
-    // Pre-process data: Auto-generate rep_id for open headcount (blank rep_id)
-    // and handle is_backfill_source flag
+    // STEP 0: Delete existing sales reps for this build to avoid unique constraint violations
+    console.log(`🗑️ Deleting existing sales reps for build ${buildId}...`);
+    const { error: deleteError, count: deleteCount } = await supabase
+      .from('sales_reps')
+      .delete({ count: 'exact' })
+      .eq('build_id', buildId);
+    
+    if (deleteError) {
+      console.error('❌ Failed to delete existing sales reps:', deleteError);
+      return {
+        success: false,
+        recordsProcessed: 0,
+        recordsImported: 0,
+        errors: [`Failed to clear existing sales reps: ${deleteError.message}`],
+        warnings: [],
+        duration: Date.now() - startTime,
+        averageRps: 0
+      };
+    }
+    console.log(`✅ Deleted ${deleteCount ?? 'unknown'} existing sales reps for build`);
+
+    // Pre-process data: Auto-generate rep_id for open headcount (blank rep_id),
+    // handle duplicates, and process is_backfill_source flag
+    // @see MASTER_LOGIC.mdc §8.4 - Placeholder/Open Headcount
     let placeholderCount = 0;
     let backfillSourceCount = 0;
-    const processedData = data.map(row => {
+    let autoNumberedCount = 0;
+    const warnings: string[] = [];
+    
+    // STEP 1: First pass - handle blank/placeholder rep_ids
+    const firstPassData = data.map(row => {
       const processed = { ...row };
       
-      // Auto-generate rep_id if blank but name is present (Open Headcount)
-      if ((!processed.rep_id || processed.rep_id.trim() === '') && processed.name) {
-        processed.rep_id = `OPEN-${buildId.slice(0, 8)}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        processed.is_placeholder = true;
-        placeholderCount++;
-        console.log(`📝 Auto-generated rep_id for "${processed.name}": ${processed.rep_id}`);
+      // Auto-generate rep_id if blank (but NOT for duplicate non-blank IDs yet)
+      if (!processed.rep_id || processed.rep_id.trim() === '') {
+        if (processed.name) {
+          processed.rep_id = `OPEN-${buildId.slice(0, 8)}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          processed.is_placeholder = true;
+          placeholderCount++;
+          console.log(`📝 Auto-generated rep_id for "${processed.name}": ${processed.rep_id}`);
+        }
       }
       
       // If marked as backfill source, also set include_in_assignments = false
@@ -548,11 +581,78 @@ export class BatchImportService {
       return processed;
     });
 
+    // STEP 2: Detect and handle duplicate rep_ids
+    // @see MASTER_LOGIC.mdc §8.4.2 - Duplicate Rep ID Handling
+    const repIdGroups = new Map<string, typeof firstPassData>();
+    for (const row of firstPassData) {
+      const repId = row.rep_id?.trim();
+      if (!repId) continue;
+      
+      if (!repIdGroups.has(repId)) {
+        repIdGroups.set(repId, []);
+      }
+      repIdGroups.get(repId)!.push(row);
+    }
+    
+    // Helper to check if two rows differ in any distinguishing field
+    const rowsAreDifferent = (a: any, b: any): boolean => {
+      const fieldsToCompare = ['name', 'region', 'team', 'flm', 'slm', 'team_tier', 'pe_firms'];
+      for (const field of fieldsToCompare) {
+        const valA = (a[field] ?? '').toString().trim().toLowerCase();
+        const valB = (b[field] ?? '').toString().trim().toLowerCase();
+        if (valA !== valB) return true;
+      }
+      return false;
+    };
+    
+    // Process duplicate groups
+    const processedData: typeof firstPassData = [];
+    for (const [repId, rows] of repIdGroups) {
+      if (rows.length === 1) {
+        // No duplicates, keep as-is
+        processedData.push(rows[0]);
+      } else {
+        // Multiple rows with same rep_id
+        console.log(`⚠️ Found ${rows.length} rows with rep_id "${repId}"`);
+        
+        // Check if any row has Open Headcount name pattern OR if rows differ in fields
+        const hasOpenHeadcountName = rows.some(r => isOpenHeadcountName(r.name));
+        const rowsHaveDifferences = rows.some((row, i) => 
+          i > 0 && rowsAreDifferent(rows[0], row)
+        );
+        
+        if (hasOpenHeadcountName || rowsHaveDifferences) {
+          // Auto-number: append -1, -2, -3, etc.
+          console.log(`📋 Auto-numbering ${rows.length} reps with rep_id "${repId}" (Open Headcount pattern or fields differ)`);
+          rows.forEach((row, idx) => {
+            const newRepId = `${repId}-${idx + 1}`;
+            console.log(`  → "${row.name}": ${repId} → ${newRepId}`);
+            row.rep_id = newRepId;
+            row.is_placeholder = true;
+            autoNumberedCount++;
+            processedData.push(row);
+          });
+        } else {
+          // True duplicates (all fields identical) - warn but still import
+          // Database constraint will reject duplicates, first one wins
+          warnings.push(`Duplicate rep_id "${repId}" found for ${rows.length} identical rows. Only the first will be imported.`);
+          console.warn(`⚠️ True duplicate rep_id "${repId}" - all fields identical, only first will succeed`);
+          processedData.push(...rows);
+        }
+      }
+    }
+
     if (placeholderCount > 0) {
-      console.log(`📋 Generated placeholder IDs for ${placeholderCount} open headcount reps`);
+      console.log(`📋 Generated placeholder IDs for ${placeholderCount} open headcount reps (blank rep_id)`);
+    }
+    if (autoNumberedCount > 0) {
+      console.log(`📋 Auto-numbered ${autoNumberedCount} reps with duplicate rep_ids`);
     }
     if (backfillSourceCount > 0) {
       console.log(`📋 Marked ${backfillSourceCount} reps as backfill sources (excluded from assignments)`);
+    }
+    if (warnings.length > 0) {
+      console.warn(`⚠️ ${warnings.length} warning(s) during pre-processing`);
     }
 
     // Split processed data into batches
@@ -579,6 +679,12 @@ export class BatchImportService {
       try {
         console.log(`📦 Processing sales reps batch ${currentBatchIndex + 1}/${totalBatches} (${batch.length} records)${retryCount > 0 ? ` - Retry ${retryCount}` : ''}`);
         
+        // Log sample data for debugging on first batch
+        if (currentBatchIndex === 0 && batch.length > 0) {
+          console.log(`🔍 Sample sales rep data (first record):`, JSON.stringify(batch[0], null, 2));
+          console.log(`🔍 Fields being sent:`, Object.keys(batch[0]));
+        }
+        
         // Don't use .select() - reduces overhead
         const { error } = await supabase
           .from('sales_reps')
@@ -599,6 +705,8 @@ export class BatchImportService {
           }
           
           console.error(`❌ Sales reps batch ${currentBatchIndex + 1} failed:`, error);
+          console.error(`❌ Error details - code: ${error.code}, hint: ${error.hint}, details: ${error.details}`);
+          console.error(`❌ Sample failed record:`, JSON.stringify(batch[0], null, 2));
           errors.push(`Batch ${currentBatchIndex + 1}: ${error.message}`);
           failed += batch.length;
         } else {
@@ -686,6 +794,7 @@ export class BatchImportService {
       recordsProcessed: processed,
       recordsImported: imported,
       errors,
+      warnings,
       duration,
       averageRps
     };
@@ -793,17 +902,40 @@ export class BatchImportService {
 
       if (resetError) throw resetError;
 
-      // Step 2: Set is_customer = true for accounts with hierarchy ARR > 0
-      const { error: arrError } = await supabase
+      // Step 2: Set is_customer = true for accounts with hierarchy_bookings_arr_converted > 0
+      // This matches SSOT getAccountARR priority chain step 1
+      const { error: hierarchyArrError } = await supabase
         .from('accounts')
         .update({ is_customer: true })
         .eq('build_id', buildId)
         .eq('is_parent', true)
         .gt('hierarchy_bookings_arr_converted', 0);
 
+      if (hierarchyArrError) throw hierarchyArrError;
+
+      // Step 3: Set is_customer = true for accounts with calculated_arr > 0
+      // This matches SSOT getAccountARR priority chain step 2
+      const { error: calculatedArrError } = await supabase
+        .from('accounts')
+        .update({ is_customer: true })
+        .eq('build_id', buildId)
+        .eq('is_parent', true)
+        .gt('calculated_arr', 0);
+
+      if (calculatedArrError) throw calculatedArrError;
+
+      // Step 4: Set is_customer = true for accounts with arr > 0
+      // This matches SSOT getAccountARR priority chain step 3
+      const { error: arrError } = await supabase
+        .from('accounts')
+        .update({ is_customer: true })
+        .eq('build_id', buildId)
+        .eq('is_parent', true)
+        .gt('arr', 0);
+
       if (arrError) throw arrError;
 
-      // Step 3: Set is_customer = true for accounts with customer children (even if no direct ARR)
+      // Step 5: Set is_customer = true for accounts with customer children (even if no direct ARR)
       const { error: hierarchyError } = await supabase
         .from('accounts')
         .update({ is_customer: true })

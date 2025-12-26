@@ -9,6 +9,7 @@ export { BeforeAfterBar } from './BeforeAfterBar';
 export { VarianceIndicator, InlineVariance } from './VarianceIndicator';
 export { RepDistributionChart } from './RepDistributionChart';
 export { TeamFitPieChart } from './TeamFitPieChart';
+export { StabilityLocksPieChart } from './StabilityLocksPieChart';
 
 
 

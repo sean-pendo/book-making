@@ -52,11 +52,6 @@ export const Layout = ({ children }: LayoutProps) => {
                   <img src="/favicon.png" alt="Book Builder" className="h-8 w-8 rounded-lg" />
                   <h1 className="text-xl font-bold text-gradient">Book Builder</h1>
                 </button>
-                {effectiveProfile?.role?.toUpperCase() === 'REVOPS' && (
-                  <Badge variant="outline" className="status-info font-medium">
-                    RevOps Admin Access
-                  </Badge>
-                )}
               </div>
             </div>
             <ThemeToggle />

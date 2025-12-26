@@ -119,7 +119,6 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
       patterns: [/.*employee.*count.*/i, /.*employees.*/i, /.*headcount.*/i],
       required: false
     },
-  // DEPRECATED: ultimate_parent_employee_size - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'is_customer',
     aliases: [
@@ -161,7 +160,6 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
       patterns: [/^expansion.*prioritization.*tier$/i, /^expansion.*tier$/i],
       required: false
     },
-  // DEPRECATED: account_type, industry, expansion_score - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
     {
       schemaField: 'initial_sale_tier',
       aliases: [
@@ -172,7 +170,6 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
       patterns: [/^initial.*sale.*prioritization.*tier$/i, /^initial.*sale.*tier$/i],
       required: false
     },
-  // DEPRECATED: initial_sale_score - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'parent_id',
     aliases: [
@@ -209,7 +206,6 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*customer.*hierarchy.*/i, /.*has.*hierarchy.*/i],
     required: false
   },
-  // DEPRECATED: in_customer_hierarchy, include_in_emea - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'is_parent',
     aliases: [
@@ -219,7 +215,6 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*is.*parent.*/i, /.*parent.*flag.*/i],
     required: false
   },
-  // DEPRECATED: is_2_0 - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'owners_lifetime_count',
     aliases: [
@@ -229,7 +224,6 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*owners.*lifetime.*/i, /.*lifetime.*owners.*/i],
     required: false
   },
-  // DEPRECATED: inbound_count, idr_count - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
   {
     schemaField: 'risk_flag',
     aliases: [
@@ -276,6 +270,25 @@ export const ACCOUNT_FIELD_ALIASES: FieldAlias[] = [
     ],
     patterns: [/.*is.*strategic.*/i, /^strategic$/i, /.*strategic.*account.*/i],
     required: false
+  },
+  {
+    schemaField: 'exclude_from_reassignment',
+    aliases: [
+      'locked', 'Locked', 'lock', 'Lock', 'exclude', 'Exclude',
+      'exclude_from_reassignment', 'Exclude From Reassignment', 'Exclude_From_Reassignment',
+      'keep_owner', 'Keep Owner', 'Keep_Owner', 'do_not_reassign', 'Do Not Reassign'
+    ],
+    patterns: [/.*locked.*/i, /.*exclude.*reassign.*/i, /.*keep.*owner.*/i, /.*do.*not.*reassign.*/i],
+    required: false
+  },
+  {
+    schemaField: 'lock_reason',
+    aliases: [
+      'lock_reason', 'Lock Reason', 'Lock_Reason', 'lock_note', 'Lock Note', 'Lock_Note',
+      'exclusion_reason', 'Exclusion Reason', 'Exclusion_Reason', 'lock_notes', 'Lock Notes'
+    ],
+    patterns: [/.*lock.*reason.*/i, /.*lock.*note.*/i, /.*exclusion.*reason.*/i],
+    required: false
   }
 ];
 
@@ -299,7 +312,6 @@ export const OPPORTUNITY_FIELD_ALIASES: FieldAlias[] = [
     patterns: [/.*account.*id.*/i],
     required: true
   },
-  // DEPRECATED: stage, amount, close_date, created_date - removed in v1.3.9, see MASTER_LOGIC.mdc Appendix
     {
       schemaField: 'owner_id',
       aliases: [
@@ -443,6 +455,17 @@ export const SALES_REP_FIELD_ALIASES: FieldAlias[] = [
       'is_strategic_rep', 'strategic_rep', 'is_strategic', 'strategic'
     ],
     patterns: [/.*is.*strategic.*rep.*/i, /.*strategic.*rep.*/i, /^is.*strategic$/i],
+    required: false
+  },
+  {
+    schemaField: 'pe_firms',
+    aliases: [
+      'PE_Firms', 'PE Firms', 'PE_Firm', 'PE Firm', 'Private_Equity_Firms', 'Private Equity Firms',
+      'Dedicated_PE', 'Dedicated PE', 'PE_Accounts', 'PE Accounts',
+      'PE Accounts (names)', 'PE_Accounts_Names', 'PE Accounts Names',
+      'pe_firms', 'pe_firm', 'private_equity_firms', 'dedicated_pe', 'pe_accounts'
+    ],
+    patterns: [/.*pe.*firm.*/i, /.*private.*equity.*/i, /.*dedicated.*pe.*/i, /.*pe.*accounts.*names.*/i],
     required: false
   }
 ];

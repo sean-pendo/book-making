@@ -225,15 +225,29 @@ export const BATCH_SIZES = {
  * ---------------
  * Known limits in Supabase that we need to work around.
  * 
- * IMPORTANT: Supabase returns max 1000 rows by default!
- * Always use pagination for large tables.
+ * IMPORTANT: The Supabase project max_rows setting must be configured to 10,000
+ * in the Supabase Dashboard → Settings → API → Max Rows.
+ * 
+ * All services MUST import SUPABASE_LIMITS from @/_domain for pagination.
+ * 
+ * NOTE: We use 2,000 rows per page with 3 concurrent requests for reliability.
+ * Larger batches (5k-10k) cause timeout/rate-limit errors on Supabase free tier.
+ * 
+ * @see MASTER_LOGIC.mdc §9.3
  */
 export const SUPABASE_LIMITS = {
-  /** Default page size when fetching (must use .range() for more) */
-  DEFAULT_PAGE_SIZE: 1000,
+  /** 
+   * Page size for fetching data
+   * 2,000 rows is reliable: avoids timeouts while still being efficient
+   * 146k accounts = 74 batches at 2k each, processed 3 at a time
+   */
+  FETCH_PAGE_SIZE: 2_000,
   
   /** Max rows per insert operation */
   MAX_ROWS_PER_INSERT: 500,
+  
+  /** Max concurrent requests to avoid rate limiting */
+  MAX_CONCURRENT_REQUESTS: 3,
 } as const;
 
 // =============================================================================
@@ -335,6 +349,21 @@ export const DEFAULT_OVERLOAD_VARIANCE = 0.20;
  */
 export const DEFAULT_MAX_ARR_PER_REP = 2_500_000;
 
+/**
+ * APPROACHING CAPACITY THRESHOLD
+ * ------------------------------
+ * Warning threshold - rep is "approaching capacity" at 120% of target.
+ * Used in ManagerReassignmentPanel.tsx and other capacity warning displays.
+ * 
+ * WHY 1.2 (120%):
+ * - Provides early warning before hitting hard limits
+ * - Gives managers visibility into potential overload
+ * - Different from DEFAULT_OVERLOAD_VARIANCE (20%) which triggers "overloaded" state
+ * 
+ * @see MASTER_LOGIC.mdc §12.1.2
+ */
+export const APPROACHING_CAPACITY_THRESHOLD = 1.2;
+
 // =============================================================================
 // CRE RISK LEVELS
 // =============================================================================
@@ -374,6 +403,96 @@ export function getCRERiskLevel(creCount: number): 'none' | 'low' | 'medium' | '
   if (creCount <= CRE_RISK_THRESHOLDS.MEDIUM_MAX) return 'medium';
   return 'high';
 }
+
+// =============================================================================
+// ASSIGNMENT CONFIDENCE
+// =============================================================================
+
+/**
+ * ASSIGNMENT CONFIDENCE
+ * ---------------------
+ * Indicates how confident the system is in a proposed assignment.
+ * 
+ * This is NOT the same as CRE Risk (churn probability):
+ * - CRE Risk: Will this customer churn? Based on cre_count.
+ * - Assignment Confidence: How good is this assignment decision? Based on warning severity.
+ * 
+ * @see MASTER_LOGIC.mdc §13.4.1
+ */
+export type AssignmentConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+/**
+ * Calculates assignment confidence from warning severity.
+ * 
+ * HIGH: No warnings - clean assignment
+ * MEDIUM: Medium severity warnings - some concerns (geo mismatch, tier concentration)
+ * LOW: High severity warnings - significant issues (capacity exceeded, no reps, CRE overload)
+ * 
+ * @see MASTER_LOGIC.mdc §13.4.1
+ */
+export function calculateAssignmentConfidence(
+  warnings: Array<{ severity: 'high' | 'medium' | 'low' }>
+): AssignmentConfidence {
+  if (warnings.some(w => w.severity === 'high')) return 'LOW';
+  if (warnings.some(w => w.severity === 'medium')) return 'MEDIUM';
+  return 'HIGH';
+}
+
+// =============================================================================
+// HIERARCHICAL OWNERSHIP WARNINGS
+// =============================================================================
+
+/**
+ * HIERARCHY WARNING TYPES
+ * -----------------------
+ * Warning types for breaking hierarchical ownership.
+ * 
+ * "Hierarchical Ownership" means a parent account and all its children share
+ * the same owner. Breaking this creates a "Hierarchy Split."
+ * 
+ * @see MASTER_LOGIC.mdc §13.4.2
+ */
+export const HIERARCHY_WARNING_TYPES = {
+  /** Child assigned to different owner than parent */
+  HIERARCHY_SPLIT: { 
+    type: 'hierarchy_split' as const, 
+    severity: 'high' as const,
+    label: 'Hierarchy Split',
+    description: 'This account will have a different owner than its parent/children'
+  },
+  /** Locked children were force-overridden during parent cascade */
+  LOCK_OVERRIDE: {
+    type: 'lock_override' as const,
+    severity: 'high' as const,
+    label: 'Lock Override',
+    description: 'Locked accounts were force-reassigned'
+  },
+} as const;
+
+/**
+ * Helper type for hierarchy warning
+ */
+export type HierarchyWarningType = typeof HIERARCHY_WARNING_TYPES[keyof typeof HIERARCHY_WARNING_TYPES];
+
+// =============================================================================
+// RATIONALE TRANSPARENCY
+// =============================================================================
+
+/**
+ * SIGNIFICANT CONTRIBUTION THRESHOLD
+ * -----------------------------------
+ * Factors below this threshold are hidden from rationale breakdowns.
+ * 
+ * WHY 10%:
+ * - Noise filtering: factors under 10% don't meaningfully influence decisions
+ * - UI readability: showing too many small percentages clutters the display
+ * 
+ * Example: If Geo=65%, Cont=25%, Team=10%, all three are shown.
+ * If Geo=85%, Cont=8%, Team=7%, only Geo is shown (others < 10%).
+ * 
+ * @see MASTER_LOGIC.mdc §11.9.1
+ */
+export const SIGNIFICANT_CONTRIBUTION_THRESHOLD = 0.10;
 
 // =============================================================================
 // PRIORITY WEIGHTING
@@ -556,11 +675,28 @@ export const LP_SCALE_LIMITS = {
    * Maximum accounts for global LP optimization (above this, use waterfall)
    * Testing showed HiGHS can handle 8000+ accounts (~85s solve time)
    * but production LP structure may differ. Set conservatively.
+   * @see MASTER_LOGIC.mdc §11.10
    */
   MAX_ACCOUNTS_FOR_GLOBAL_LP: 8000,
   
-  /** Warning threshold - log performance warning above this */
+  /** 
+   * Warning threshold - log performance warning above this 
+   * @see MASTER_LOGIC.mdc §11.10
+   */
   WARN_ACCOUNTS_THRESHOLD: 3000,
+  
+  /**
+   * Maximum binary variables per LP call before batching is required.
+   * JavaScript strings have a max length of ~512MB-1GB. LP problems with
+   * accounts × reps > 500K binary variables can exceed this limit,
+   * causing "RangeError: Invalid string length" when calling lines.join().
+   * 
+   * For residual optimization (all remaining accounts × all reps), we batch
+   * into chunks of MAX_LP_BINARY_VARIABLES / numReps accounts per call.
+   * 
+   * @see MASTER_LOGIC.mdc §11.10
+   */
+  MAX_LP_BINARY_VARIABLES: 500_000,
 } as const;
 
 // =============================================================================
@@ -611,4 +747,4 @@ export const WORKLOAD_SCORE_WEIGHTS = {
  * Used by: optimizationTelemetry.ts
  * @see MASTER_LOGIC.mdc §14.2 Model Versioning
  */
-export const OPTIMIZATION_MODEL_VERSION = '1.0.1';
+export const OPTIMIZATION_MODEL_VERSION = '1.1.0';

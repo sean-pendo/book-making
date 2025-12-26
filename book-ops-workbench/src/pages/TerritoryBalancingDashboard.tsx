@@ -25,7 +25,7 @@ import { SalesRepsTable } from '@/components/data-tables/SalesRepsTable';
 
 import type { RepDistributionData } from '@/types/analytics';
 
-interface TerritoryBalancingDashboardProps {
+interface BookBalancingDashboardProps {
   buildId?: string;
 }
 
@@ -39,7 +39,7 @@ type BalancingTab = 'overview' | 'before-after' | 'table';
  * - Before/After: Placeholder for comparison view
  * - Table: Embedded SalesRepsTable for editing and live sync
  */
-export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashboardProps = {}) => {
+export const BookBalancingDashboard = ({ buildId }: BookBalancingDashboardProps = {}) => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const invalidateBuildData = useInvalidateBuildData();
@@ -98,12 +98,6 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
     const childProspects = buildDataSummary?.accounts.childProspects || 0;
     const activeReps = data.repMetrics.length;
     const strategicReps = data.repMetrics.filter(r => r.is_strategic_rep).length;
-    const totalParentAccounts = parentCustomers + parentProspects;
-    const assignedAccounts = data.assignedAccountsCount;
-    const unassignedAccounts = totalParentAccounts - assignedAccounts;
-    const coveragePercent = totalParentAccounts > 0
-      ? (assignedAccounts / totalParentAccounts) * 100
-      : 0;
     
     return {
       parentCustomers,
@@ -112,9 +106,6 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
       childProspects,
       activeReps,
       strategicReps,
-      coveragePercent,
-      assignedAccounts,
-      unassignedAccounts,
     };
   }, [data, buildDataSummary]);
 
@@ -139,6 +130,17 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
       childProspects: 0,
       // Strategic rep flag for purple bar coloring
       isStrategicRep: rep.is_strategic_rep ?? false,
+      // Tier breakdown
+      tier1Accounts: rep.tier1Accounts ?? 0,
+      tier2Accounts: rep.tier2Accounts ?? 0,
+      tier3Accounts: rep.tier3Accounts ?? 0,
+      tier4Accounts: rep.tier4Accounts ?? 0,
+      tierNAAccounts: rep.tierNAAccounts ?? 0,
+      // CRE Risk breakdown
+      creNoneAccounts: rep.creNoneAccounts ?? 0,
+      creLowAccounts: rep.creLowAccounts ?? 0,
+      creMediumAccounts: rep.creMediumAccounts ?? 0,
+      creHighAccounts: rep.creHighAccounts ?? 0,
     }));
   }, [data]);
 
@@ -362,9 +364,6 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
             childProspects={kpiData.childProspects}
             activeReps={kpiData.activeReps}
             strategicReps={kpiData.strategicReps}
-            coveragePercent={kpiData.coveragePercent}
-            assignedAccounts={kpiData.assignedAccounts}
-            unassignedAccounts={kpiData.unassignedAccounts}
             isLoading={isLoading}
           />
 
@@ -421,4 +420,4 @@ export const TerritoryBalancingDashboard = ({ buildId }: TerritoryBalancingDashb
   );
 };
 
-export default TerritoryBalancingDashboard;
+export default BookBalancingDashboard;

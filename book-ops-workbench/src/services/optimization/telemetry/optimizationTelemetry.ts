@@ -11,7 +11,7 @@
  */
 
 import { supabase } from '@/integrations/supabase/client';
-import { OPTIMIZATION_MODEL_VERSION } from '@/_domain';
+import { OPTIMIZATION_MODEL_VERSION, BALANCE_INTENSITY_PRESETS, getBalancePenaltyMultiplier, BalanceIntensity } from '@/_domain';
 import type {
   LPSolveResult,
   LPConfiguration,
@@ -107,19 +107,16 @@ function buildWeightsSnapshot(
 
 /**
  * Get intensity multiplier from preset name
+ * Uses getBalancePenaltyMultiplier from @/_domain for SSOT compliance
  * @see MASTER_LOGIC.mdc §11.3.1 Balance Intensity Configuration
  * @see _domain/constants.ts - BALANCE_INTENSITY_PRESETS
  */
 function getIntensityMultiplier(intensity: string): number {
-  // These values must match BALANCE_INTENSITY_PRESETS in _domain/constants.ts
-  const presets: Record<string, number> = {
-    VERY_LIGHT: 0.1,
-    LIGHT: 0.5,
-    NORMAL: 1.0,
-    HEAVY: 10.0,      // Updated from 3.0 to match constants.ts
-    VERY_HEAVY: 100.0  // Updated from 10.0 to match constants.ts
-  };
-  return presets[intensity] ?? 1.0;
+  // Validate it's a known intensity, else default to NORMAL (1.0)
+  if (intensity in BALANCE_INTENSITY_PRESETS) {
+    return getBalancePenaltyMultiplier(intensity as BalanceIntensity);
+  }
+  return 1.0;
 }
 
 /**

@@ -8,6 +8,7 @@ import { RefreshCw, Calculator, RotateCcw, AlertCircle, Info } from 'lucide-reac
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { BalanceThresholdCalculator } from '@/services/balanceThresholdCalculator';
+import { SUPABASE_LIMITS } from '@/_domain';
 
 interface BalanceThresholdConfigProps {
   buildId: string;
@@ -116,14 +117,14 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
 
   const loadTotals = async () => {
     try {
-      // Note: Added .limit(50000) to avoid Supabase's default 1000 row limit
+      // Uses SSOT pagination limit from @/_domain
       const { data: accounts, error } = await supabase
         .from('accounts')
         .select('cre_count, calculated_atr, expansion_tier, renewal_quarter')
         .eq('build_id', buildId)
         .eq('is_parent', true)
         .eq('is_customer', true)
-        .limit(50000);
+        .limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE);
 
       if (error) throw error;
 
@@ -173,7 +174,7 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
     setCalculating(true);
     try {
       // Fetch ONLY CUSTOMER parent accounts and active reps
-      // Note: Added .limit(50000) to avoid Supabase's default 1000 row limit
+      // Uses SSOT pagination limit from @/_domain
       const [accountsRes, repsRes] = await Promise.all([
         supabase
           .from('accounts')
@@ -181,13 +182,13 @@ export function BalanceThresholdConfig({ buildId }: BalanceThresholdConfigProps)
           .eq('build_id', buildId)
           .eq('is_parent', true)
           .eq('is_customer', true)
-          .limit(50000),
+          .limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE),
         supabase
           .from('sales_reps')
           .select('*')
           .eq('build_id', buildId)
           .eq('is_active', true)
-          .limit(1000)
+          .limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE)
       ]);
 
       if (accountsRes.error) throw accountsRes.error;

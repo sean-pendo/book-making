@@ -10,7 +10,7 @@
  */
 
 import { supabase } from '@/integrations/supabase/client';
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, SUPABASE_LIMITS } from '@/_domain';
 import type { 
   AggregatedAccount, 
   EligibleRep, 
@@ -38,64 +38,143 @@ export interface LoadedBuildData {
 // ARR calculation: imported from @/_domain (single source of truth)
 
 /**
- * Fetch all accounts with pagination (Supabase default limit is 1000)
+ * Fetch all accounts with batched parallel pagination
+ * Uses SSOT constants from @/_domain for pagination settings.
+ * Includes retry logic for timeout errors (57014).
  */
 async function fetchAllAccounts(buildId: string): Promise<any[]> {
-  const PAGE_SIZE = 1000;
-  const allRows: any[] = [];
-  let page = 0;
-  let hasMore = true;
+  const PAGE_SIZE = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
+  const CONCURRENCY_LIMIT = SUPABASE_LIMITS.MAX_CONCURRENT_REQUESTS;
   
-  while (hasMore) {
-    const { data, error, count } = await supabase
-      .from('accounts')
-      .select('*', { count: 'exact' })
-      .eq('build_id', buildId)
-      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
-    
-    if (error) throw new Error(`Failed to load accounts: ${error.message}`);
-    
-    if (data) {
-      allRows.push(...data);
-    }
-    
-    // Check if there are more pages
-    const totalCount = count || 0;
-    hasMore = (page + 1) * PAGE_SIZE < totalCount;
-    page++;
+  // Get total count first (lightweight query)
+  const { count } = await supabase
+    .from('accounts')
+    .select('sfdc_account_id', { count: 'exact', head: true })
+    .eq('build_id', buildId);
+  
+  if (!count || count === 0) {
+    console.log(`[DataLoader] No accounts found for build ${buildId}`);
+    return [];
   }
   
-  console.log(`[DataLoader] Fetched ${allRows.length} accounts with pagination`);
+  const totalPages = Math.ceil(count / PAGE_SIZE);
+  console.log(`[DataLoader] Fetching ${count} accounts in ${totalPages} pages (batches of ${CONCURRENCY_LIMIT})...`);
+  
+  // Helper to fetch a single page with retry
+  const fetchPage = async (pageIndex: number, retryCount = 0): Promise<any[]> => {
+    const from = pageIndex * PAGE_SIZE;
+    const to = Math.min((pageIndex + 1) * PAGE_SIZE - 1, count - 1);
+    
+    try {
+      const { data, error } = await supabase
+        .from('accounts')
+        .select('*')
+        .eq('build_id', buildId)
+        .range(from, to);
+      
+      if (error) {
+        // Retry on timeout errors
+        if (error.code === '57014' && retryCount < 3) {
+          console.warn(`[DataLoader] Page ${pageIndex + 1} timed out, retrying (${retryCount + 1}/3)...`);
+          await new Promise(r => setTimeout(r, 1000 * (retryCount + 1)));
+          return fetchPage(pageIndex, retryCount + 1);
+        }
+        throw new Error(`Failed to load accounts page ${pageIndex + 1}: ${error.message}`);
+      }
+      
+      return data || [];
+    } catch (err: any) {
+      if (retryCount < 3) {
+        console.warn(`[DataLoader] Page ${pageIndex + 1} failed, retrying (${retryCount + 1}/3)...`);
+        await new Promise(r => setTimeout(r, 1000 * (retryCount + 1)));
+        return fetchPage(pageIndex, retryCount + 1);
+      }
+      throw err;
+    }
+  };
+  
+  // Process pages in batches
+  const allRows: any[] = [];
+  for (let batchStart = 0; batchStart < totalPages; batchStart += CONCURRENCY_LIMIT) {
+    const batchEnd = Math.min(batchStart + CONCURRENCY_LIMIT, totalPages);
+    const batchPromises = Array.from({ length: batchEnd - batchStart }, (_, i) =>
+      fetchPage(batchStart + i)
+    );
+    
+    const batchResults = await Promise.all(batchPromises);
+    for (const pageData of batchResults) {
+      allRows.push(...pageData);
+    }
+  }
+  
+  console.log(`[DataLoader] Fetched ${allRows.length} accounts with batched pagination`);
   return allRows;
 }
 
 /**
- * Fetch all opportunities with pagination (Supabase default limit is 1000)
+ * Fetch all opportunities with batched parallel pagination
+ * Uses SSOT constants from @/_domain for pagination settings.
  */
 async function fetchAllOpportunities(buildId: string): Promise<any[]> {
-  const PAGE_SIZE = 1000;
-  const allRows: any[] = [];
-  let page = 0;
-  let hasMore = true;
+  const PAGE_SIZE = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
+  const CONCURRENCY_LIMIT = SUPABASE_LIMITS.MAX_CONCURRENT_REQUESTS;
   
-  while (hasMore) {
-    const { data, error, count } = await supabase
-      .from('opportunities')
-      .select('sfdc_account_id, net_arr', { count: 'exact' })
-      .eq('build_id', buildId)
-      .gt('net_arr', 0)
-      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+  // Get total count first
+  const { count } = await supabase
+    .from('opportunities')
+    .select('sfdc_opportunity_id', { count: 'exact', head: true })
+    .eq('build_id', buildId)
+    .gt('net_arr', 0);
+  
+  if (!count || count === 0) {
+    return [];
+  }
+  
+  const totalPages = Math.ceil(count / PAGE_SIZE);
+  
+  // Helper to fetch a single page with retry
+  const fetchPage = async (pageIndex: number, retryCount = 0): Promise<any[]> => {
+    const from = pageIndex * PAGE_SIZE;
+    const to = Math.min((pageIndex + 1) * PAGE_SIZE - 1, count - 1);
     
-    if (error) throw new Error(`Failed to load opportunities: ${error.message}`);
-    
-    if (data) {
-      allRows.push(...data);
+    try {
+      const { data, error } = await supabase
+        .from('opportunities')
+        .select('sfdc_account_id, net_arr')
+        .eq('build_id', buildId)
+        .gt('net_arr', 0)
+        .range(from, to);
+      
+      if (error) {
+        if (error.code === '57014' && retryCount < 3) {
+          await new Promise(r => setTimeout(r, 1000 * (retryCount + 1)));
+          return fetchPage(pageIndex, retryCount + 1);
+        }
+        throw new Error(`Failed to load opportunities page ${pageIndex + 1}: ${error.message}`);
+      }
+      
+      return data || [];
+    } catch (err: any) {
+      if (retryCount < 3) {
+        await new Promise(r => setTimeout(r, 1000 * (retryCount + 1)));
+        return fetchPage(pageIndex, retryCount + 1);
+      }
+      throw err;
     }
+  };
+  
+  // Process pages in batches
+  const allRows: any[] = [];
+  for (let batchStart = 0; batchStart < totalPages; batchStart += CONCURRENCY_LIMIT) {
+    const batchEnd = Math.min(batchStart + CONCURRENCY_LIMIT, totalPages);
+    const batchPromises = Array.from({ length: batchEnd - batchStart }, (_, i) =>
+      fetchPage(batchStart + i)
+    );
     
-    // Check if there are more pages
-    const totalCount = count || 0;
-    hasMore = (page + 1) * PAGE_SIZE < totalCount;
-    page++;
+    const batchResults = await Promise.all(batchPromises);
+    for (const pageData of batchResults) {
+      allRows.push(...pageData);
+    }
   }
   
   return allRows;
@@ -215,8 +294,8 @@ export async function loadBuildData(buildId: string): Promise<LoadedBuildData> {
       rep_id: r.rep_id,
       name: r.name,
       region: r.region,
-      team: r.team,
       team_tier: r.team_tier,
+      pe_firms: r.pe_firms, // For PE firm routing - see MASTER_LOGIC.mdc §10.7
       is_active: r.is_active ?? true,
       include_in_assignments: r.include_in_assignments ?? true,
       is_strategic_rep: r.is_strategic_rep ?? false,

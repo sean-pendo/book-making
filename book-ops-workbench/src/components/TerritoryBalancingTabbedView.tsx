@@ -770,19 +770,6 @@ export const TerritoryBalancingTabbedView = ({ buildId: propBuildId }: Territory
                   </CardContent>
                 </Card>
 
-                <Card className="bg-gradient-to-br from-card to-card/80 border-0 shadow-lg">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-                    <CardTitle className="text-sm font-medium text-muted-foreground">Coverage Rate</CardTitle>
-                    <div className="p-2 bg-orange-100 dark:bg-orange-900/20 rounded-lg">
-                      <Target className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-3xl font-bold text-orange-600 dark:text-orange-400">
-                      {activeMetrics.length > 0 ? ((activeMetrics.filter(rep => (rep.accounts?.total || 0) > 0).length / activeMetrics.length) * 100).toFixed(0) : 0}%
-                    </div>
-                  </CardContent>
-                </Card>
               </div>
 
               {/* Territory Navigation for Prospects */}

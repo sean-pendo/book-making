@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { SALES_TOOLS_ARR_THRESHOLD, BALANCE_INTENSITY_PRESETS, BalanceIntensity } from '@/_domain';
+import { SALES_TOOLS_ARR_THRESHOLD, BALANCE_INTENSITY_PRESETS, BalanceIntensity, calculateBalanceMax, calculateBalanceRange, APPROACHING_CAPACITY_THRESHOLD, getAccountARR, SUPABASE_LIMITS } from '@/_domain';
 import { Save, CheckCircle, MapPin, X, Loader2, Sparkles, Calculator, HelpCircle, Settings2, ChevronRight, Scale, Info } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -356,14 +356,15 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
           .eq('is_active', true)
           .eq('include_in_assignments', true),
         // Get account data for balance limits calculation (including ARR for max account check)
-        // Include sfdc_account_id to filter opportunities to customer accounts
+        // Include ARR fields for SSOT getAccountARR calculation
+        // Note: Don't filter by is_customer - use getAccountARR locally to ensure consistency
+        // Uses SSOT pagination limit from @/_domain
         supabase
           .from('accounts')
-          .select('sfdc_account_id, cre_count, calculated_atr, expansion_tier, renewal_quarter, arr')
+          .select('sfdc_account_id, cre_count, calculated_atr, expansion_tier, renewal_quarter, arr, calculated_arr, hierarchy_bookings_arr_converted')
           .eq('build_id', buildId)
           .eq('is_parent', true)
-          .eq('is_customer', true)
-          .limit(50000),
+          .limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE),
         // Get ATR from renewal opportunities (need sfdc_account_id to filter to customer accounts)
         supabase
           .from('opportunities')
@@ -371,13 +372,14 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
           .eq('build_id', buildId)
           .ilike('opportunity_type', 'renewals')
           .gt('available_to_renew', 0)
-          .limit(50000)
+          .limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE)
       ]);
       
-      const totalCustomerARR = Number(customerArrResult.data) || 0;
+      // RPC is fallback - we'll also calculate ARR locally using SSOT getAccountARR
+      const rpcCustomerARR = Number(customerArrResult.data) || 0;
       const totalProspectPipeline = Number(prospectPipelineResult.data) || 0;
       const reps = repsResult.data || [];
-      const accounts = accountsResult.data || [];
+      const allAccounts = accountsResult.data || [];
       const renewalOpps = oppsResult.data || [];
       
       if (reps.length === 0) {
@@ -391,7 +393,13 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       
       const normalRepCount = reps.filter(r => !r.is_strategic_rep && r.region).length;
       
-      // Calculate balance totals from accounts
+      // Filter to customer accounts using SSOT getAccountARR
+      // This ensures consistency with _domain logic regardless of is_customer flag state
+      const customerAccounts = allAccounts.filter(account => getAccountARR(account) > 0);
+      
+      // Calculate total ARR locally using SSOT getAccountARR
+      // This is more reliable than RPC which depends on is_customer flag being synced
+      let localTotalARR = 0;
       let totalCRE = 0;
       let totalTier1 = 0;
       let totalTier2 = 0;
@@ -400,7 +408,12 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       let maxAccountATR = 0; // Track largest individual account ATR
       let maxCREPerAccount = 0; // Track max CRE count on any single account
       
-      accounts.forEach(account => {
+      customerAccounts.forEach(account => {
+        // Use SSOT getAccountARR for ARR calculation
+        const accountArr = getAccountARR(account);
+        localTotalARR += accountArr;
+        if (accountArr > maxAccountARR) maxAccountARR = accountArr;
+        
         const cre = account.cre_count || 0;
         totalCRE += cre;
         if (cre > maxCREPerAccount) maxCREPerAccount = cre;
@@ -409,17 +422,17 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         accountATR += atr;
         if (atr > maxAccountATR) maxAccountATR = atr;
         
-        const accountArr = Number(account.arr) || 0;
-        if (accountArr > maxAccountARR) maxAccountARR = accountArr;
-        
         const tier = account.expansion_tier?.toLowerCase();
         if (tier === 'tier 1' || tier === 'tier1') totalTier1++;
         if (tier === 'tier 2' || tier === 'tier2') totalTier2++;
       });
       
+      // Use local calculation if RPC returned 0 (is_customer flag not synced)
+      const totalCustomerARR = rpcCustomerARR > 0 ? rpcCustomerARR : localTotalARR;
+      
       // Calculate total ATR: filter opportunities to customer parent accounts only
       // Per MASTER_LOGIC.mdc §2.2: ATR ≤ ARR (ATR is subset of customer revenue)
-      const customerAccountIds = new Set(accounts.map(a => a.sfdc_account_id));
+      const customerAccountIds = new Set(customerAccounts.map(a => a.sfdc_account_id));
       let maxOppATR = 0;
       const oppsATR = renewalOpps
         .filter(opp => customerAccountIds.has(opp.sfdc_account_id))
@@ -431,7 +444,8 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
       const totalATR = oppsATR > 0 ? oppsATR : accountATR;
       const maxATR = Math.max(maxAccountATR, maxOppATR);
       
-      console.log('[CalculateTargets] Customer ARR:', totalCustomerARR, 'Prospect Pipeline:', totalProspectPipeline, 'Reps:', normalRepCount);
+      console.log('[CalculateTargets] Customer ARR (RPC):', rpcCustomerARR, 'Customer ARR (local):', localTotalARR, 'Used:', totalCustomerARR);
+      console.log('[CalculateTargets] Customer accounts found:', customerAccounts.length, 'Prospect Pipeline:', totalProspectPipeline, 'Reps:', normalRepCount);
       console.log('[CalculateTargets] CRE:', totalCRE, 'ATR (from opps):', totalATR, 'Tier1:', totalTier1, 'Tier2:', totalTier2);
       console.log('[CalculateTargets] Max individual - ARR:', maxAccountARR, 'ATR:', maxATR, 'CRE:', maxCREPerAccount);
       
@@ -441,31 +455,32 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         ? Math.round(totalCustomerARR / normalRepCount) 
         : 2000000;
       // Max must be large enough to fit the biggest account
-      // Use 150% of target OR largest account + 20% buffer, whichever is bigger
-      const recommendedCustomerMax = Math.max(
-        Math.round(recommendedCustomerTarget * 1.5),
-        Math.round(maxAccountARR * 1.2)
+      // Use calculateBalanceMax from @/_domain: MAX(target × 1.5, largestAccount × 1.2)
+      const recommendedCustomerMax = Math.round(
+        calculateBalanceMax(recommendedCustomerTarget, maxAccountARR)
       );
       
       // Prospect target = pure average
       const recommendedProspectTarget = normalRepCount > 0 && totalProspectPipeline > 0
         ? Math.round(totalProspectPipeline / normalRepCount)
         : 2000000;
-      // Prospect max - for now use 150% of target (we don't have max prospect pipeline per account in this query)
-      const recommendedProspectMax = Math.round(recommendedProspectTarget * 1.5);
+      // Prospect max - use same formula (with 0 for largest since we don't have per-account data)
+      const recommendedProspectMax = Math.round(
+        calculateBalanceMax(recommendedProspectTarget, 0)
+      );
       
-      // Calculate balance limits
-      // Target = pure average, Max = average * 1.2 OR largest individual value * 1.2 (whichever is bigger)
-      const variance = 1.2;
+      // Calculate balance limits using APPROACHING_CAPACITY_THRESHOLD from @/_domain
+      // Target = pure average, Max = MAX(average × threshold, largest × threshold)
+      const variance = APPROACHING_CAPACITY_THRESHOLD;
       
-      // ATR: average * 1.2 OR largest account ATR * 1.2
+      // ATR: average × threshold OR largest account ATR × threshold
       const avgAtr = normalRepCount > 0 ? totalATR / normalRepCount : 150000;
       const maxAtr = Math.max(
         Math.ceil(avgAtr * variance),
         Math.ceil(maxATR * variance)
       );
       
-      // CRE: average * 1.2 OR largest account CRE count * 1.2
+      // CRE: average × threshold OR largest account CRE count × threshold
       const avgCre = normalRepCount > 0 ? totalCRE / normalRepCount : 3;
       const maxCre = Math.max(
         Math.ceil(avgCre * variance),
@@ -481,12 +496,24 @@ export const FullAssignmentConfig: React.FC<FullAssignmentConfigProps> = ({
         ? Math.round(totalATR / normalRepCount)
         : 500000;
       
+      // Use SSOT function for min calculations: calculateBalanceRange(target, variance)
+      // Note: variance is stored as percent (10) but function expects decimal (0.10)
+      const customerArrRange = calculateBalanceRange(recommendedCustomerTarget, config.capacity_variance_percent / 100);
+      const customerAtrRange = calculateBalanceRange(recommendedAtrTarget, config.atr_variance / 100);
+      const prospectRange = calculateBalanceRange(recommendedProspectTarget, config.prospect_variance_percent / 100);
+      
       setConfig(prev => ({
         ...prev,
+        // Customer ARR - target and min/max (min from SSOT calculateBalanceRange)
         customer_target_arr: recommendedCustomerTarget,
+        customer_min_arr: Math.round(customerArrRange.min),
         customer_max_arr: recommendedCustomerMax,
+        // Customer ATR - target and min (min from SSOT calculateBalanceRange)
         customer_target_atr: recommendedAtrTarget,
+        customer_min_atr: Math.round(customerAtrRange.min),
+        // Prospect Pipeline - target and min/max (min from SSOT calculateBalanceRange)
         prospect_target_arr: recommendedProspectTarget,
+        prospect_min_arr: Math.round(prospectRange.min),
         prospect_max_arr: recommendedProspectMax,
         // Balance limits
         max_cre_per_rep: Math.max(maxCre, 1),

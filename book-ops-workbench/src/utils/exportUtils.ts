@@ -17,7 +17,6 @@ export interface RepSheetData {
   prospects: ProspectAccount[];
 }
 
-// DEPRECATED: expansion_score, inbound_count, idr_count - removed in v1.3.9
 export interface CustomerAccount {
   account_name: string;
   account_id: string;
@@ -74,7 +73,6 @@ export const generateRepSheetCSV = (repData: RepSheetData): string => {
   lines.push(''); // Empty line
   
   // Customer accounts section
-  // DEPRECATED: expansion_score - removed in v1.3.9
   lines.push('CUSTOMER ACCOUNTS');
   lines.push('Account Name,Account ID,ARR,ATR,Renewal Date,Risk Level');
   repData.customers.forEach(customer => {
@@ -91,7 +89,6 @@ export const generateRepSheetCSV = (repData: RepSheetData): string => {
   lines.push(''); // Empty line
   
   // Prospect accounts section
-  // DEPRECATED: inbound_count, idr_count - removed in v1.3.9
   lines.push('PROSPECT ACCOUNTS');
   lines.push('Account Name,Account ID,Tier,Employees');
   repData.prospects.forEach(prospect => {

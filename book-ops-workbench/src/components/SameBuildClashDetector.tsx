@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import { HIGH_VALUE_ARR_THRESHOLD, SALES_TOOLS_ARR_THRESHOLD } from '@/_domain';
+import { HIGH_VALUE_ARR_THRESHOLD, SALES_TOOLS_ARR_THRESHOLD, getAccountARR } from '@/_domain';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -63,17 +63,20 @@ export const SameBuildClashDetector: React.FC<SameBuildClashDetectorProps> = ({ 
       
       if (error) throw error;
       
-      const clashes: SameBuildClash[] = (accounts || []).map(account => ({
-        id: `${buildId}-${account.sfdc_account_id}`,
-        sfdc_account_id: account.sfdc_account_id,
-        account_name: account.account_name,
-        current_owner: `${account.owner_name} (${account.owner_id})`,
-        new_owner: `${account.new_owner_name} (${account.new_owner_id})`,
-        arr: account.calculated_arr || 0,
-        conflict_type: 'assignment_conflict',
-        severity: account.calculated_arr > HIGH_VALUE_ARR_THRESHOLD ? 'high' : account.calculated_arr > SALES_TOOLS_ARR_THRESHOLD ? 'medium' : 'low',
-        is_resolved: false
-      }));
+      const clashes: SameBuildClash[] = (accounts || []).map(account => {
+        const accountARR = getAccountARR(account);
+        return {
+          id: `${buildId}-${account.sfdc_account_id}`,
+          sfdc_account_id: account.sfdc_account_id,
+          account_name: account.account_name,
+          current_owner: `${account.owner_name} (${account.owner_id})`,
+          new_owner: `${account.new_owner_name} (${account.new_owner_id})`,
+          arr: accountARR,
+          conflict_type: 'assignment_conflict',
+          severity: accountARR > HIGH_VALUE_ARR_THRESHOLD ? 'high' : accountARR > SALES_TOOLS_ARR_THRESHOLD ? 'medium' : 'low',
+          is_resolved: false
+        };
+      });
       
       return clashes;
     },

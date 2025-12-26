@@ -14,10 +14,25 @@ import {
   LP_PENALTY,
   getBalancePenaltyMultiplier,
   BalanceIntensity,
-  LP_SCALE_LIMITS
+  LP_SCALE_LIMITS,
+  repHandlesPEFirm
 } from '@/_domain';
 import { getDefaultPriorityConfig, PriorityConfig, SubConditionConfig } from '@/config/priorityRegistry';
-import { getPositionLabel, recordWaterfallRun } from '@/services/optimization';
+import { 
+  getPositionLabel, 
+  recordWaterfallRun,
+  generateRationale,
+  continuityScore,
+  geographyScore,
+  teamAlignmentScore,
+  DEFAULT_LP_CONTINUITY_PARAMS,
+  DEFAULT_LP_GEOGRAPHY_PARAMS,
+  DEFAULT_LP_TEAM_PARAMS,
+  type AggregatedAccount,
+  type EligibleRep,
+  type AssignmentScores,
+  type NormalizedWeights
+} from '@/services/optimization';
 import { solveLPString } from '@/services/optimization/solver/highsWrapper';
 
 /**
@@ -62,6 +77,105 @@ import { supabase } from '@/integrations/supabase/client';
 
 function sanitizeVarName(name: string): string {
   return name.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25);
+}
+
+/**
+ * Convert local Account type to AggregatedAccount for scoring functions
+ * @see MASTER_LOGIC.mdc §11.9.1 - Rationale Transparency
+ */
+function toAggregatedAccount(account: Account): AggregatedAccount {
+  return {
+    sfdc_account_id: account.sfdc_account_id,
+    account_name: account.account_name,
+    aggregated_arr: getAccountARR(account),
+    aggregated_atr: getAccountATR(account) || 0,
+    pipeline_value: account.pipeline_value || 0,
+    child_ids: [],
+    is_parent: account.is_parent || false,
+    owner_id: account.owner_id,
+    owner_name: account.owner_name,
+    owner_change_date: account.owner_change_date || null,
+    owners_lifetime_count: (account as any).owners_lifetime_count || 1,
+    is_customer: account.is_customer || false,
+    is_strategic: account.is_strategic || false,
+    sales_territory: account.sales_territory,
+    geo: account.geo,
+    employees: account.employees || null,
+    enterprise_vs_commercial: (account as any).enterprise_vs_commercial || null,
+    tier: null,
+    expansion_tier: account.expansion_tier,
+    initial_sale_tier: account.initial_sale_tier,
+    cre_risk: account.cre_risk,
+    renewal_date: account.renewal_date || null,
+    pe_firm: account.pe_firm,
+    exclude_from_reassignment: account.exclude_from_reassignment
+  };
+}
+
+/**
+ * Convert local SalesRep type to EligibleRep for scoring functions
+ */
+function toEligibleRep(rep: SalesRep): EligibleRep {
+  return {
+    rep_id: rep.rep_id,
+    name: rep.name,
+    region: rep.region,
+    team_tier: rep.team_tier || null,
+    is_active: rep.is_active ?? true,
+    include_in_assignments: rep.include_in_assignments ?? true,
+    is_strategic_rep: rep.is_strategic_rep || false,
+    is_backfill_source: (rep as any).is_backfill_source || false,
+    is_backfill_target: (rep as any).is_backfill_target || false,
+    backfill_target_rep_id: (rep as any).backfill_target_rep_id || null,
+    current_arr: 0
+  };
+}
+
+/**
+ * Calculate assignment scores for an account-rep pair
+ * Used to generate transparent rationales in the waterfall engine
+ * @see MASTER_LOGIC.mdc §11.9.1
+ */
+function calculateAssignmentScores(
+  account: Account,
+  rep: SalesRep,
+  territoryMappings: Record<string, string>
+): AssignmentScores {
+  const aggAccount = toAggregatedAccount(account);
+  const eligibleRep = toEligibleRep(rep);
+  
+  return {
+    continuity: continuityScore(aggAccount, eligibleRep, DEFAULT_LP_CONTINUITY_PARAMS),
+    geography: geographyScore(aggAccount, eligibleRep, territoryMappings, DEFAULT_LP_GEOGRAPHY_PARAMS),
+    teamAlignment: teamAlignmentScore(aggAccount, eligibleRep, DEFAULT_LP_TEAM_PARAMS),
+    tieBreaker: 0
+  };
+}
+
+/**
+ * Generate a transparent rationale for a waterfall assignment
+ * Uses the shared rationale generator with percentage breakdowns
+ * @see MASTER_LOGIC.mdc §11.9.1
+ */
+function generateWaterfallRationale(
+  account: Account,
+  rep: SalesRep,
+  territoryMappings: Record<string, string>,
+  priorityConfig: PriorityConfig[],
+  weights: NormalizedWeights = { wC: 0.35, wG: 0.35, wT: 0.30 }
+): string {
+  const aggAccount = toAggregatedAccount(account);
+  const eligibleRep = toEligibleRep(rep);
+  const scores = calculateAssignmentScores(account, rep, territoryMappings);
+  
+  return generateRationale(
+    aggAccount,
+    eligibleRep,
+    scores,
+    weights,
+    null, // no stability lock
+    priorityConfig
+  );
 }
 
 // Team Alignment Constants
@@ -169,6 +283,7 @@ interface SalesRep {
   is_strategic_rep: boolean;
   include_in_assignments: boolean;
   team_tier?: 'SMB' | 'Growth' | 'MM' | 'ENT' | null;  // For team alignment
+  pe_firms?: string | null;  // For PE firm routing - see MASTER_LOGIC.mdc §10.7
 }
 
 interface AssignmentConfiguration {
@@ -524,7 +639,7 @@ export class WaterfallAssignmentEngine {
       }
     });
 
-    const proposals: AssignmentProposal[] = [];
+    let proposals: AssignmentProposal[] = [];
 
     // DYNAMIC PRIORITY EXECUTION
     // Execute priorities in the order configured by the user
@@ -578,7 +693,8 @@ export class WaterfallAssignmentEngine {
       
       const result = await this.executePriority(priority, remainingAccounts, reps);
       
-      proposals.push(...result.assigned);
+      // Use concat to avoid stack overflow with large arrays (spread operator fails at ~10k items)
+      proposals = proposals.concat(result.assigned);
       remainingAccounts = result.remaining;
       priorityStats[priority.id] = result.assigned.length;
       
@@ -963,9 +1079,43 @@ export class WaterfallAssignmentEngine {
         }
       }
       
-      // Check PE Firm
+      // Check PE Firm - Route to dedicated PE rep if one exists
+      // @see MASTER_LOGIC.mdc §10.7.1 - Dedicated PE Rep Routing
       if (!lockReason && enabledConditions.has('pe_firm') && account.pe_firm) {
-        lockReason = `PE firm: ${account.pe_firm}`;
+        // First, check if any rep is dedicated to this PE firm
+        // Note: Use Array.from(this.repMap.values()) since class uses repMap, not salesReps array
+        const dedicatedPERep = Array.from(this.repMap.values()).find(r => 
+          r.include_in_assignments !== false && 
+          r.pe_firms && 
+          repHandlesPEFirm(r.pe_firms, account.pe_firm)
+        );
+        
+        if (dedicatedPERep) {
+          // Route to dedicated PE rep (override current owner)
+          lockReason = `PE firm: ${account.pe_firm} → dedicated rep ${dedicatedPERep.name}`;
+          lockType = 'pe_firm';
+          lockStats.pe_firm++;
+          
+          // Override currentOwner to the dedicated PE rep for this account
+          const accountARR = getAccountARR(account);
+          assigned.push({
+            account,
+            proposedRep: dedicatedPERep,
+            currentOwner,  // Keep original for reference
+            rationale: lockReason,
+            warnings: currentOwner?.rep_id !== dedicatedPERep.rep_id 
+              ? [`Reassigning from ${currentOwner?.name || 'unassigned'} to dedicated PE rep`] 
+              : [],
+            ruleApplied: this.formatPriorityLabel('stability_accounts'),
+            arr: accountARR,
+            priorityLevel: 1
+          });
+          this.updateWorkload(dedicatedPERep.rep_id, account);
+          continue; // Skip normal lock handling below
+        }
+        
+        // No dedicated PE rep found - fall back to current owner
+        lockReason = `PE firm: ${account.pe_firm} (no dedicated rep)`;
         lockType = 'pe_firm';
         lockStats.pe_firm++;
       }
@@ -1720,15 +1870,13 @@ export class WaterfallAssignmentEngine {
    * - Assign with penalty if it's the best global trade-off
    * - Leave unassigned if the penalty is too high (rare, only if all reps are way over max)
    * 
+   * For very large datasets (accounts × reps > 1M binary variables), the LP string
+   * can exceed JavaScript's max string length. We batch in chunks of 10K accounts
+   * to avoid this limit while still using the LP solver for quality assignments.
+   * 
    * @see MASTER_LOGIC.mdc §12.1.3 Capacity Gating (Hard Cap Only)
    */
   private async batchAssignPriority4(accounts: Account[], allReps: SalesRep[]): Promise<{ assigned: AssignmentProposal[], remaining: Account[] }> {
-    // Build eligibility map: account -> list of ALL eligible reps (no capacity filter)
-    // The LP solver's Big-M system handles balance constraints
-    const eligibleRepsPerAccount = new Map<string, SalesRep[]>();
-    const accountsWithOptions: Account[] = [];
-    const accountsWithoutOptions: Account[] = [];
-    
     // Get all eligible reps ONCE (no per-account capacity filtering)
     const allEligibleReps = allReps.filter(rep =>
       rep.is_active &&
@@ -1741,40 +1889,97 @@ export class WaterfallAssignmentEngine {
       return { assigned: [], remaining: accounts };
     }
     
-    for (const account of accounts) {
-      // Every account gets ALL eligible reps - let LP solver decide
-      eligibleRepsPerAccount.set(account.sfdc_account_id, allEligibleReps);
-      accountsWithOptions.push(account);
-    }
+    // Calculate LP problem size to determine if batching is needed
+    // Each account × rep pair = 1 binary variable + constraints
+    // JavaScript strings have a max length of ~512MB-1GB
+    // LP problems with > MAX_LP_BINARY_VARIABLES terms can exceed this limit
+    // @see MASTER_LOGIC.mdc §11.10 Scale Limits
+    const problemSize = accounts.length * allEligibleReps.length;
+    const BATCH_SIZE = Math.floor(LP_SCALE_LIMITS.MAX_LP_BINARY_VARIABLES / allEligibleReps.length);
     
-    console.log(`[RO] Residual Optimization: ${accountsWithOptions.length} accounts, ${allEligibleReps.length} reps - LP solver with Big-M penalties`);
+    console.log(`[RO] Residual Optimization: ${accounts.length} accounts, ${allEligibleReps.length} reps = ${problemSize.toLocaleString()} binary vars`);
     
-    // Use HiGHS to optimally assign with Big-M penalties
-    const result = await this.solveWithHiGHS(
-      accountsWithOptions,
-      eligibleRepsPerAccount,
-      4,
-      this.formatPriorityLabel('arr_balance'),
-      'Residual Optimization - Best Available Rep'
-    );
-    
-    // Add cross-region warnings to assigned proposals
-    for (const proposal of result.assigned) {
-      if (!this.isSameGeography(proposal.account, proposal.proposedRep)) {
-        proposal.warnings.push({
-          severity: 'low',
-          type: 'cross_region',
-          accountOrRep: proposal.account.account_name,
-          reason: `Account territory ${proposal.account.sales_territory || 'unknown'} assigned to ${proposal.proposedRep.region || 'unknown'} rep`,
-          details: `No capacity in account's home region`
-        });
+    // If problem is small enough, solve in one shot
+    if (accounts.length <= BATCH_SIZE) {
+      const eligibleRepsPerAccount = new Map<string, SalesRep[]>();
+      for (const account of accounts) {
+        eligibleRepsPerAccount.set(account.sfdc_account_id, allEligibleReps);
       }
+      
+      console.log(`[RO] Solving in single batch (${accounts.length} accounts)`);
+      const result = await this.solveWithHiGHS(
+        accounts,
+        eligibleRepsPerAccount,
+        4,
+        this.formatPriorityLabel('arr_balance'),
+        'Residual Optimization - Best Available Rep'
+      );
+      
+      // Add cross-region warnings
+      for (const proposal of result.assigned) {
+        if (!this.isSameGeography(proposal.account, proposal.proposedRep)) {
+          proposal.warnings.push({
+            severity: 'low',
+            type: 'cross_region',
+            accountOrRep: proposal.account.account_name,
+            reason: `Account territory ${proposal.account.sales_territory || 'unknown'} assigned to ${proposal.proposedRep.region || 'unknown'} rep`,
+            details: `No capacity in account's home region`
+          });
+        }
+      }
+      
+      return result;
     }
     
-    return {
-      assigned: result.assigned,
-      remaining: result.remaining  // Accounts the LP solver couldn't assign (rare)
-    };
+    // Batch processing for large datasets
+    const numBatches = Math.ceil(accounts.length / BATCH_SIZE);
+    console.log(`[RO] Problem too large, splitting into ${numBatches} batches of ~${BATCH_SIZE} accounts each`);
+    
+    let allAssigned: AssignmentProposal[] = [];
+    let allRemaining: Account[] = [];
+    let remainingAccounts = [...accounts];
+    
+    for (let batchNum = 0; batchNum < numBatches && remainingAccounts.length > 0; batchNum++) {
+      const batchAccounts = remainingAccounts.slice(0, BATCH_SIZE);
+      remainingAccounts = remainingAccounts.slice(BATCH_SIZE);
+      
+      console.log(`[RO] Processing batch ${batchNum + 1}/${numBatches}: ${batchAccounts.length} accounts`);
+      
+      const eligibleRepsPerAccount = new Map<string, SalesRep[]>();
+      for (const account of batchAccounts) {
+        eligibleRepsPerAccount.set(account.sfdc_account_id, allEligibleReps);
+      }
+      
+      const result = await this.solveWithHiGHS(
+        batchAccounts,
+        eligibleRepsPerAccount,
+        4,
+        this.formatPriorityLabel('arr_balance'),
+        `Residual Optimization Batch ${batchNum + 1}/${numBatches}`
+      );
+      
+      // Add cross-region warnings
+      for (const proposal of result.assigned) {
+        if (!this.isSameGeography(proposal.account, proposal.proposedRep)) {
+          proposal.warnings.push({
+            severity: 'low',
+            type: 'cross_region',
+            accountOrRep: proposal.account.account_name,
+            reason: `Account territory ${proposal.account.sales_territory || 'unknown'} assigned to ${proposal.proposedRep.region || 'unknown'} rep`,
+            details: `No capacity in account's home region`
+          });
+        }
+      }
+      
+      allAssigned = allAssigned.concat(result.assigned);
+      allRemaining = allRemaining.concat(result.remaining);
+      
+      // Yield to UI between batches
+      await yieldToUI();
+    }
+    
+    console.log(`[RO] Batched assignment complete: ${allAssigned.length} assigned, ${allRemaining.length} remaining`);
+    return { assigned: allAssigned, remaining: allRemaining };
   }
 
   /**

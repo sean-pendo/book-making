@@ -10,3 +10,4 @@ COMMENT ON COLUMN assignment_configuration.balance_intensity IS
 'Balance intensity multiplier: VERY_LIGHT (0.1x) to VERY_HEAVY (10x). Controls balance vs continuity trade-off.';
 
 
+

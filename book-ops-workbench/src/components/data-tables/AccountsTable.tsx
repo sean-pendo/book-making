@@ -11,6 +11,7 @@ import { Search, Download, ChevronUp, ChevronDown, Sparkles, Lock, Unlock, Info,
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
 import { useToast } from '@/hooks/use-toast';
 import { getAccountARR } from '@/_domain';
+import { LockAccountDialog } from '@/components/LockAccountDialog';
 
 interface Account {
   sfdc_account_id: string;
@@ -22,7 +23,6 @@ interface Account {
   parent_id: string | null;
   ultimate_parent_id: string | null;
   ultimate_parent_name: string | null;
-  // DEPRECATED: industry - removed in v1.3.9
   employees: number | null;
   arr: number | null;
   atr: number | null;
@@ -35,7 +35,6 @@ interface Account {
   geo: string | null;
   enterprise_vs_commercial: string | null;
   hq_country: string | null;
-  // DEPRECATED: account_type - removed in v1.3.9
   sales_territory: string | null;
   expansion_tier: string | null;
   initial_sale_tier: string | null;
@@ -47,6 +46,7 @@ interface Account {
   renewal_date: string | null;
   exclude_from_reassignment: boolean | null;
   is_strategic: boolean | null;
+  lock_reason: string | null;
 }
 
 interface AccountsTableProps {
@@ -63,29 +63,45 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const pageSize = 50;
 
+  // State for lock dialog
+  const [lockDialogOpen, setLockDialogOpen] = useState(false);
+  const [accountToLock, setAccountToLock] = useState<Account | null>(null);
+
   const toggleExclusionMutation = useMutation({
-    mutationFn: async ({ accountId, currentValue }: { accountId: string; currentValue: boolean }) => {
-      const { error } = await supabase
-        .from('accounts')
-        .update({ exclude_from_reassignment: !currentValue })
-        .eq('sfdc_account_id', accountId)
-        .eq('build_id', buildId);
+    mutationFn: async ({ accountId, currentValue, account, lockReason }: { accountId: string; currentValue: boolean; account: Account; lockReason?: string | null }) => {
+      const isLocking = !currentValue;
+      
+      // Use the RPC function for proper lock/unlock handling
+      const { error } = await supabase.rpc('toggle_account_lock', {
+        p_account_id: accountId,
+        p_build_id: buildId,
+        p_is_locking: isLocking,
+        p_owner_id: account.owner_id || null,
+        p_owner_name: account.owner_name || null,
+        p_lock_reason: isLocking ? lockReason : null
+      });
       
       if (error) throw error;
     },
-    onMutate: async ({ accountId, currentValue }) => {
+    onMutate: async ({ accountId, currentValue, lockReason }) => {
       // Cancel outgoing refetches
       await queryClient.cancelQueries({ queryKey: ['accounts-detail', buildId] });
       
       // Snapshot previous value
       const previousData = queryClient.getQueryData(['accounts-detail', buildId]);
       
+      const isLocking = !currentValue;
+      
       // Optimistically update the cache
       queryClient.setQueryData(['accounts-detail', buildId], (old: any) => {
         if (!old) return old;
         return old.map((acc: Account) => 
           acc.sfdc_account_id === accountId 
-            ? { ...acc, exclude_from_reassignment: !currentValue }
+            ? { 
+                ...acc, 
+                exclude_from_reassignment: isLocking,
+                lock_reason: isLocking ? (lockReason || null) : null
+              }
             : acc
         );
       });
@@ -158,7 +174,6 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
     },
   });
 
-  // DEPRECATED: account_type and industry filters - removed in v1.3.9
   const filterConfigs: FilterConfig[] = [
     {
       key: 'geo',
@@ -248,7 +263,7 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
           is_customer, geo, enterprise_vs_commercial, hq_country,
           sales_territory, expansion_tier, initial_sale_tier,
           cre_risk, cre_status, risk_flag, renewal_date, 
-          exclude_from_reassignment, is_strategic
+          exclude_from_reassignment, is_strategic, lock_reason
         `)
         .eq('build_id', buildId);
 
@@ -257,7 +272,6 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
       }
 
       // Apply filters
-      // DEPRECATED: account_type and industry filters - removed in v1.3.9
       if (filters.geo) {
         query = query.eq('geo', filters.geo as string);
       }
@@ -523,7 +537,6 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                       {getSortIcon('sales_territory')}
                     </div>
                   </TableHead>
-                  {/* DEPRECATED: account_type and industry columns - removed in v1.3.9 */}
                   <TableHead 
                     className="cursor-pointer hover:bg-muted/50 select-none"
                     onClick={() => handleSort('employees')}
@@ -602,10 +615,19 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                toggleExclusionMutation.mutate({
-                                  accountId: account.sfdc_account_id,
-                                  currentValue: account.exclude_from_reassignment || false
-                                });
+                                const isCurrentlyLocked = account.exclude_from_reassignment || false;
+                                if (isCurrentlyLocked) {
+                                  // Unlock immediately (no dialog needed)
+                                  toggleExclusionMutation.mutate({
+                                    accountId: account.sfdc_account_id,
+                                    currentValue: true,
+                                    account: account
+                                  });
+                                } else {
+                                  // Open dialog for locking
+                                  setAccountToLock(account);
+                                  setLockDialogOpen(true);
+                                }
                               }}
                               disabled={toggleExclusionMutation.isPending}
                               className="h-8 w-8 p-0"
@@ -617,12 +639,20 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                               )}
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>
-                            <p>
-                              {account.exclude_from_reassignment
-                                ? 'Click to allow reassignment'
-                                : 'Click to lock and keep current owner'}
-                            </p>
+                          <TooltipContent className="max-w-xs">
+                            {account.exclude_from_reassignment ? (
+                              <div className="space-y-1">
+                                <p className="font-medium">Locked - Account will not be reassigned</p>
+                                {account.lock_reason ? (
+                                  <p className="text-sm text-muted-foreground italic">"{account.lock_reason}"</p>
+                                ) : (
+                                  <p className="text-xs text-muted-foreground italic">(no reason provided)</p>
+                                )}
+                                <p className="text-xs text-muted-foreground">Click to unlock</p>
+                              </div>
+                            ) : (
+                              <p>Click to lock and keep with current owner</p>
+                            )}
                           </TooltipContent>
                         </Tooltip>
                       </TableCell>
@@ -731,7 +761,6 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
                           {!account.sales_territory && !account.geo && '-'}
                         </div>
                       </TableCell>
-                      {/* DEPRECATED: account_type and industry cells - removed in v1.3.9 */}
                       <TableCell>{formatEmployees(account.employees)}</TableCell>
                       <TableCell className="font-medium">
                         {formatCurrency(account.arr)}
@@ -812,6 +841,29 @@ export const AccountsTable = ({ buildId }: AccountsTableProps) => {
         )}
       </CardContent>
       </Card>
+
+      {/* Lock Account Dialog */}
+      <LockAccountDialog
+        open={lockDialogOpen}
+        onOpenChange={(open) => {
+          setLockDialogOpen(open);
+          if (!open) setAccountToLock(null);
+        }}
+        accountName={accountToLock?.account_name || ''}
+        onConfirm={(reason) => {
+          if (accountToLock) {
+            toggleExclusionMutation.mutate({
+              accountId: accountToLock.sfdc_account_id,
+              currentValue: false, // We're locking, so current value is "unlocked" (false)
+              account: accountToLock,
+              lockReason: reason
+            });
+          }
+          setLockDialogOpen(false);
+          setAccountToLock(null);
+        }}
+        isLoading={toggleExclusionMutation.isPending}
+      />
     </>
   );
 };

@@ -129,5 +129,24 @@ export const loadDataImportState = {
 // Expose clear function globally for debugging
 if (typeof window !== 'undefined') {
   (window as any).clearDataImportState = clearDataImportState;
+  
+  // Expose syncIsCustomerField for manual re-sync
+  // Usage: window.syncIsCustomerField('your-build-id')
+  (window as any).syncIsCustomerField = async (buildId: string) => {
+    if (!buildId) {
+      console.error('❌ Usage: window.syncIsCustomerField("your-build-id")');
+      return;
+    }
+    console.log(`🔄 Manually syncing is_customer field for build ${buildId}...`);
+    try {
+      const { BatchImportService } = await import('@/services/batchImportService');
+      await BatchImportService.syncIsCustomerField(buildId);
+      console.log('✅ is_customer sync completed! Refresh the page to see updated counts.');
+    } catch (error) {
+      console.error('❌ Sync failed:', error);
+    }
+  };
+  
   console.log('🔧 Debug: Use window.clearDataImportState() to reset import state');
+  console.log('🔧 Debug: Use window.syncIsCustomerField(buildId) to resync is_customer field');
 }

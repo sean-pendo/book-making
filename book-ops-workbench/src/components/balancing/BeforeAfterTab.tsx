@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
-import { MapPin, Users, Layers, RefreshCw, AlertTriangle, BarChart3 } from 'lucide-react';
+import { MapPin, Layers, RefreshCw, AlertTriangle, BarChart3 } from 'lucide-react';
 import { useMetricsComparison } from '@/hooks/useBuildData';
 import { SuccessMetricTile } from './SuccessMetricTile';
 import { BeforeAfterDistributionChart, type BeforeAfterRepData } from './BeforeAfterDistributionChart';
@@ -18,7 +18,7 @@ interface BeforeAfterTabProps {
  * Before vs After Tab
  * 
  * Shows comparison between original (owner_id) and proposed (new_owner_id) assignments:
- * - Row 1: Success metric tiles (Geo Alignment, Team Alignment, Coverage, Continuity)
+ * - Row 1: Success metric tiles (Geo Alignment, Team Alignment, Continuity)
  * - Row 2: ARR/ATR/Pipeline distribution with before/after ghost bars
  * - Row 3: Account count distribution with before/after
  */
@@ -103,6 +103,7 @@ export const BeforeAfterTab: React.FC<BeforeAfterTabProps> = ({ buildId }) => {
         repId: afterRep.repId,
         repName: afterRep.repName,
         region: afterRep.region,
+        // Counts
         beforeCustomers: beforeRep?.customerAccounts || 0,
         beforeProspects: beforeRep?.prospectAccounts || 0,
         beforeParentCustomers: beforeRep?.parentCustomers || 0,
@@ -116,6 +117,26 @@ export const BeforeAfterTab: React.FC<BeforeAfterTabProps> = ({ buildId }) => {
         afterParentProspects: afterRep.parentProspects,
         afterChildProspects: afterRep.childProspects,
         isStrategicRep: afterRep.isStrategicRep,
+        // Tier breakdown
+        beforeTier1: beforeRep?.tier1Accounts || 0,
+        beforeTier2: beforeRep?.tier2Accounts || 0,
+        beforeTier3: beforeRep?.tier3Accounts || 0,
+        beforeTier4: beforeRep?.tier4Accounts || 0,
+        beforeTierNA: beforeRep?.tierNAAccounts || 0,
+        afterTier1: afterRep.tier1Accounts || 0,
+        afterTier2: afterRep.tier2Accounts || 0,
+        afterTier3: afterRep.tier3Accounts || 0,
+        afterTier4: afterRep.tier4Accounts || 0,
+        afterTierNA: afterRep.tierNAAccounts || 0,
+        // CRE Risk breakdown
+        beforeCreNone: beforeRep?.creNoneAccounts || 0,
+        beforeCreLow: beforeRep?.creLowAccounts || 0,
+        beforeCreMedium: beforeRep?.creMediumAccounts || 0,
+        beforeCreHigh: beforeRep?.creHighAccounts || 0,
+        afterCreNone: afterRep.creNoneAccounts || 0,
+        afterCreLow: afterRep.creLowAccounts || 0,
+        afterCreMedium: afterRep.creMediumAccounts || 0,
+        afterCreHigh: afterRep.creHighAccounts || 0,
       };
     });
   }, [comparison]);
@@ -226,31 +247,6 @@ export const BeforeAfterTab: React.FC<BeforeAfterTabProps> = ({ buildId }) => {
           tooltipTitle="Team Tier Alignment"
           tooltipDescription="Account employee tier (SMB/Growth/MM/ENT) matches rep's team tier."
           isNA={!hasTeamAlignmentData}
-        />
-
-        {/* Coverage */}
-        <SuccessMetricTile
-          label="Coverage"
-          icon={Users}
-          iconBgColor="bg-blue-500/20"
-          iconColor="text-blue-600 dark:text-blue-400"
-          beforeValue={original.ownerCoverage.coverageRate / 100}
-          afterValue={proposed.ownerCoverage.coverageRate / 100}
-          showBeforeAfter={true}
-          tooltipTitle="Account Coverage"
-          tooltipDescription="Percentage of accounts with a valid assigned owner."
-          tooltipExtra={
-            <div className="text-xs space-y-1">
-              <div className="flex justify-between">
-                <span>With Owner:</span>
-                <span className="text-emerald-500">{proposed.ownerCoverage.withOwner.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Orphaned:</span>
-                <span className="text-red-500">{proposed.ownerCoverage.orphaned.toLocaleString()}</span>
-              </div>
-            </div>
-          }
         />
 
         {/* Continuity */}

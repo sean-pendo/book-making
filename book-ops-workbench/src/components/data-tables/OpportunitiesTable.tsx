@@ -19,7 +19,6 @@ interface Opportunity {
   owner_id: string | null;
   available_to_renew: number | null;
   net_arr: number | null;
-  // DEPRECATED: stage, close_date, created_date - removed in v1.3.9
   renewal_event_date: string | null;
   cre_status: string | null;
 }
@@ -36,7 +35,6 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const pageSize = 50;
 
-  // DEPRECATED: stage filter - removed in v1.3.9
   const filterConfigs: FilterConfig[] = [
     {
       key: 'cre_status',
@@ -56,7 +54,6 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
       options: [], // Will be populated from data
       placeholder: 'All types'
     },
-    // DEPRECATED: close_date filters - removed in v1.3.9
     {
       key: 'atr_min',
       label: 'Min ATR ($)',
@@ -117,14 +114,12 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
       }
 
       // Apply filters
-      // DEPRECATED: stage filter - removed in v1.3.9
       if (filters.cre_status) {
         oppQuery = oppQuery.ilike('cre_status', `%${filters.cre_status}%`);
       }
       if (filters.opportunity_type) {
         oppQuery = oppQuery.eq('opportunity_type', filters.opportunity_type as string);
       }
-      // DEPRECATED: close_date filters - removed in v1.3.9
       if (filters.atr_min) {
         oppQuery = oppQuery.gte('available_to_renew', filters.atr_min as number);
       }
@@ -134,7 +129,6 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
 
       // Apply sorting at database level
       const ascending = sortDirection === 'asc';
-      // DEPRECATED: stage, close_date, created_date sorting - removed in v1.3.9
       if (sortField === 'opportunity_name' || sortField === 'owner_name' || 
           sortField === 'cre_status') {
         oppQuery = oppQuery.order(sortField as string, { ascending, nullsFirst: false });
@@ -217,8 +211,6 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
       return dateString;
     }
   };
-
-  // DEPRECATED: getStageColor - stage field removed in v1.3.9
 
   const getCREStatusBadge = (cre_status: string | null) => {
     if (!cre_status) return <Badge variant="secondary">No Status</Badge>;
@@ -309,7 +301,6 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
                     {getSortIcon('available_to_renew')}
                   </div>
                 </TableHead>
-                {/* DEPRECATED: stage and timeline (close_date/created_date) columns - removed in v1.3.9 */}
                 <TableHead 
                   className="cursor-pointer hover:bg-muted/50 select-none"
                   onClick={() => handleSort('cre_status')}
@@ -381,7 +372,6 @@ export const OpportunitiesTable = ({ buildId }: OpportunitiesTableProps) => {
                           </div>
                         </div>
                       </TableCell>
-                      {/* DEPRECATED: stage and timeline cells - removed in v1.3.9 */}
                       <TableCell>
                         <div className="flex flex-col gap-1">
                           {opp.renewal_event_date && (

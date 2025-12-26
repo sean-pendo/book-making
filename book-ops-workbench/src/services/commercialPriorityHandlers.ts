@@ -37,11 +37,6 @@ export function calculateTop10PercentThreshold(accounts: Account[]): number {
   return threshold;
 }
 
-// DEPRECATED: shouldRouteToRenewalSpecialist - removed in v1.3.9
-// DEPRECATED: getEligibleRepsForAccount - removed in v1.3.9
-// DEPRECATED: RSWorkloadMetrics - removed in v1.3.9
-// DEPRECATED: calculateRSWorkloadMetrics - removed in v1.3.9
-
 /**
  * EMEA Sub-Region Mapping
  * Maps country codes to EMEA sub-regions

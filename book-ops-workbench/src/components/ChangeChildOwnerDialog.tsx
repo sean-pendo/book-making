@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getAccountARR } from '@/_domain';
 import {
   Dialog,
   DialogContent,
@@ -180,7 +181,7 @@ export const ChangeChildOwnerDialog = ({
                   <p className="text-sm font-medium">Child Account</p>
                   <p className="text-lg font-semibold">{childAccount.account_name}</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    ARR: {formatCurrency(childAccount.arr || 0)}
+                    ARR: {formatCurrency(getAccountARR(childAccount))}
                   </p>
                 </div>
                 <Badge variant={childAccount.is_customer ? "default" : "outline"}>

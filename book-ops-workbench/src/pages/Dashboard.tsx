@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, PlayCircle, Eye, Trash2, Edit3, Calendar, User, Clock, Target, Copy } from 'lucide-react';
+import { SUPABASE_LIMITS } from '@/_domain';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -213,10 +214,10 @@ const Dashboard = () => {
       const userId = currentUser.data.user?.id;
       if (!userId) throw new Error('User not authenticated');
 
-      // Helper to fetch ALL rows from a table (paginated to bypass 1000 row limit)
+      // Helper to fetch ALL rows from a table (paginated using SSOT page size)
       const fetchAllRows = async (table: string, buildId: string) => {
         const allRows: any[] = [];
-        const pageSize = 1000;
+        const pageSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
         let offset = 0;
         let hasMore = true;
 
@@ -240,8 +241,8 @@ const Dashboard = () => {
         return allRows;
       };
 
-      // Helper to insert rows in batches (Supabase has limits on insert size)
-      const insertInBatches = async (table: string, rows: any[], batchSize = 500) => {
+      // Helper to insert rows in batches - uses SSOT limit from @/_domain
+      const insertInBatches = async (table: string, rows: any[], batchSize = SUPABASE_LIMITS.MAX_ROWS_PER_INSERT) => {
         for (let i = 0; i < rows.length; i += batchSize) {
           const batch = rows.slice(i, i + batchSize);
           const { error } = await supabase.from(table).insert(batch);
@@ -540,8 +541,8 @@ const Dashboard = () => {
         {canCreateBuild && (
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="lg" className="btn-gradient hover-scale shadow-lg flex items-center justify-center font-semibold">
-                <Plus className="h-5 w-5 mr-2" />
+              <Button size="lg" className="btn-gradient hover-scale shadow-lg flex items-center gap-2 font-semibold">
+                <Plus className="h-5 w-5" />
                 <span>New Build</span>
               </Button>
             </DialogTrigger>

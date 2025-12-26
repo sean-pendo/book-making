@@ -264,8 +264,10 @@ export const validateMappedData = (
           }
         } else if (schemaField.toLowerCase().includes('customer') || 
                    (schemaField.toLowerCase().includes('is_') && schemaField !== 'is_parent') ||
-                   schemaField.toLowerCase().includes('risk')) {
+                   schemaField.toLowerCase().includes('risk') ||
+                   schemaField === 'exclude_from_reassignment') {
           // Handle boolean fields (exclude is_parent as it's calculated from ultimate_parent_id)
+          // exclude_from_reassignment is explicit since it doesn't match the other patterns
           const lowerValue = rawValue.toString().toLowerCase().trim();
           processedValue = ['true', 'yes', 'y', '1'].includes(lowerValue);
         } else if (schemaField.toLowerCase().includes('date')) {
@@ -678,18 +680,15 @@ export const transformAccountData = (mappedData: any[], buildId: string) => {
        sales_territory: row.sales_territory || null,
        geo: row.geo || (row.sales_territory ? autoMapTerritoryToRegion(row.sales_territory) : null),
       employees: toNumber(row.employees),
-      // DEPRECATED: ultimate_parent_employee_size - removed in v1.3.9
       is_customer: toBoolean(row.is_customer),
       arr: toNumber(row.arr),
       atr: toNumber(row.atr),
       renewal_date: toDateString(row.renewal_date),
       owner_change_date: toDateString(row.owner_change_date) || toDateString(row.edit_date) || null,
       expansion_tier: row.expansion_tier || null,
-      // DEPRECATED: account_type, industry, expansion_score, initial_sale_score - removed in v1.3.9
       enterprise_vs_commercial: row.enterprise_vs_commercial || null,
       initial_sale_tier: row.initial_sale_tier || null,
       has_customer_hierarchy: toBoolean(row.has_customer_hierarchy),
-      // DEPRECATED: in_customer_hierarchy, include_in_emea - removed in v1.3.9
        // Calculate is_parent based on ultimate_parent_id (accounting for self-referencing pattern)
        // Parent accounts are: (1) ultimate_parent_id is NULL/empty OR (2) Self-referencing (sfdc_account_id = ultimate_parent_id)
        is_parent: (() => {
@@ -699,7 +698,6 @@ export const transformAccountData = (mappedData: any[], buildId: string) => {
          const isSelfReferencing = ultimateParentId && sfdcAccountId && ultimateParentId === sfdcAccountId;
          return isNullOrEmpty || isSelfReferencing;
        })(),
-      // DEPRECATED: is_2_0, inbound_count, idr_count - removed in v1.3.9
       owners_lifetime_count: toNumber(row.owners_lifetime_count),
       risk_flag: toBoolean(row.risk_flag),
       cre_risk: toBoolean(row.cre_risk),
@@ -765,7 +763,6 @@ export const transformOpportunityData = (mappedData: any[], buildId: string) => 
     };
     
     // The data is already transformed through field mapping, so use it directly
-    // DEPRECATED: stage, close_date, created_date - removed in v1.3.9
     return {
       sfdc_opportunity_id: row.sfdc_opportunity_id,
       sfdc_account_id: row.sfdc_account_id,
@@ -812,16 +809,19 @@ export const transformSalesRepData = (mappedData: any[], buildId: string) => {
   return mappedData.map(row => {
     console.log('Transform sales rep row:', row); // Debug logging
     // The data is already transformed through field mapping, so use it directly
-    // DEPRECATED: manager - removed in v1.3.9, use flm/slm instead
     return {
       rep_id: row.rep_id,
       name: row.name,
-      team: row.team || null,
       region: row.region || null,
       flm: row.flm || null,
       slm: row.slm || null,
+      // Team tier for Commercial mode alignment (SMB, Growth, MM, ENT)
+      team_tier: row.team_tier || null,
       // Strategic rep flag - can be imported or set manually in UI
       is_strategic_rep: toBoolean(row.is_strategic_rep || row.is_strategic),
+      // PE firms - comma-separated list of PE firm names this rep handles
+      // See MASTER_LOGIC.mdc §10.7 for routing rules
+      pe_firms: row.pe_firms || null,
       build_id: buildId
     };
   });
@@ -831,7 +831,7 @@ export const transformSalesRepData = (mappedData: any[], buildId: string) => {
 
 // Determine optimal import strategy based on data size
 export const getOptimalImportStrategy = (dataSize: number, fileSize?: number) => {
-  const BATCH_THRESHOLD = 100; // Lower threshold - use batch processing for 100+ records to avoid timeouts
+  const BATCH_THRESHOLD = 10; // Very low threshold - batch processing is faster and more reliable
   const STREAMING_THRESHOLD = 10 * 1024 * 1024; // 10MB
   
   return {
@@ -1278,26 +1278,8 @@ export const importSalesRepsToDatabase = async (
   const transformedData = transformSalesRepData(csvData, buildId);
   const strategy = getOptimalImportStrategy(transformedData.length);
 
-  // STEP 1: Delete existing sales reps for this build
-  console.log(`🗑️ Deleting existing sales reps for build ${buildId}...`);
-  const { error: deleteError } = await supabase
-    .from('sales_reps')
-    .delete()
-    .eq('build_id', buildId);
-  
-  if (deleteError) {
-    console.error('❌ Failed to delete existing sales reps:', deleteError);
-    return {
-      success: false,
-      recordsProcessed: 0,
-      recordsImported: 0,
-      errors: [`Failed to clear existing sales reps: ${deleteError.message}`]
-    };
-  }
-  
-  console.log(`✅ Cleared existing sales reps. Now importing fresh data...`);
-
-  // Use batch processing for large datasets
+  // Use batch processing for datasets (threshold is now 10 records)
+  // Batch import handles its own delete step for reliability
   if (strategy.useBatchImport) {
     console.log(`📦 Using batch import strategy for ${transformedData.length} sales reps (pure INSERT)`);
     
@@ -1323,7 +1305,25 @@ export const importSalesRepsToDatabase = async (
     };
   }
 
-  // Fallback to individual processing for smaller datasets
+  // Fallback to individual processing for smaller datasets (< 10 records)
+  // Delete existing records first
+  console.log(`🗑️ Deleting existing sales reps for build ${buildId}...`);
+  const { error: deleteError } = await supabase
+    .from('sales_reps')
+    .delete()
+    .eq('build_id', buildId);
+  
+  if (deleteError) {
+    console.error('❌ Failed to delete existing sales reps:', deleteError);
+    return {
+      success: false,
+      recordsProcessed: 0,
+      recordsImported: 0,
+      errors: [`Failed to clear existing sales reps: ${deleteError.message}`]
+    };
+  }
+  console.log(`✅ Cleared existing sales reps. Now importing...`);
+
   const total = transformedData.length;
   let imported = 0;
   const errors: string[] = [];
@@ -1334,14 +1334,24 @@ export const importSalesRepsToDatabase = async (
     for (let i = 0; i < transformedData.length; i++) {
       const record = transformedData[i];
       
+      // Log first record to debug what's being sent
+      if (i === 0) {
+        console.log(`🔍 First record being inserted:`, JSON.stringify(record, null, 2));
+        console.log(`🔍 Fields:`, Object.keys(record));
+      }
+      
       try {
-        const { error, data } = await supabase
+        // Don't use .select() - it can cause PGRST204 errors when RLS prevents returning data
+        const { error } = await supabase
           .from('sales_reps')
-          .insert(record)
-          .select('id');
+          .insert(record);
 
         if (error) {
           console.error(`Record ${i + 1} error:`, error);
+          console.error(`Record ${i + 1} details - code: ${error.code}, hint: ${error.hint}, details: ${error.details}, message: ${error.message}`);
+          if (i < 3) {
+            console.error(`Record ${i + 1} data:`, JSON.stringify(record, null, 2));
+          }
           errors.push(`Record ${i + 1} (Rep ID: ${record.rep_id}): ${error.message}`);
         } else {
           imported++;

@@ -232,14 +232,27 @@ export default function ManagerHierarchyView({
 
       const repIds = salesReps.map(rep => rep.rep_id);
       
-      const { data, error } = await supabase
+      // Fetch opportunities with new_owner_id assigned to these reps
+      const { data: assignedOpps, error: assignedError } = await supabase
         .from('opportunities')
         .select('*')
         .eq('build_id', buildId)
         .in('new_owner_id', repIds);
 
-      if (error) throw error;
-      return data;
+      if (assignedError) throw assignedError;
+
+      // Also fetch opportunities where new_owner_id is null but owner_id matches (unchanged)
+      const { data: unchangedOpps, error: unchangedError } = await supabase
+        .from('opportunities')
+        .select('*')
+        .eq('build_id', buildId)
+        .is('new_owner_id', null)
+        .in('owner_id', repIds);
+
+      if (unchangedError) throw unchangedError;
+
+      // Combine both sets
+      return [...(assignedOpps || []), ...(unchangedOpps || [])];
     },
     enabled: !!salesReps && salesReps.length > 0,
   });
@@ -445,7 +458,12 @@ export default function ManagerHierarchyView({
   });
 
   const getRepAccounts = (repId: string) => {
-    return accounts?.filter(acc => acc.new_owner_id === repId) || [];
+    // Must match the same filter used in data fetching (line 168):
+    // new_owner_id = repId OR (owner_id = repId AND new_owner_id IS NULL)
+    return accounts?.filter(acc => 
+      acc.new_owner_id === repId || 
+      (acc.owner_id === repId && !acc.new_owner_id)
+    ) || [];
   };
 
   // Build hierarchical account structure for a rep (matching SalesRepDetailDialog pattern)
@@ -663,9 +681,12 @@ export default function ManagerHierarchyView({
   const getPendingProposalsForRep = (repId: string): { count: number; accounts: string[] } => {
     if (!accountReassignments || !accounts) return { count: 0, accounts: [] };
     
-    // Get all accounts for this rep
+    // Get all accounts for this rep (must match getRepAccounts filter)
     const repAccountIds = new Set(
-      accounts.filter(a => a.new_owner_id === repId).map(a => a.sfdc_account_id)
+      accounts.filter(a => 
+        a.new_owner_id === repId || 
+        (a.owner_id === repId && !a.new_owner_id)
+      ).map(a => a.sfdc_account_id)
     );
     
     // Find pending reassignments for these accounts
@@ -2105,7 +2126,15 @@ export default function ManagerHierarchyView({
                     <div className="bg-muted/50 p-4 rounded-lg space-y-2">
                       <div className="flex justify-between">
                         <span className="text-sm text-muted-foreground">Account</span>
-                        <span className="font-medium">{reassigningAccount.account_name}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{reassigningAccount.account_name}</span>
+                          {isParentAccount(reassigningAccount) && (
+                            <Badge variant="secondary" className="text-xs">Parent</Badge>
+                          )}
+                          {reassigningAccount.ultimate_parent_id && (
+                            <Badge variant="outline" className="text-xs">Child</Badge>
+                          )}
+                        </div>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-sm text-muted-foreground">Current Owner</span>
@@ -2120,6 +2149,22 @@ export default function ManagerHierarchyView({
                         <span className="font-medium">{formatCurrency(getAccountARR(reassigningAccount))}</span>
                       </div>
                     </div>
+
+                    {/* Hierarchy awareness note */}
+                    {(isParentAccount(reassigningAccount) || reassigningAccount.ultimate_parent_id) && (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                        <div className="flex gap-2">
+                          <AlertTriangle className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                          <div className="text-sm text-blue-700">
+                            {isParentAccount(reassigningAccount) ? (
+                              <p><strong>Parent Account:</strong> This account has child accounts. Proposing a reassignment will not automatically include children. RevOps may need to cascade the change.</p>
+                            ) : (
+                              <p><strong>Child Account:</strong> This account belongs to a parent hierarchy. Reassigning it separately may create a hierarchy split (different owners for parent and child).</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="space-y-2">
                       <Label>New Owner (Your Hierarchy Only)</Label>

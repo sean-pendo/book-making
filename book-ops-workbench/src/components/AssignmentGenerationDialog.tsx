@@ -23,7 +23,7 @@ import {
   Bell,
   PartyPopper
 } from "lucide-react";
-import type { AssignmentProgress } from '@/services/enhancedAssignmentService';
+import type { AssignmentProgress } from '@/types/assignment';
 
 interface AssignmentGenerationDialogProps {
   open: boolean;
@@ -295,14 +295,16 @@ export const AssignmentGenerationDialog: React.FC<AssignmentGenerationDialogProp
             {getStageIcon()}
             Assignment Generation
           </DialogTitle>
-          <DialogDescription>
-            Real-time progress of the assignment generation process
-            {progress && progress.totalAccounts > 500 && (
-              <div className="mt-1 text-amber-600 text-xs flex items-center gap-1">
-                <AlertTriangle className="h-3 w-3" />
-                Large dataset ({progress.totalAccounts.toLocaleString()} accounts) - optimization may take several minutes
-              </div>
-            )}
+          <DialogDescription asChild>
+            <div>
+              Real-time progress of the assignment generation process
+              {progress && progress.totalAccounts > 500 && (
+                <div className="mt-1 text-amber-600 text-xs flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  Large dataset ({progress.totalAccounts.toLocaleString()} accounts) - optimization may take several minutes
+                </div>
+              )}
+            </div>
           </DialogDescription>
         </DialogHeader>
 
@@ -555,20 +557,7 @@ export const AssignmentGenerationDialog: React.FC<AssignmentGenerationDialogProp
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  // Attempt to cancel the generation process
-                  try {
-                    const { EnhancedAssignmentService } = require('../services/enhancedAssignmentService');
-                    const service = EnhancedAssignmentService.getInstance();
-                    if (service && typeof service.cancelGeneration === 'function') {
-                      service.cancelGeneration();
-                    }
-                  } catch (error) {
-                    console.warn('Could not cancel assignment service:', error);
-                  }
-                  // Call the parent cancel handler
-                  onCancel();
-                }}
+                onClick={() => onCancel()}
                 className="flex-1"
               >
                 Cancel Generation

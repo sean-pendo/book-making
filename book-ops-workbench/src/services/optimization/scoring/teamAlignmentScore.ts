@@ -55,8 +55,8 @@ export function teamAlignmentScore(
   // Determine account tier from employee count
   const accountTier = classifyTeamTier(account.employees);
 
-  // Determine rep tier (prefer team_tier, fallback to team)
-  const repTier = rep.team_tier || rep.team;
+  // Determine rep tier from team_tier field only (team field deprecated in v1.4.1)
+  const repTier = rep.team_tier;
 
   // Get tier indices
   const accountIdx = getTierIndex(accountTier);
@@ -106,7 +106,7 @@ export function explainTeamAlignmentScore(
   params: LPTeamParams
 ): string {
   const accountTier = classifyTeamTier(account.employees);
-  const repTier = rep.team_tier || rep.team;
+  const repTier = rep.team_tier;
 
   const accountIdx = getTierIndex(accountTier);
   const repIdx = getTierIndex(repTier);

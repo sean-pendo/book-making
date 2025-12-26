@@ -5,7 +5,7 @@ globs: **/*
 # Project Context: Book Builder (QA Phase)
 
 ## 1. Project Overview
-**Book Builder** is a territory balancing and assignment tool for Sales Operations. It allows RevOps to import data (Accounts, Reps), define rules, and generate fair account assignments based on ARR, geography, and other metrics.
+**Book Builder** is a book balancing and account assignment tool for Sales Operations. It allows RevOps to import data (Accounts, Reps), define rules, and generate fair account assignments based on ARR, workload, continuity, team tier, and geography.
 
 ## 2. Tech Stack
 - **Frontend**: React (Vite), TypeScript, Shadcn UI, Tailwind CSS.

@@ -22,7 +22,6 @@ interface BuildInfo {
 }
 
 interface DataCharacteristics {
-  // DEPRECATED: hasRenewalSpecialists, renewalSpecialistCount - removed in v1.3.9
   hasPEAccounts: boolean;
   hasTeamAlignmentData: boolean;  // employees in accounts + team tier values in reps
   peAccountCount: number;
@@ -131,7 +130,6 @@ async function getBuildInfo(buildId: string): Promise<BuildInfo> {
  */
 async function getDataCharacteristics(buildId: string): Promise<DataCharacteristics> {
   // Run all checks in parallel for performance
-  // DEPRECATED: is_renewal_specialist check removed in v1.3.9
   const [peResult, employeesResult, teamResult] = await Promise.all([
     // Check for PE accounts
     supabase
@@ -166,7 +164,6 @@ async function getDataCharacteristics(buildId: string): Promise<DataCharacterist
   const hasTeamAlignmentData = employeesCount > 0 && teamCount > 0;
 
   return {
-    // DEPRECATED: hasRenewalSpecialists, renewalSpecialistCount - removed in v1.3.9
     hasPEAccounts: peCount > 0,
     hasTeamAlignmentData,
     peAccountCount: peCount,

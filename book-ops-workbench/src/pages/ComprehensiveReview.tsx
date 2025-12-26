@@ -13,7 +13,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useBuildDataRelationships } from '@/hooks/useBuildData';
 import { FLMDetailDialog } from '@/components/FLMDetailDialog';
 import SendToManagerDialog from '@/components/SendToManagerDialog';
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, SUPABASE_LIMITS } from '@/_domain';
 
 interface ComprehensiveReviewProps {
   buildId?: string;
@@ -142,7 +142,7 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
         .eq('is_parent', true);
       
       const totalCount = count || 0;
-      const pageSize = 1000;
+      const pageSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
       const pages = Math.ceil(totalCount / pageSize);
       
       // Fetch all pages in parallel
@@ -270,7 +270,6 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       const currentOwnerId = account.new_owner_id || account.owner_id;
       const currentOwnerRep = salesRepsMap.get(currentOwnerId);
       const slm = currentOwnerRep?.slm || 'Unassigned SLM';
-      // DEPRECATED: manager fallback removed in v1.3.9 - use flm only
       const flm = currentOwnerRep?.flm || 'Unassigned FLM';
       
       if (!acc[slm]) {
@@ -377,7 +376,6 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       if (childOwnerId !== parentOwnerId) {
         const childOwnerRep = salesRepsMap.get(childOwnerId);
         const slm = childOwnerRep?.slm || 'Unassigned SLM';
-        // DEPRECATED: manager fallback removed in v1.3.9 - use flm only
         const flm = childOwnerRep?.flm || 'Unassigned FLM';
         
         if (portfoliosBySLM[slm]?.[flm]) {
@@ -443,7 +441,6 @@ export const ComprehensiveReview = ({ buildId: propBuildId }: ComprehensiveRevie
       const currentOwnerId = account.new_owner_id || account.owner_id;
       const currentOwnerRep = salesRepsMap.get(currentOwnerId);
       const slm = currentOwnerRep?.slm || 'Unassigned SLM';
-      // DEPRECATED: manager fallback removed in v1.3.9 - use flm only
       const flm = currentOwnerRep?.flm || 'Unassigned FLM';
       
       if (!acc[slm]) {

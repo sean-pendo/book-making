@@ -160,21 +160,7 @@ const Settings = () => {
             </div>
           </div>
           
-          {profile?.email?.endsWith('@pendo.io') ? (
-            <div className="pt-2 border-t">
-              <p className="text-sm text-muted-foreground mb-3">
-                Make sure you've added the Book Builder app to your Slack workspace to receive notifications.
-              </p>
-              <Button 
-                variant="outline" 
-                className="gap-2"
-                onClick={() => window.open('https://slack.com/apps', '_blank')}
-              >
-                <MessageSquare className="h-4 w-4" />
-                Open Slack App Directory
-              </Button>
-            </div>
-          ) : (
+          {!profile?.email?.endsWith('@pendo.io') && (
             <div className="pt-2 border-t">
               <p className="text-sm text-amber-600">
                 Note: Slack notifications are currently only available for @pendo.io email addresses. 

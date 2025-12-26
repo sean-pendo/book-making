@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getAccountARR } from '@/_domain';
 import {
   Dialog,
   DialogContent,
@@ -453,8 +454,8 @@ export const UnassignedAccountsModal = ({
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex flex-col items-end">
-                          <span className={(account.calculated_arr || 0) > 0 ? "text-green-600" : "text-muted-foreground"}>
-                            {formatCurrency(account.calculated_arr || 0)}
+                          <span className={getAccountARR(account) > 0 ? "text-green-600" : "text-muted-foreground"}>
+                            {formatCurrency(getAccountARR(account))}
                           </span>
                           {!account.is_customer && getNetARR(account.sfdc_account_id) > 0 && (
                             <span className={`text-xs ${getNetARRColorClass(getNetARR(account.sfdc_account_id))}`}>

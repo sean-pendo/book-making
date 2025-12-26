@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Search, Download, Users, ChevronUp, ChevronDown, ChevronRight, Layers } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { TableFilters, type FilterConfig, type FilterValues } from '@/components/ui/table-filters';
@@ -521,12 +522,39 @@ export const SalesRepsTable = ({ buildId, onDataRefresh }: SalesRepsTableProps) 
 
   const getRiskBadge = (creCount: number) => {
     const level = getCRERiskLevel(creCount);
-    switch (level) {
-      case 'none': return <Badge variant="secondary">No CRE Risk</Badge>;
-      case 'low': return <Badge variant="outline">Low CRE Risk</Badge>;
-      case 'medium': return <Badge variant="default">Medium CRE Risk</Badge>;
-      case 'high': return <Badge variant="destructive">High CRE Risk</Badge>;
-    }
+    
+    const getRiskDescription = () => {
+      switch (level) {
+        case 'none': return 'No renewal risk events across this rep\'s accounts.';
+        case 'low': return `${creCount} renewal risk event${creCount > 1 ? 's' : ''} across accounts. Low aggregate churn risk.`;
+        case 'medium': return `${creCount} renewal risk events across accounts. Moderate aggregate churn risk - monitor closely.`;
+        case 'high': return `${creCount} renewal risk events across accounts. High aggregate churn risk - requires attention.`;
+      }
+    };
+    
+    const badge = (() => {
+      switch (level) {
+        case 'none': return <Badge variant="secondary" className="cursor-help">No CRE Risk</Badge>;
+        case 'low': return <Badge variant="outline" className="cursor-help">Low CRE Risk</Badge>;
+        case 'medium': return <Badge variant="default" className="cursor-help">Medium CRE Risk</Badge>;
+        case 'high': return <Badge variant="destructive" className="cursor-help">High CRE Risk</Badge>;
+      }
+    })();
+    
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {badge}
+        </TooltipTrigger>
+        <TooltipContent className="max-w-[280px]">
+          <p className="font-semibold mb-1">Customer Renewal at Risk ({creCount} total)</p>
+          <p className="text-xs text-muted-foreground">{getRiskDescription()}</p>
+          <p className="text-xs text-muted-foreground mt-1 border-t pt-1">
+            CRE = Sum of renewal risk events across all accounts
+          </p>
+        </TooltipContent>
+      </Tooltip>
+    );
   };
 
   return (

@@ -16,7 +16,6 @@ import type {
   LPMetrics,
   RepLoad
 } from '../types';
-import { getValidRepIdsForContinuity, isEligibleForContinuityTracking } from '@/_domain';
 import { DEFAULT_LP_GEOGRAPHY_PARAMS } from '../types';
 
 /**
@@ -123,36 +122,23 @@ export function calculateMetrics(
   
   const max_overload_percent = Math.max(...repLoads.map(r => r.arrUtilization), 0);
   
-  // Continuity metrics
-  // IMPORTANT: Only count accounts whose original owner is in current reps list.
-  // Accounts with departed owners (not in reps) artificially deflate continuity %.
-  // @see _domain/calculations.ts - getValidRepIdsForContinuity, isEligibleForContinuityTracking
+  // Continuity metrics - simplified formula
+  // Simple ratio: accounts with same owner / total accounts
+  // @see MASTER_LOGIC.mdc §13.7
   
   let sameOwnerCount = 0;
   let sameOwnerARR = 0;
   let highValueSameOwnerCount = 0;
-  let highValueTotalCount = 0;
-  let eligibleAccountCount = 0;
-  let eligibleHighValueCount = 0;
+  let highValueCount = 0;
   let totalARR = 0;
   
   const HIGH_VALUE_THRESHOLD = 500000;
-  
-  // Build set of valid rep IDs (excludes backfill sources who are leaving)
-  const validRepIds = getValidRepIdsForContinuity(reps);
   
   for (const proposal of proposals) {
     const account = accountMap.get(proposal.accountId);
     if (!account) continue;
     
     const originalOwner = originalOwners.get(proposal.accountId) || account.owner_id;
-    
-    // Skip accounts whose original owner is not in current reps (can't be retained)
-    if (!isEligibleForContinuityTracking(originalOwner, validRepIds)) {
-      continue;
-    }
-    
-    eligibleAccountCount++;
     const isSameOwner = proposal.repId === originalOwner;
     
     totalARR += account.aggregated_arr;
@@ -163,16 +149,17 @@ export function calculateMetrics(
     }
     
     if (account.aggregated_arr >= HIGH_VALUE_THRESHOLD) {
-      eligibleHighValueCount++;
+      highValueCount++;
       if (isSameOwner) {
         highValueSameOwnerCount++;
       }
     }
   }
   
-  const continuity_rate = eligibleAccountCount > 0 ? (sameOwnerCount / eligibleAccountCount) * 100 : 100;
-  const high_value_continuity_rate = eligibleHighValueCount > 0 
-    ? (highValueSameOwnerCount / eligibleHighValueCount) * 100 
+  const totalCount = proposals.length;
+  const continuity_rate = totalCount > 0 ? (sameOwnerCount / totalCount) * 100 : 100;
+  const high_value_continuity_rate = highValueCount > 0 
+    ? (highValueSameOwnerCount / highValueCount) * 100 
     : 100;
   const arr_stayed_percent = totalARR > 0 ? (sameOwnerARR / totalARR) * 100 : 100;
   

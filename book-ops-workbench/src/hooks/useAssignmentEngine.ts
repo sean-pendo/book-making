@@ -2,17 +2,15 @@ import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { assignmentService } from '@/services/assignmentService';
-import { EnhancedAssignmentService } from '@/services/enhancedAssignmentService';
-import { RebalancingAssignmentService } from '@/services/rebalancingAssignmentService';
 import { generateSimplifiedAssignments, type WaterfallProgress } from '@/services/simplifiedAssignmentEngine';
 import { buildDataService } from '@/services/buildDataService';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useInvalidateBuildData } from '@/hooks/useBuildData';
-import type { AssignmentResult, AssignmentProgress } from '@/services/rebalancingAssignmentService';
+import type { AssignmentResult, AssignmentProgress } from '@/types/assignment';
 import { createAssignmentStages } from '@/components/AssignmentProgressDialog';
 import { runPureOptimization, type LPSolveResult, type LPProgress } from '@/services/optimization';
-import { getAccountARR } from '@/_domain';
+import { getAccountARR, calculateAssignmentConfidence, SUPABASE_LIMITS } from '@/_domain';
 
 /**
  * Convert WaterfallProgress to AssignmentProgress for UI display
@@ -161,12 +159,13 @@ export const useAssignmentEngine = (buildId?: string) => {
         timestamp: new Date().toISOString()
       });
       
-      console.log(`[AssignmentEngine] 📊 Starting PARALLEL paginated query for build ${buildId}...`);
+      const startTime = performance.now();
+      console.log(`[AssignmentEngine] 📊 Starting BATCHED paginated query for build ${buildId}...`);
       
-      // Get total count first
+      // Get total count first (lightweight query)
       const { count } = await supabase
         .from('accounts')
-        .select('*', { count: 'exact', head: true })
+        .select('sfdc_account_id', { count: 'exact', head: true })
         .eq('build_id', buildId)
         .eq('is_parent', true);
       
@@ -178,47 +177,87 @@ export const useAssignmentEngine = (buildId?: string) => {
         return [];
       }
       
-      // PARALLEL FETCH: Calculate all page ranges upfront, then fetch concurrently
-      const pageSize = 1000;
+      // BATCHED FETCH: Process pages in batches to avoid overwhelming the database
+      // Uses SSOT constants from @/_domain for pagination
+      const pageSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
+      const concurrencyLimit = SUPABASE_LIMITS.MAX_CONCURRENT_REQUESTS;
       const totalPages = Math.ceil(count / pageSize);
       
-      console.log(`[AssignmentEngine] 🚀 Fetching ${totalPages} pages in parallel...`);
+      console.log(`[AssignmentEngine] 🚀 Fetching ${totalPages} pages in batches of ${concurrencyLimit}...`);
       
-      const pagePromises = Array.from({ length: totalPages }, (_, pageIndex) => {
+      // Helper to fetch a single page with retry logic
+      const fetchPage = async (pageIndex: number, retryCount = 0): Promise<Account[]> => {
         const from = pageIndex * pageSize;
         const to = Math.min((pageIndex + 1) * pageSize - 1, count - 1);
         
-        return supabase
-          .from('accounts')
-          .select('*')
-          .eq('build_id', buildId)
-          .eq('is_parent', true)
-          .order('account_name')
-          .range(from, to)
-          .then(({ data: pageData, error }) => {
-            if (error) {
-              console.error(`[AssignmentEngine] ❌ Error loading page ${pageIndex + 1}:`, error);
-              throw error;
+        try {
+          const { data: pageData, error } = await supabase
+            .from('accounts')
+            .select('*')
+            .eq('build_id', buildId)
+            .eq('is_parent', true)
+            .range(from, to);
+          
+          if (error) {
+            // Retry on timeout errors (57014 = statement timeout)
+            if (error.code === '57014' && retryCount < 3) {
+              console.warn(`[AssignmentEngine] ⏳ Page ${pageIndex + 1} timed out, retrying (${retryCount + 1}/3)...`);
+              await new Promise(r => setTimeout(r, 1000 * (retryCount + 1))); // Backoff
+              return fetchPage(pageIndex, retryCount + 1);
             }
-            console.log(`[AssignmentEngine] 📄 Loaded page ${pageIndex + 1}: ${pageData?.length || 0} records`);
-            return (pageData || []) as Account[];
-          });
-      });
+            console.error(`[AssignmentEngine] ❌ Error loading page ${pageIndex + 1}:`, error);
+            throw error;
+          }
+          
+          return (pageData || []) as Account[];
+        } catch (err: any) {
+          if (retryCount < 3) {
+            console.warn(`[AssignmentEngine] ⏳ Page ${pageIndex + 1} failed, retrying (${retryCount + 1}/3)...`);
+            await new Promise(r => setTimeout(r, 1000 * (retryCount + 1)));
+            return fetchPage(pageIndex, retryCount + 1);
+          }
+          throw err;
+        }
+      };
       
-      // Wait for all pages to load in parallel
-      const allPages = await Promise.all(pagePromises);
-      const data = allPages.flat();
+      // Process pages in batches
+      let allData: Account[] = [];
+      for (let batchStart = 0; batchStart < totalPages; batchStart += concurrencyLimit) {
+        const batchEnd = Math.min(batchStart + concurrencyLimit, totalPages);
+        const batchSize = batchEnd - batchStart;
+        
+        console.log(`[AssignmentEngine] 📦 Batch ${Math.floor(batchStart / concurrencyLimit) + 1}/${Math.ceil(totalPages / concurrencyLimit)}: pages ${batchStart + 1}-${batchEnd} of ${totalPages}`);
+        
+        // Create promises for this batch only
+        const batchPromises = Array.from({ length: batchSize }, (_, i) => 
+          fetchPage(batchStart + i)
+        );
+        
+        // Wait for this batch to complete before starting next
+        const batchResults = await Promise.all(batchPromises);
+        
+        for (const pageData of batchResults) {
+          // Use concat to avoid stack overflow with large arrays
+          allData = allData.concat(pageData);
+        }
+        
+        console.log(`[AssignmentEngine] ✅ Batch complete: ${allData.length}/${count} records loaded`);
+      }
       
-      console.log(`[AssignmentEngine] 📈 Parallel Fetch Results:`, {
+      const fetchTime = performance.now() - startTime;
+      console.log(`[AssignmentEngine] 📈 Batched Fetch Results:`, {
         totalPages,
-        totalRecords: data.length,
+        totalRecords: allData.length,
         expectedCount: count,
+        fetchTimeMs: Math.round(fetchTime),
         buildId,
-        sampleAccount: data?.[0] ? { 
-          id: data[0].sfdc_account_id, 
-          name: data[0].account_name 
+        sampleAccount: allData?.[0] ? { 
+          id: allData[0].sfdc_account_id, 
+          name: allData[0].account_name 
         } : null
       });
+      
+      const data = allData;
 
       if (data.length === 0) {
         console.warn('[AssignmentEngine] ⚠️ No accounts returned from paginated query');
@@ -347,9 +386,11 @@ export const useAssignmentEngine = (buildId?: string) => {
   }, [refetchAccounts, queryClient, buildId]);
 
   // Classify ALL parent accounts as either customers or prospects
-  // Uses is_customer field from database (synced based on hierarchy_bookings_arr_converted > 0)
-  const customerAccounts = (accounts as Account[]).filter(account => account.is_customer === true);
-  const prospectAccounts = (accounts as Account[]).filter(account => account.is_customer !== true);
+  // Use getAccountARR() > 0 to determine customer vs prospect - consistent with buildDataService
+  // This ensures Assignments tab and Data Overview show the same counts
+  // @see MASTER_LOGIC.mdc §3.1 - Customer = getAccountARR() > 0
+  const customerAccounts = (accounts as Account[]).filter(account => getAccountARR(account) > 0);
+  const prospectAccounts = (accounts as Account[]).filter(account => getAccountARR(account) === 0);
 
   // Debug logging to verify all accounts are included and authentication
   console.log(`[AssignmentEngine] 📊 Final Account Summary:`, {
@@ -643,8 +684,9 @@ export const useAssignmentEngine = (buildId?: string) => {
             undefined, // no opportunities for customers
             customerProgressCallback
           );
-          proposals.push(...customerResult.proposals);
-          warnings.push(...customerResult.warnings);
+          // Use concat to avoid stack overflow with large arrays (spread operator fails at ~10k items)
+          proposals = proposals.concat(customerResult.proposals);
+          warnings = warnings.concat(customerResult.warnings);
           console.log(`✅ Customer assignments: ${customerResult.proposals.length} proposals`);
         }
 
@@ -682,8 +724,9 @@ export const useAssignmentEngine = (buildId?: string) => {
             opportunitiesData,
             prospectProgressCallback
           );
-          proposals.push(...prospectResult.proposals);
-          warnings.push(...prospectResult.warnings);
+          // Use concat to avoid stack overflow with large arrays (spread operator fails at ~10k items)
+          proposals = proposals.concat(prospectResult.proposals);
+          warnings = warnings.concat(prospectResult.warnings);
           console.log(`✅ Prospect assignments: ${prospectResult.proposals.length} proposals`);
         }
 
@@ -755,8 +798,7 @@ export const useAssignmentEngine = (buildId?: string) => {
             ? p.warnings.map(w => `${w.reason}${w.details ? `: ${w.details}` : ''}`).join('; ')
             : undefined,
           ruleApplied: p.ruleApplied,
-          conflictRisk: p.warnings.some(w => w.severity === 'high') ? 'HIGH' : 
-                        p.warnings.some(w => w.severity === 'medium') ? 'MEDIUM' : 'LOW'
+          confidence: calculateAssignmentConfidence(p.warnings)
         })),
         conflicts: proposals.filter(p => 
           p.warnings.some(w => w.severity === 'high' || w.severity === 'medium')
@@ -773,7 +815,7 @@ export const useAssignmentEngine = (buildId?: string) => {
             .map(w => `${w.reason}${w.details ? `: ${w.details}` : ''}`)
             .join('; '),
           ruleApplied: p.ruleApplied,
-          conflictRisk: p.warnings.some(w => w.severity === 'high') ? 'HIGH' as const : 'MEDIUM' as const
+          confidence: calculateAssignmentConfidence(p.warnings)
         })),
         statistics: {
           totalAccounts: filteredAccounts.length,
@@ -1082,6 +1124,11 @@ export const useAssignmentEngine = (buildId?: string) => {
       stages,
       accountsProcessed: assignmentProgress.accountsProcessed,
       totalAccounts: assignmentProgress.totalAccounts,
+      assignmentsMade: assignmentProgress.assignmentsMade,
+      conflicts: assignmentProgress.conflicts,
+      rulesCompleted: assignmentProgress.rulesCompleted,
+      totalRules: assignmentProgress.totalRules,
+      stage: assignmentProgress.stage,
       error: assignmentProgress.error
     };
   };
@@ -1245,8 +1292,9 @@ export const useAssignmentEngine = (buildId?: string) => {
 
       console.log(`[PureOptimization] Running customer solve (batch 1/${totalBatches})...`);
       const customerResult = await runLPWithFallback('customer', customerAccounts);
-      allProposals.push(...customerResult.proposals);
-      allWarnings.push(...customerResult.warnings);
+      // Use concat to avoid stack overflow with large arrays
+      allProposals = allProposals.concat(customerResult.proposals);
+      allWarnings = allWarnings.concat(customerResult.warnings);
       combinedMetrics = customerResult.metrics;
       if (customerResult.usedFallback) usedFallback = true;
 
@@ -1255,8 +1303,9 @@ export const useAssignmentEngine = (buildId?: string) => {
       
       console.log(`[PureOptimization] Running prospect solve (batch 2/${totalBatches})...`);
       const prospectResult = await runLPWithFallback('prospect', prospectAccounts);
-      allProposals.push(...prospectResult.proposals);
-      allWarnings.push(...prospectResult.warnings);
+      // Use concat to avoid stack overflow with large arrays
+      allProposals = allProposals.concat(prospectResult.proposals);
+      allWarnings = allWarnings.concat(prospectResult.warnings);
       if (prospectResult.usedFallback) usedFallback = true;
 
       console.log(`[PureOptimization] Combined: ${allProposals.length} proposals`);
@@ -1290,7 +1339,8 @@ export const useAssignmentEngine = (buildId?: string) => {
         proposedOwnerRegion: p.repRegion || undefined,
         assignmentReason: p.rationale,
         ruleApplied: extractPriorityCode(p.rationale),
-        conflictRisk: p.totalScore < 0.3 ? 'MEDIUM' : 'LOW'
+        // Low score = low confidence, high score = high confidence
+        confidence: p.totalScore < 0.3 ? 'MEDIUM' as const : 'HIGH' as const
       })),
       conflicts: allProposals
         .filter(p => p.totalScore < 0.3 || allWarnings.length > 0)
@@ -1304,7 +1354,7 @@ export const useAssignmentEngine = (buildId?: string) => {
           proposedOwnerRegion: p.repRegion || undefined,
           assignmentReason: p.rationale,
           ruleApplied: extractPriorityCode(p.rationale),
-          conflictRisk: 'MEDIUM' as const
+          confidence: 'MEDIUM' as const
         })),
       statistics: {
         totalAccounts: filteredAccounts.length,
@@ -1381,18 +1431,12 @@ export const useAssignmentEngine = (buildId?: string) => {
 
   // Cancel the current generation process
   const cancelGeneration = () => {
-    try {
-      const service = EnhancedAssignmentService.getInstance();
-      service.cancelGeneration();
-    } catch (error) {
-      console.warn('[useAssignmentEngine] Could not cancel service:', error);
-    }
-    // Immediately update UI state
+    // Note: Cannot cancel in-flight LP solver - this resets UI state only
     setIsGenerating(false);
     setAssignmentProgress(null);
     toast({
-      title: "Generation Cancelled",
-      description: "Assignment generation was stopped.",
+      title: "Generation Stopped",
+      description: "UI reset. Note: Any in-flight solver will complete in background.",
     });
   };
 

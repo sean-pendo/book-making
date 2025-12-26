@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { getApprovalStepsForRegion } from '@/utils/approvalChainUtils';
+import { getAccountARR, isParentAccount, APPROACHING_CAPACITY_THRESHOLD } from '@/_domain';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
@@ -9,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
-import { AlertTriangle, ArrowRight, Loader2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Loader2, Info } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface ManagerReassignmentPanelProps {
@@ -60,15 +61,31 @@ export default function ManagerReassignmentPanel({
 
       const repIds = eligibleReps.map(rep => rep.rep_id);
       
-      const { data, error } = await supabase
+      // Fetch accounts with new_owner_id assigned to these reps
+      const { data: assignedAccounts, error: assignedError } = await supabase
         .from('accounts')
         .select('*')
         .eq('build_id', buildId)
         .eq('is_parent', true)
         .in('new_owner_id', repIds);
 
-      if (error) throw error;
-      return data;
+      if (assignedError) throw assignedError;
+
+      // Also fetch accounts where new_owner_id is null but owner_id matches (unchanged accounts)
+      const { data: unchangedAccounts, error: unchangedError } = await supabase
+        .from('accounts')
+        .select('*')
+        .eq('build_id', buildId)
+        .eq('is_parent', true)
+        .is('new_owner_id', null)
+        .in('owner_id', repIds);
+
+      if (unchangedError) throw unchangedError;
+
+      // Combine and dedupe by sfdc_account_id
+      const allAccounts = [...(assignedAccounts || []), ...(unchangedAccounts || [])];
+      const uniqueAccounts = Array.from(new Map(allAccounts.map(a => [a.sfdc_account_id, a])).values());
+      return uniqueAccounts;
     },
     enabled: !!eligibleReps && eligibleReps.length > 0,
   });
@@ -132,23 +149,24 @@ export default function ManagerReassignmentPanel({
       
       if (!account || !newOwner) throw new Error('Invalid selection');
 
-      // Calculate capacity warnings
+      // Calculate capacity warnings using getAccountARR from @/_domain for SSOT compliance
       const newOwnerAccounts = accounts?.filter(a => a.new_owner_id === newOwnerId) || [];
-      const newOwnerARR = newOwnerAccounts.reduce((sum, a) => sum + (a.calculated_arr || 0), 0);
+      const newOwnerARR = newOwnerAccounts.reduce((sum, a) => sum + getAccountARR(a), 0);
+      const accountARR = getAccountARR(account);
       const targetARR = config?.customer_target_arr || 1300000;
       const maxARR = config?.customer_max_arr || 3000000;
       
       const warnings = [];
-      if (newOwnerARR + (account.calculated_arr || 0) > maxARR) {
+      if (newOwnerARR + accountARR > maxARR) {
         warnings.push({
           type: 'capacity_exceeded',
-          message: `${newOwner.name} will exceed max ARR capacity (${Math.round((newOwnerARR + (account.calculated_arr || 0)) / maxARR * 100)}% of max)`,
+          message: `${newOwner.name} will exceed max ARR capacity (${Math.round((newOwnerARR + accountARR) / maxARR * 100)}% of max)`,
           severity: 'high'
         });
-      } else if (newOwnerARR + (account.calculated_arr || 0) > targetARR * 1.2) {
+      } else if (newOwnerARR + accountARR > targetARR * APPROACHING_CAPACITY_THRESHOLD) {
         warnings.push({
           type: 'approaching_capacity',
-          message: `${newOwner.name} will be approaching capacity (${Math.round((newOwnerARR + (account.calculated_arr || 0)) / targetARR * 100)}% of target)`,
+          message: `${newOwner.name} will be approaching capacity (${Math.round((newOwnerARR + accountARR) / targetARR * 100)}% of target)`,
           severity: 'medium'
         });
       }
@@ -247,12 +265,36 @@ export default function ManagerReassignmentPanel({
           {selectedAccountData && selectedNewOwner && (
             <div className="bg-accent/20 p-4 rounded-lg space-y-2">
               <div className="flex items-center justify-between">
-                <span className="font-medium">{selectedAccountData.account_name}</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{selectedAccountData.account_name}</span>
+                  {isParentAccount(selectedAccountData) && (
+                    <Badge variant="secondary" className="text-xs">Parent</Badge>
+                  )}
+                  {selectedAccountData.ultimate_parent_id && (
+                    <Badge variant="outline" className="text-xs">Child</Badge>
+                  )}
+                </div>
                 <ArrowRight className="w-4 h-4 text-muted-foreground" />
                 <span className="font-medium">{selectedNewOwner.name}</span>
               </div>
               <div className="text-sm text-muted-foreground">
-                ARR: {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }).format(selectedAccountData.calculated_arr || 0)}
+                ARR: {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }).format(getAccountARR(selectedAccountData))}
+              </div>
+            </div>
+          )}
+
+          {/* Hierarchy awareness note */}
+          {selectedAccountData && (isParentAccount(selectedAccountData) || selectedAccountData.ultimate_parent_id) && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+              <div className="flex gap-2">
+                <Info className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-blue-700">
+                  {isParentAccount(selectedAccountData) ? (
+                    <p><strong>Parent Account:</strong> This account has child accounts. Reassigning will not automatically include children - RevOps may need to cascade the change.</p>
+                  ) : (
+                    <p><strong>Child Account:</strong> This account belongs to a parent hierarchy. Reassigning separately may create a hierarchy split.</p>
+                  )}
+                </div>
               </div>
             </div>
           )}

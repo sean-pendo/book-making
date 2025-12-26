@@ -3,14 +3,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { supabase } from "@/integrations/supabase/client";
-import { formatCurrency, getAccountARR, getAccountATR } from "@/_domain";
-import { toast } from "sonner";
-import { Loader2, AlertTriangle, Shield, Users } from "lucide-react";
-import { useInvalidateAnalytics } from "@/hooks/useInvalidateAnalytics";
+import { formatCurrency, getAccountARR, getAccountATR, getCRERiskLevel } from "@/_domain";
+import { AlertTriangle, Shield, Users, Edit } from "lucide-react";
+import { HierarchyAwareReassignDialog } from "@/components/HierarchyAwareReassignDialog";
 
 interface AccountDetailDialogProps {
   open: boolean;
@@ -31,59 +28,65 @@ export function AccountDetailDialog({
   availableReps = [],
   buildId
 }: AccountDetailDialogProps) {
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [selectedOwnerId, setSelectedOwnerId] = useState(account?.new_owner_id || account?.owner_id);
+  const [showReassignDialog, setShowReassignDialog] = useState(false);
   const queryClient = useQueryClient();
-  const invalidateAnalytics = useInvalidateAnalytics();
 
-  const handleReassignment = async () => {
-    if (!selectedOwnerId || selectedOwnerId === account?.owner_id) {
-      toast.error("Please select a different owner");
-      return;
-    }
-
-    setIsUpdating(true);
-    try {
-      const selectedRep = availableReps.find(rep => rep.rep_id === selectedOwnerId);
-      
-      const { error } = await supabase
-        .from('accounts')
-        .update({
-          new_owner_id: selectedOwnerId,
-          new_owner_name: selectedRep?.name || selectedOwnerId
-        })
-        .eq('sfdc_account_id', account.sfdc_account_id)
-        .eq('build_id', buildId);
-
-      if (error) throw error;
-
-      // Refresh data - table queries
-      queryClient.invalidateQueries({ queryKey: ['customer-accounts', buildId] });
-      queryClient.invalidateQueries({ queryKey: ['customer-assignment-changes', buildId] });
-      
-      // Invalidate analytics queries so KPIs and charts update
-      await invalidateAnalytics(buildId);
-      
-      toast.success("Account reassigned successfully");
-      onOpenChange(false);
-    } catch (error) {
-      console.error('Error reassigning account:', error);
-      toast.error("Failed to reassign account");
-    } finally {
-      setIsUpdating(false);
-    }
+  const handleReassignSuccess = () => {
+    // Refresh data - table queries
+    queryClient.invalidateQueries({ queryKey: ['customer-accounts', buildId] });
+    queryClient.invalidateQueries({ queryKey: ['customer-assignment-changes', buildId] });
+    onOpenChange(false);
   };
 
   const getRiskBadges = () => {
     const badges = [];
+    const creCount = account?.cre_count || 0;
+    const riskLevel = getCRERiskLevel(creCount);
+    
     if (account?.cre_risk) {
-      badges.push(<Badge key="cre-risk" variant="destructive">CRE Risk</Badge>);
+      badges.push(
+        <Tooltip key="cre-risk">
+          <TooltipTrigger asChild>
+            <Badge variant="destructive" className="cursor-help">CRE Risk</Badge>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p className="text-xs">Customer Renewal at Risk flag is set on this account.</p>
+          </TooltipContent>
+        </Tooltip>
+      );
     }
     if (account?.risk_flag) {
-      badges.push(<Badge key="risk-flag" variant="destructive">Risk Flag</Badge>);
+      badges.push(
+        <Tooltip key="risk-flag">
+          <TooltipTrigger asChild>
+            <Badge variant="destructive" className="cursor-help">Risk Flag</Badge>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p className="text-xs">This account has been flagged as at-risk.</p>
+          </TooltipContent>
+        </Tooltip>
+      );
     }
-    if (account?.cre_count && account.cre_count > 0) {
-      badges.push(<Badge key="cre-count" variant="secondary">CRE Count: {account.cre_count}</Badge>);
+    if (creCount > 0) {
+      const getRiskDescription = () => {
+        switch (riskLevel) {
+          case 'low': return `${creCount} renewal risk event${creCount > 1 ? 's' : ''}. Low churn probability.`;
+          case 'medium': return `${creCount} renewal risk events. Moderate churn probability.`;
+          case 'high': return `${creCount} renewal risk events. High churn probability.`;
+          default: return '';
+        }
+      };
+      badges.push(
+        <Tooltip key="cre-count">
+          <TooltipTrigger asChild>
+            <Badge variant="secondary" className="cursor-help">CRE Count: {creCount}</Badge>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-[250px]">
+            <p className="font-semibold mb-1">Customer Renewal at Risk</p>
+            <p className="text-xs text-muted-foreground">{getRiskDescription()}</p>
+          </TooltipContent>
+        </Tooltip>
+      );
     }
     return badges;
   };
@@ -191,34 +194,29 @@ export function AccountDetailDialog({
               <CardTitle>Reassign Account</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex gap-4 items-end">
-                <div className="flex-1">
-                  <label className="text-sm font-medium">Select New Owner:</label>
-                  <Select value={selectedOwnerId} onValueChange={setSelectedOwnerId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose a sales rep..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableReps.map((rep) => (
-                        <SelectItem key={rep.rep_id} value={rep.rep_id}>
-                          {rep.name} ({rep.team || 'No Team'})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Button 
-                  onClick={handleReassignment} 
-                  disabled={isUpdating || !selectedOwnerId || selectedOwnerId === account.owner_id}
-                >
-                  {isUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Reassign
+              <div className="flex gap-4 items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Use the hierarchy-aware reassignment dialog to change this account's owner.
+                </p>
+                <Button onClick={() => setShowReassignDialog(true)}>
+                  <Edit className="mr-2 h-4 w-4" />
+                  Reassign Account
                 </Button>
               </div>
             </CardContent>
           </Card>
         </div>
       </DialogContent>
+
+      {/* Hierarchy-Aware Reassignment Dialog */}
+      <HierarchyAwareReassignDialog
+        open={showReassignDialog}
+        onOpenChange={setShowReassignDialog}
+        account={account}
+        buildId={buildId}
+        availableReps={availableReps}
+        onSuccess={handleReassignSuccess}
+      />
     </Dialog>
   );
 }

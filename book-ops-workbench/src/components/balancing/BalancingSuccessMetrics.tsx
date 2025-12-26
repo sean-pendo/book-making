@@ -1,11 +1,13 @@
 import React from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { RefreshCw, MapPin, Layers } from 'lucide-react';
+import { RefreshCw, MapPin } from 'lucide-react';
 import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Info } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PriorityDistributionPie } from './PriorityDistributionPie';
+import { StabilityLocksPieChart } from '@/components/analytics';
+import { useStabilityLockBreakdown } from '@/hooks/useStabilityLockBreakdown';
 import type { GeoAlignmentMetrics, ContinuityMetrics } from '@/types/analytics';
 
 interface BalancingSuccessMetricsProps {
@@ -87,6 +89,10 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
   geoAlignment,
   isLoading = false,
 }) => {
+  // Check if stability locks exist to determine grid layout
+  const { data: stabilityLocks } = useStabilityLockBreakdown(buildId);
+  const hasStabilityLocks = stabilityLocks && stabilityLocks.total > 0;
+
   // Get color based on score
   const getContinuityColor = (score: number) => {
     if (score >= 0.7) return 'text-emerald-600 dark:text-emerald-400';
@@ -103,8 +109,7 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
   // Use actual continuity counts from metrics (not derived from geo data)
   const retainedAccounts = continuityMetrics?.retainedCount ?? 0;
   const changedAccounts = continuityMetrics?.changedCount ?? 0;
-  const eligibleAccounts = continuityMetrics?.eligibleCount ?? 0;
-  const excludedAccounts = continuityMetrics?.excludedCount ?? 0;
+  const continuityTotalAccounts = continuityMetrics?.totalCount ?? 0;
   
   // Keep totalAccounts for geo chart calculations only
   const totalAccounts = geoAlignment 
@@ -155,7 +160,7 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {[...Array(3)].map((_, i) => (
           <Card key={i} className="card-elevated">
             <CardContent className="p-5">
@@ -169,7 +174,9 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 overflow-visible">
+    <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 overflow-visible ${
+      hasStabilityLocks ? 'lg:grid-cols-4' : 'lg:grid-cols-3'
+    }`}>
       {/* Continuity Card */}
       <Card className="card-elevated card-glass overflow-visible relative z-10">
         <CardContent className="p-5">
@@ -199,15 +206,9 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
                       <span className="font-medium text-amber-500">{changedAccounts.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between text-muted-foreground">
-                      <span>Eligible:</span>
-                      <span>{eligibleAccounts.toLocaleString()}</span>
+                      <span>Total:</span>
+                      <span>{continuityTotalAccounts.toLocaleString()}</span>
                     </div>
-                    {excludedAccounts > 0 && (
-                      <div className="flex justify-between text-muted-foreground/70 text-[10px] pt-1">
-                        <span>Excluded (owner missing):</span>
-                        <span>{excludedAccounts.toLocaleString()}</span>
-                      </div>
-                    )}
                   </div>
                 </TooltipContent>
               </UITooltip>
@@ -221,18 +222,18 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
           </p>
           
           {/* Horizontal bar showing retained vs changed */}
-          {eligibleAccounts > 0 && (
+          {continuityTotalAccounts > 0 && (
             <UITooltip>
               <TooltipTrigger asChild>
                 <div className="space-y-1.5 cursor-default">
                   <div className="h-3 w-full bg-muted rounded-full overflow-hidden flex">
                     <div 
                       className="h-full bg-emerald-500 transition-all duration-500"
-                      style={{ width: `${(retainedAccounts / eligibleAccounts) * 100}%` }}
+                      style={{ width: `${(retainedAccounts / continuityTotalAccounts) * 100}%` }}
                     />
                     <div 
                       className="h-full bg-amber-500 transition-all duration-500"
-                      style={{ width: `${(changedAccounts / eligibleAccounts) * 100}%` }}
+                      style={{ width: `${(changedAccounts / continuityTotalAccounts) * 100}%` }}
                     />
                   </div>
                   <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -251,18 +252,12 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
                 <div className="text-xs space-y-1">
                   <div className="flex justify-between gap-4">
                     <span className="text-emerald-500">● Retained:</span>
-                    <span className="font-medium">{retainedAccounts.toLocaleString()} ({((retainedAccounts / eligibleAccounts) * 100).toFixed(1)}%)</span>
+                    <span className="font-medium">{retainedAccounts.toLocaleString()} ({((retainedAccounts / continuityTotalAccounts) * 100).toFixed(1)}%)</span>
                   </div>
                   <div className="flex justify-between gap-4">
                     <span className="text-amber-500">● Changed:</span>
-                    <span className="font-medium">{changedAccounts.toLocaleString()} ({((changedAccounts / eligibleAccounts) * 100).toFixed(1)}%)</span>
+                    <span className="font-medium">{changedAccounts.toLocaleString()} ({((changedAccounts / continuityTotalAccounts) * 100).toFixed(1)}%)</span>
                   </div>
-                  {excludedAccounts > 0 && (
-                    <div className="flex justify-between gap-4 pt-1 border-t text-muted-foreground">
-                      <span>Excluded (owner missing):</span>
-                      <span>{excludedAccounts.toLocaleString()}</span>
-                    </div>
-                  )}
                 </div>
               </TooltipContent>
             </UITooltip>
@@ -364,6 +359,38 @@ export const BalancingSuccessMetrics: React.FC<BalancingSuccessMetricsProps> = (
 
       {/* Priority Distribution Card */}
       <PriorityDistributionPie buildId={buildId} compact />
+
+      {/* Stability Locks Card - only shows when locks exist */}
+      {hasStabilityLocks && (
+        <Card className="card-elevated card-glass overflow-visible">
+          <CardContent className="p-5">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 bg-violet-500/20 rounded-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-violet-600 dark:text-violet-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+              </div>
+              <div className="flex items-center gap-1">
+                <h3 className="font-semibold text-foreground">Stability Locks</h3>
+                <UITooltip>
+                  <TooltipTrigger>
+                    <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    <p className="text-sm font-medium mb-1">Stability Locks</p>
+                    <p className="text-xs text-muted-foreground">
+                      Accounts excluded from optimization to maintain stability.
+                      These stay with their current owner or migrate to a backfill target.
+                    </p>
+                  </TooltipContent>
+                </UITooltip>
+              </div>
+            </div>
+            <StabilityLocksPieChart buildId={buildId} compact />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };

@@ -28,6 +28,39 @@
  */
 
 // =============================================================================
+// OPEN HEADCOUNT DETECTION
+// =============================================================================
+
+/**
+ * Detect if a rep name matches Open Headcount patterns
+ * 
+ * Matches:
+ * - Exact phrase "Open Headcount" (case-insensitive)
+ * - Contains "open head" (catches typos like "Open Head Count")
+ * - Contains both "open" AND "headcount" anywhere in name
+ * 
+ * @param name - Rep name to check
+ * @returns true if name matches Open Headcount pattern
+ * 
+ * @see MASTER_LOGIC.mdc §8.4.1 - Open Headcount Name Detection
+ * 
+ * @example
+ * isOpenHeadcountName('Open Headcount')     // → true
+ * isOpenHeadcountName('Open Head Count')    // → true
+ * isOpenHeadcountName('open headcount')     // → true
+ * isOpenHeadcountName('John Smith')         // → false
+ */
+export function isOpenHeadcountName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const normalized = name.toLowerCase().trim();
+  return (
+    normalized === 'open headcount' ||
+    normalized.includes('open head') ||
+    (normalized.includes('open') && normalized.includes('headcount'))
+  );
+}
+
+// =============================================================================
 // REGION/TERRITORY NORMALIZATION
 // =============================================================================
 
@@ -310,6 +343,58 @@ export function normalizePEFirm(value: string | null | undefined): string | null
   
   // Return original value with title case if no match
   return value.trim();
+}
+
+/**
+ * Parse a comma-separated list of PE firm names into normalized array
+ * 
+ * @param value - Comma-separated PE firm names (e.g., "JMI, Vista Equity")
+ * @returns Array of normalized PE firm names
+ * 
+ * @see MASTER_LOGIC.mdc §10.7.2 - PE Firms Field Format
+ * 
+ * @example
+ * parsePEFirmsList('JMI, Vista Equity') // → ['JMI Private Equity', 'Vista Equity Partners']
+ * parsePEFirmsList('') // → []
+ * parsePEFirmsList(null) // → []
+ */
+export function parsePEFirmsList(value: string | null | undefined): string[] {
+  if (!value) return [];
+  
+  return value
+    .split(',')
+    .map(firm => normalizePEFirm(firm.trim()))
+    .filter((firm): firm is string => firm !== null && firm.length > 0);
+}
+
+/**
+ * Check if a rep handles a specific PE firm
+ * 
+ * @param repPEFirms - Rep's pe_firms field (comma-separated or already parsed)
+ * @param accountPEFirm - Account's pe_firm field
+ * @returns true if the rep is dedicated to the account's PE firm
+ * 
+ * @see MASTER_LOGIC.mdc §10.7.1 - Dedicated PE Rep Routing
+ * 
+ * @example
+ * repHandlesPEFirm('JMI, Vista', 'JMI Private Equity') // → true
+ * repHandlesPEFirm('Vista Equity', 'JMI') // → false
+ */
+export function repHandlesPEFirm(
+  repPEFirms: string | null | undefined,
+  accountPEFirm: string | null | undefined
+): boolean {
+  if (!repPEFirms || !accountPEFirm) return false;
+  
+  const normalizedAccountPE = normalizePEFirm(accountPEFirm);
+  if (!normalizedAccountPE) return false;
+  
+  const repFirms = parsePEFirmsList(repPEFirms);
+  
+  // Case-insensitive comparison after normalization
+  return repFirms.some(
+    firm => firm.toLowerCase() === normalizedAccountPE.toLowerCase()
+  );
 }
 
 // =============================================================================

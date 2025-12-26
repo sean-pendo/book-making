@@ -89,14 +89,12 @@ export default function RevOpsFinalView() {
           const slm = reviews?.find(r => r.manager_level === 'SLM' && r.status === 'accepted');
           if (!slm) return null;
 
-          // Get all accounts with new_owner assignments
+          // Get all parent accounts (including unchanged ones where new_owner_id is null)
           const { data: allAccounts } = await supabase
             .from('accounts')
-            .select('is_customer, new_owner_id, calculated_arr, calculated_atr, is_parent')
+            .select('is_customer, new_owner_id, owner_id, calculated_arr, calculated_atr, is_parent')
             .eq('build_id', build.id)
-            .eq('is_parent', true)
-            .not('new_owner_id', 'is', null)
-            .neq('new_owner_id', '');
+            .eq('is_parent', true);
 
           // Get sales reps for this build
           const { data: salesReps } = await supabase
@@ -117,6 +115,10 @@ export default function RevOpsFinalView() {
               .filter(Boolean)
           )];
 
+          // Helper to get effective owner (new_owner_id if set, otherwise owner_id)
+          const getEffectiveOwnerId = (acc: { new_owner_id: string | null; owner_id: string }) => 
+            acc.new_owner_id || acc.owner_id;
+
           // Calculate metrics for each FLM
           const calculateFLMMetrics = (isCustomer: boolean) => {
             return uniqueFLMs.map(flmName => {
@@ -124,14 +126,14 @@ export default function RevOpsFinalView() {
               const flmReps = (salesReps || []).filter(rep => rep.flm === flmName);
               const repIds = flmReps.map(r => r.rep_id);
 
-              // Get accounts assigned to these reps
+              // Get accounts assigned to these reps (using effective owner)
               const flmAccounts = (allAccounts || []).filter(
-                acc => acc.is_customer === isCustomer && repIds.includes(acc.new_owner_id)
+                acc => acc.is_customer === isCustomer && repIds.includes(getEffectiveOwnerId(acc))
               );
 
               // Calculate per-rep metrics
               const repMetrics: RepMetrics[] = flmReps.map(rep => {
-                const repAccounts = flmAccounts.filter(acc => acc.new_owner_id === rep.rep_id);
+                const repAccounts = flmAccounts.filter(acc => getEffectiveOwnerId(acc) === rep.rep_id);
                 return {
                   rep_id: rep.rep_id,
                   name: rep.name,

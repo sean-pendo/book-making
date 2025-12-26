@@ -36,14 +36,15 @@ ${availableRegions.map(r => `- ${r}`).join('\n')}
 
 ## Territory to Region Mappings (exact regional breakdown)
 
-### West (includes British Columbia, Canada)
-States: WA, OR, CA, NV, UT, AZ, ID, AK, HI, NM
-Cities/Areas: Seattle, Portland, San Francisco, Los Angeles, San Diego, Sacramento, Las Vegas, Phoenix, Tucson, Salt Lake City, Vancouver, Pacific Northwest, NorCal, SoCal, Bay Area, Southwest, South West, Albuquerque
-Note: "Southwest" territories (AZ, NM, NV, UT) belong to West region, NOT Southeast
+### West (includes British Columbia, Canada and Mountain/Midwest territories)
+States: WA, OR, CA, NV, UT, AZ, ID, AK, HI, NM, MT, CO, WY
+Cities/Areas: Seattle, Portland, San Francisco, Los Angeles, San Diego, Sacramento, Las Vegas, Phoenix, Tucson, Salt Lake City, Vancouver, Denver, Pacific Northwest, NorCal, SoCal, Bay Area, Southwest, South West, Albuquerque
+Keywords that map to West: "MID-WEST", "MIDWEST", "MOUNTAIN", "SOUTHWEST", "SOUTH WEST"
+Note: "Southwest" territories (AZ, NM, NV, UT) and "Mountain"/"Midwest" territories belong to West region
 
-### Central (includes Alberta, Canada)
-States: MT, ND, SD, NE, KS, MO, IA, MN, WI, IL, IN, MI, OH, CO, WY, NM, ID
-Cities/Areas: Chicago, Minneapolis, St Louis, Kansas City, Cleveland, Columbus, Detroit, Denver, Calgary, Edmonton, Great Lakes, Midwest, Mountain
+### Central (includes Alberta, Canada and Great Lakes)
+States: ND, SD, NE, KS, MO, IA, MN, WI, IL, IN, MI, OH
+Cities/Areas: Chicago, Minneapolis, St Louis, Kansas City, Cleveland, Columbus, Detroit, Calgary, Edmonton, Great Lakes
 
 ### South East
 States: TX, OK, AR, LA, MS, AL, GA, FL, SC, NC, TN, KY, VA, WV, MD, DC, DE

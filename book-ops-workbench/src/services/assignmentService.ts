@@ -1,6 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { AssignmentServiceHelpers } from './assignmentServiceHelpers';
-import { getAccountARR, HIGH_VALUE_ARR_THRESHOLD, TIER_1_PRIORITY_EMPLOYEE_THRESHOLD, WORKLOAD_SCORE_WEIGHTS } from '@/_domain';
+import { getAccountARR, HIGH_VALUE_ARR_THRESHOLD, TIER_1_PRIORITY_EMPLOYEE_THRESHOLD, WORKLOAD_SCORE_WEIGHTS, APPROACHING_CAPACITY_THRESHOLD, SUPABASE_LIMITS, type AssignmentConfidence } from '@/_domain';
 
 export interface Account {
   sfdc_account_id: string;
@@ -30,7 +30,9 @@ export interface Account {
 export interface SalesRep {
   rep_id: string;
   name: string;
+  /** @deprecated Use team_tier instead. Removed from import in v1.4.1 */
   team?: string;
+  team_tier?: 'SMB' | 'Growth' | 'MM' | 'ENT' | null;
   region?: string;
   manager?: string;
   flm?: string;
@@ -72,7 +74,8 @@ interface AssignmentProposal {
   assignmentReason: string;
   warningDetails?: string;
   ruleApplied: string;
-  conflictRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+  /** How confident is the system in this assignment? @see MASTER_LOGIC.mdc §13.4.1 */
+  confidence: AssignmentConfidence;
 }
 
 export interface RebalanceSuggestion {
@@ -239,8 +242,8 @@ class AssignmentService {
             // Enhanced workload tracker update with ARR tracking
             this.updateEnhancedWorkloadTracker(workloadTracker, proposal.proposedOwnerId, proposal.accountId, accounts);
             
-            // Mark as conflict if high risk
-            if (proposal.conflictRisk === 'HIGH') {
+            // Mark as conflict if low confidence
+            if (proposal.confidence === 'LOW') {
               conflicts.push(proposal);
             }
           }
@@ -271,7 +274,7 @@ class AssignmentService {
             proposedOwnerRegion: currentRep.region,
             assignmentReason: 'Account Continuity - maintaining existing assignment',
             ruleApplied: 'CONTINUITY',
-            conflictRisk: 'LOW'
+            confidence: 'HIGH'
           });
           
           processedAccountIds.add(account.sfdc_account_id);
@@ -658,7 +661,8 @@ class AssignmentService {
         const arrScore = (totalARR / 10000000) * 0.5; // $10M ARR = 0.5 points
         
         // Add account ARR weight to consider incoming assignment impact
-        const accountARR = account.arr || account.calculated_arr || 0;
+        // Use getAccountARR from @/_domain for SSOT compliance
+        const accountARR = getAccountARR(account);
         const arrImpactScore = (accountARR / 10000000) * 0.3; // Consider incoming ARR impact
         
         const totalScore = accountScore + arrScore + arrImpactScore;
@@ -676,7 +680,8 @@ class AssignmentService {
       
       // Enhanced assignment validation - check if this assignment would cause severe imbalance
       const selectedRepWorkload = workloadTracker.get(bestRep.rep_id) || { accountCount: 0, totalARR: 0 };
-      const newTotalARR = (selectedRepWorkload.totalARR || 0) + (account.arr || account.calculated_arr || 0);
+      // Use getAccountARR from @/_domain for SSOT compliance
+      const newTotalARR = (selectedRepWorkload.totalARR || 0) + getAccountARR(account);
       
       // Warn if assignment would exceed balanced thresholds significantly
       if (newTotalARR > maxARRPerRep) {
@@ -698,7 +703,8 @@ class AssignmentService {
         proposedOwnerRegion: bestRep.region,
         assignmentReason: reason,
         ruleApplied: 'GEO_FIRST',
-        conflictRisk: account.owner_id && account.owner_id !== bestRep.rep_id ? 'MEDIUM' : 'LOW'
+        // Changing owner = medium confidence, keeping owner = high confidence
+        confidence: account.owner_id && account.owner_id !== bestRep.rep_id ? 'MEDIUM' : 'HIGH'
       });
       
       // Update workload tracker
@@ -755,7 +761,7 @@ class AssignmentService {
           proposedOwnerRegion: currentRep.region,
           assignmentReason: `CONTINUITY: Maintaining assignment with ${currentRep.name} (${minimumOwnershipDays}+ days, workload: ${currentWorkload}/${maxAccountsPerRep})`,
           ruleApplied: 'CONTINUITY',
-          conflictRisk: 'LOW'
+          confidence: 'HIGH'
         });
       }
     }
@@ -882,7 +888,7 @@ class AssignmentService {
           proposedOwnerRegion: rep.region,
           assignmentReason: `TIER_BALANCE: Tier 1 account distributed for balanced tier allocation (${distributionMethod})`,
           ruleApplied: 'TIER_BALANCE',
-          conflictRisk: account.owner_id && account.owner_id !== rep.rep_id ? 'MEDIUM' : 'LOW'
+          confidence: account.owner_id && account.owner_id !== rep.rep_id ? 'MEDIUM' : 'HIGH'
         });
       }
     }
@@ -936,7 +942,7 @@ class AssignmentService {
             proposedOwnerRegion: rep.region,
             assignmentReason: `ROUND_ROBIN: Distributed using ${balancingCriteria} strategy for equal workload (${currentWorkload + 1}/${maxAccountsPerRep})`,
             ruleApplied: 'ROUND_ROBIN',
-            conflictRisk: account.owner_id && account.owner_id !== rep.rep_id ? 'LOW' : 'LOW'
+            confidence: 'HIGH'
           });
           
           repIndex++;
@@ -974,8 +980,9 @@ class AssignmentService {
     console.log(`[MIN_MAX_THRESHOLDS] 📏 Enhanced Thresholds: ${minParentAccounts}-${maxAccountsAbsolute} accounts, $${(minCustomerARR/1000000).toFixed(1)}M-$${(maxCustomerARR/1000000).toFixed(1)}M ARR, ±${maxVariancePercent}% variance`);
 
     // Calculate realistic distribution targets
+    // Use getAccountARR from @/_domain for SSOT compliance
     const totalAccounts = accounts.length;
-    const totalARR = accounts.reduce((sum, acc) => sum + (acc.arr || acc.calculated_arr || 0), 0);
+    const totalARR = accounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
     const avgAccountsPerRep = Math.floor(totalAccounts / salesReps.length);
     const avgARRPerRep = totalARR / salesReps.length;
     const varianceAllowance = Math.floor(avgAccountsPerRep * (maxVariancePercent / 100));
@@ -1085,7 +1092,8 @@ class AssignmentService {
           proposedOwnerRegion: targetRepData.region,
           assignmentReason: `BALANCED LOAD REDISTRIBUTION: Moving from ${overloaded.rep.name} (over limits) to ${targetRepData.name} to enforce ±${maxVariancePercent}% variance and prevent ARR/account disparities`,
           ruleApplied: 'MIN_MAX_THRESHOLDS',
-          conflictRisk: account.is_customer ? 'HIGH' : 'MEDIUM'
+          // Moving customers = low confidence, moving prospects = medium confidence
+          confidence: account.is_customer ? 'LOW' : 'MEDIUM'
         });
 
         redistributionCount++;
@@ -1546,7 +1554,7 @@ class AssignmentService {
             proposedOwnerName: rep.name,
             assignmentReason: `Threshold enforcement: ensuring ${rep.name} meets minimum thresholds`,
             ruleApplied: 'MIN_THRESHOLDS',
-            conflictRisk: 'MEDIUM' as const
+            confidence: 'MEDIUM' as const
           });
           
           // Update tracking
@@ -1581,13 +1589,14 @@ class AssignmentService {
 
   /**
    * Get only parent accounts for assignment (children will inherit) with proper pagination and filtering
+   * Uses SSOT constants from @/_domain for pagination settings.
    */
   private async getParentAccounts(buildId: string, tier?: string, accountType?: 'customers' | 'prospects' | 'all'): Promise<Account[]> {
     console.log(`[AssignmentService] Fetching parent accounts for build ${buildId}, tier: ${tier}, type: ${accountType}`);
     
     const allAccounts: Account[] = [];
     let rangeStart = 0;
-    const pageSize = 1000;
+    const pageSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
 
     while (true) {
       let query = supabase
@@ -1718,11 +1727,12 @@ class AssignmentService {
     const finalARRDistribution = new Map<string, number>();
     
     // Initialize with current assignments
+    // Use getAccountARR from @/_domain for SSOT compliance
     accounts.forEach(account => {
       if (account.owner_id) {
         const currentAccounts = finalAccountDistribution.get(account.owner_id) || 0;
         const currentARR = finalARRDistribution.get(account.owner_id) || 0;
-        const accountARR = account.arr || account.calculated_arr || 0;
+        const accountARR = getAccountARR(account);
         
         finalAccountDistribution.set(account.owner_id, currentAccounts + 1);
         finalARRDistribution.set(account.owner_id, currentARR + accountARR);
@@ -1734,7 +1744,7 @@ class AssignmentService {
       const account = accounts.find(acc => acc.sfdc_account_id === proposal.accountId);
       if (!account) return;
       
-      const accountARR = account.arr || account.calculated_arr || 0;
+      const accountARR = getAccountARR(account);
       
       // Remove from old owner if exists
       if (account.owner_id && account.owner_id !== proposal.proposedOwnerId) {
@@ -1751,8 +1761,8 @@ class AssignmentService {
       finalARRDistribution.set(proposal.proposedOwnerId, newARR + accountARR);
     });
     
-    // Calculate ARR targets
-    const totalARR = accounts.reduce((sum, acc) => sum + (acc.arr || acc.calculated_arr || 0), 0);
+    // Calculate ARR targets using getAccountARR from @/_domain for SSOT compliance
+    const totalARR = accounts.reduce((sum, acc) => sum + getAccountARR(acc), 0);
     const targetARRPerRep = totalARR / salesReps.length;
     
     // Check variance compliance for both metrics
@@ -1791,18 +1801,19 @@ class AssignmentService {
 
   /**
    * Filter reps by tier (Commercial vs Enterprise)
+   * Updated in v1.4.1: Now uses team_tier field instead of deprecated team field
    */
   private filterRepsByTier(reps: SalesRep[], tier: string): SalesRep[] {
     return reps.filter(rep => {
-      if (!rep.team) return true; // Include reps with no team specified
+      if (!rep.team_tier) return true; // Include reps with no tier specified
       
-      const teamLower = rep.team.toLowerCase();
+      const tierValue = rep.team_tier;
       
       if (tier === 'Enterprise') {
-        return teamLower.includes('enterprise') || teamLower.includes('ent');
+        return tierValue === 'ENT' || tierValue === 'MM';
       } else {
-        return teamLower.includes('commercial') || teamLower.includes('comm') || 
-               !teamLower.includes('enterprise');
+        // Commercial tier includes SMB and Growth
+        return tierValue === 'SMB' || tierValue === 'Growth';
       }
     });
   }
@@ -1846,7 +1857,7 @@ class AssignmentService {
           proposedOwnerName: account.owner_name!,
           assignmentReason: 'Continuity preserved - existing customer relationship',
           ruleApplied: 'CONTINUITY',
-          conflictRisk: 'LOW'
+          confidence: 'HIGH'
         });
         
         // Update workload tracking
@@ -1870,7 +1881,8 @@ class AssignmentService {
     const avgWorkload = totalWorkload / workloadMap.size;
     
     // Identify overloaded reps (more than 20% above average)
-    const overloadThreshold = avgWorkload * 1.2;
+    // Use APPROACHING_CAPACITY_THRESHOLD from @/_domain for SSOT compliance
+    const overloadThreshold = avgWorkload * APPROACHING_CAPACITY_THRESHOLD;
     const overloadedReps = new Set(
       Array.from(workloadMap.entries())
         .filter(([_, load]) => load > overloadThreshold)
@@ -1883,7 +1895,8 @@ class AssignmentService {
         return {
           ...proposal,
           assignmentReason: `${proposal.assignmentReason} (load balanced)`,
-          conflictRisk: proposal.conflictRisk === 'LOW' ? 'MEDIUM' : proposal.conflictRisk
+          // Downgrade confidence for overloaded rep assignments
+          confidence: proposal.confidence === 'HIGH' ? 'MEDIUM' : proposal.confidence
         };
       }
       return proposal;
@@ -1891,26 +1904,27 @@ class AssignmentService {
   }
 
   /**
-   * Assess conflict risk for an assignment
+   * Assess confidence for an assignment (inverted from old "risk" logic)
+   * @see MASTER_LOGIC.mdc §13.4.1
    */
-  private assessConflictRisk(account: Account, proposedRep: SalesRep): 'LOW' | 'MEDIUM' | 'HIGH' {
-    // High risk if changing customer account owner
+  private assessConfidence(account: Account, proposedRep: SalesRep): AssignmentConfidence {
+    // Low confidence if changing customer account owner
     if (account.is_customer && account.owner_id && account.owner_id !== proposedRep.rep_id) {
-      return 'HIGH';
+      return 'LOW';
     }
     
-    // Medium risk if account has risk flag
+    // Medium confidence if account has risk flag
     if (account.risk_flag) {
       return 'MEDIUM';
     }
     
-    // Medium risk if high ARR account
+    // Medium confidence if high ARR account
     const arr = getAccountARR(account);
     if (arr > HIGH_VALUE_ARR_THRESHOLD) {
       return 'MEDIUM';
     }
     
-    return 'LOW';
+    return 'HIGH';
   }
 
   /**

@@ -9,8 +9,10 @@
  * 2. Backfill migration (owner is leaving, migrate to replacement)
  * 3. CRE risk (at-risk accounts stay with experienced owner)
  * 4. Renewal soon (renewing within X days)
- * 5. PE firm (PE-owned accounts stay aligned)
+ * 5. PE firm (PE-owned accounts route to dedicated PE rep, or stay with current owner)
  * 6. Recent change (recently changed owner, minimize disruption)
+ * 
+ * @see MASTER_LOGIC.mdc §10.7 - PE Firm Accounts
  */
 
 import type { 
@@ -19,6 +21,7 @@ import type {
   LPStabilityConfig, 
   StabilityLockResult 
 } from '../types';
+import { repHandlesPEFirm } from '@/_domain';
 
 /**
  * Check if an account should be locked
@@ -100,13 +103,32 @@ export function checkStabilityLock(
     }
   }
   
-  // PE Firm
+  // PE Firm - Route to dedicated PE rep if one exists
+  // @see MASTER_LOGIC.mdc §10.7.1 - Dedicated PE Rep Routing
   if (config.pe_firm_locked && account.pe_firm) {
+    // First, check if any rep is dedicated to this PE firm
+    const dedicatedPERep = reps.find(r => 
+      r.include_in_assignments !== false && 
+      r.pe_firms && 
+      repHandlesPEFirm(r.pe_firms, account.pe_firm)
+    );
+    
+    if (dedicatedPERep) {
+      // Route to dedicated PE rep (even if different from current owner)
+      return {
+        isLocked: true,
+        lockType: 'pe_firm',
+        targetRepId: dedicatedPERep.rep_id,
+        reason: `PE firm: ${account.pe_firm} → dedicated rep ${dedicatedPERep.name}`
+      };
+    }
+    
+    // No dedicated PE rep found - fall back to current owner (legacy behavior)
     return {
       isLocked: true,
       lockType: 'pe_firm',
       targetRepId: currentOwner.rep_id,
-      reason: `PE firm: ${account.pe_firm}`
+      reason: `PE firm: ${account.pe_firm} (no dedicated rep)`
     };
   }
   

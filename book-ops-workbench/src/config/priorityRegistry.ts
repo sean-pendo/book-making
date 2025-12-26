@@ -42,6 +42,21 @@ export interface SubCondition {
   defaultEnabled: boolean;
 }
 
+/**
+ * Display configuration for priority badges in UI
+ * Used by PriorityBadge component to render consistent badges across the app
+ */
+export interface PriorityDisplayConfig {
+  /** Icon name to display in badge */
+  icon: 'Shield' | 'Users' | 'Globe' | 'TrendingUp' | 'AlertTriangle';
+  /** Tailwind color classes for the badge */
+  colorClass: string;
+  /** Short label to display in the badge */
+  shortLabel: string;
+  /** Keywords to match in ruleApplied/rationale strings (lowercase) */
+  matchKeywords: string[];
+}
+
 export interface PriorityDefinition {
   id: string;
   name: string;
@@ -53,6 +68,7 @@ export interface PriorityDefinition {
   cannotGoAbove?: string; // If set, this priority cannot be dragged above the specified priority ID
   defaultPosition: Partial<Record<Exclude<AssignmentMode, 'CUSTOM'>, number>>;
   subConditions?: SubCondition[]; // For expandable priorities like Stability Accounts
+  displayConfig?: PriorityDisplayConfig; // For UI badge rendering
 }
 
 export interface SubConditionConfig {
@@ -84,7 +100,13 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     requiredFields: [],
     type: 'holdover',
     isLocked: true, // P0 - Always first, cannot be disabled or moved
-    defaultPosition: { ENT: 0, COMMERCIAL: 0, EMEA: 0, APAC: 0 }
+    defaultPosition: { ENT: 0, COMMERCIAL: 0, EMEA: 0, APAC: 0 },
+    displayConfig: {
+      icon: 'Shield',
+      colorClass: 'border-amber-500 text-amber-700',
+      shortLabel: 'Protected',
+      matchKeywords: ['manual holdover', 'manual', 'holdover', 'strategic', 'excluded']
+    }
   },
   
   // ========== P1: SALES TOOLS BUCKET (Commercial only) ==========
@@ -95,7 +117,13 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     modes: ['COMMERCIAL'],
     requiredFields: [{ table: 'accounts', field: 'hierarchy_bookings_arr_converted' }],
     type: 'holdover',
-    defaultPosition: { COMMERCIAL: 1 }
+    defaultPosition: { COMMERCIAL: 1 },
+    displayConfig: {
+      icon: 'TrendingUp',
+      colorClass: 'border-orange-500 text-orange-600',
+      shortLabel: 'Sales Tools',
+      matchKeywords: ['sales tools']
+    }
   },
   
   // ========== P2: STABILITY ACCOUNTS (expandable sub-conditions) ==========
@@ -136,7 +164,13 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
         requiredFields: [{ table: 'accounts', field: 'owner_change_date' }],
         defaultEnabled: true
       }
-    ]
+    ],
+    displayConfig: {
+      icon: 'Shield',
+      colorClass: 'border-amber-500 text-amber-700',
+      shortLabel: 'Stable',
+      matchKeywords: ['stability', 'stable account', 'cre', 'renewal soon', 'pe firm', 'recent change', 'backfill']
+    }
   },
   
   // ========== P3: TEAM ALIGNMENT ==========
@@ -150,7 +184,13 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
       { table: 'sales_reps', field: 'team' }  // Uses 'team' field which contains tier values (SMB/Growth/MM/ENT)
     ],
     type: 'optimization',
-    defaultPosition: { COMMERCIAL: 3, EMEA: 5, APAC: 5 }
+    defaultPosition: { COMMERCIAL: 3, EMEA: 5, APAC: 5 },
+    displayConfig: {
+      icon: 'Users',
+      colorClass: 'border-indigo-500 text-indigo-700',
+      shortLabel: 'Team Fit',
+      matchKeywords: ['team alignment']
+    }
   },
   
   // ========== P4+: OPTIMIZATION PRIORITIES ==========
@@ -161,7 +201,13 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     modes: ['ENT', 'COMMERCIAL', 'EMEA', 'APAC'],
     requiredFields: [],
     type: 'optimization',
-    defaultPosition: { ENT: 2, COMMERCIAL: 4, EMEA: 2, APAC: 2 }
+    defaultPosition: { ENT: 2, COMMERCIAL: 4, EMEA: 2, APAC: 2 },
+    displayConfig: {
+      icon: 'Users',
+      colorClass: 'border-green-500 text-green-700',
+      shortLabel: 'Geo+Cont',
+      matchKeywords: ['geography + continuity', 'continuity + geography', 'continuity + geo', 'geo_and_continuity']
+    }
   },
   
   {
@@ -172,7 +218,13 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     requiredFields: [],
     type: 'optimization',
     cannotGoAbove: 'geo_and_continuity',
-    defaultPosition: { ENT: 3, COMMERCIAL: 5, EMEA: 3, APAC: 3 }
+    defaultPosition: { ENT: 3, COMMERCIAL: 5, EMEA: 3, APAC: 3 },
+    displayConfig: {
+      icon: 'Users',
+      colorClass: 'border-purple-500 text-purple-700',
+      shortLabel: 'Continuity',
+      matchKeywords: ['account continuity', 'current/past owner']
+    }
   },
   
   {
@@ -183,7 +235,13 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     requiredFields: [],
     type: 'optimization',
     cannotGoAbove: 'geo_and_continuity',
-    defaultPosition: { ENT: 4, COMMERCIAL: 6, EMEA: 4, APAC: 4 }
+    defaultPosition: { ENT: 4, COMMERCIAL: 6, EMEA: 4, APAC: 4 },
+    displayConfig: {
+      icon: 'Globe',
+      colorClass: 'border-blue-500 text-blue-700',
+      shortLabel: 'Geography',
+      matchKeywords: ['geographic match', 'geography match']
+    }
   },
   
   {
@@ -194,7 +252,13 @@ export const PRIORITY_REGISTRY: PriorityDefinition[] = [
     requiredFields: [],
     type: 'optimization',
     isLocked: true,
-    defaultPosition: { ENT: 5, COMMERCIAL: 7, EMEA: 6, APAC: 6 }
+    defaultPosition: { ENT: 5, COMMERCIAL: 7, EMEA: 6, APAC: 6 },
+    displayConfig: {
+      icon: 'TrendingUp',
+      colorClass: 'border-cyan-500 text-cyan-700',
+      shortLabel: 'Balance',
+      matchKeywords: ['residual', 'best available', 'arr balance', 'force assignment', 'forced']
+    }
   }
 ];
 

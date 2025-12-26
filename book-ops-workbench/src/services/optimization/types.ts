@@ -196,13 +196,15 @@ export interface AggregatedAccount {
 
 /**
  * Sales rep for LP processing
+ * Note: 'team' field removed in v1.4.1 - use team_tier instead
  */
 export interface EligibleRep {
   rep_id: string;
   name: string;
   region: string | null;
-  team: string | null;
   team_tier: string | null;
+  /** Comma-separated PE firm names this rep handles. @see MASTER_LOGIC.mdc §10.7 */
+  pe_firms?: string | null;
   
   // Status
   is_active: boolean;
@@ -798,18 +800,21 @@ export interface Account {
 
 /**
  * Sales rep data for assignment processing
+ * Note: 'team' field deprecated in v1.4.1 - use team_tier for tier alignment
  */
 export interface SalesRep {
   rep_id: string;
   name: string;
   region: string | null;
-  // DEPRECATED: sub_region, is_renewal_specialist - removed in v1.3.9
   is_strategic_rep: boolean;
   is_active: boolean | null;
   include_in_assignments: boolean | null;
   flm: string | null;
   slm: string | null;
+  /** @deprecated Use team_tier instead. Removed from import in v1.4.1 */
   team?: string | null;
   team_tier?: 'SMB' | 'Growth' | 'MM' | 'ENT' | null;
+  /** Comma-separated PE firm names this rep handles. @see MASTER_LOGIC.mdc §10.7 */
+  pe_firms?: string | null;
 }
 

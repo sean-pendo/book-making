@@ -50,6 +50,7 @@ export type Database = {
           is_customer: boolean | null
           is_parent: boolean | null
           is_strategic: boolean | null
+          lock_reason: string | null
           new_owner_id: string | null
           new_owner_name: string | null
           open_atr_count: number | null
@@ -104,6 +105,7 @@ export type Database = {
           is_customer?: boolean | null
           is_parent?: boolean | null
           is_strategic?: boolean | null
+          lock_reason?: string | null
           new_owner_id?: string | null
           new_owner_name?: string | null
           open_atr_count?: number | null
@@ -158,6 +160,7 @@ export type Database = {
           is_customer?: boolean | null
           is_parent?: boolean | null
           is_strategic?: boolean | null
+          lock_reason?: string | null
           new_owner_id?: string | null
           new_owner_name?: string | null
           open_atr_count?: number | null
@@ -1397,6 +1400,7 @@ export type Database = {
           is_strategic_rep: boolean
           manager: string | null
           name: string
+          pe_firms: string | null
           region: string | null
           rep_id: string
           slm: string | null
@@ -1422,6 +1426,7 @@ export type Database = {
           is_strategic_rep?: boolean
           manager?: string | null
           name: string
+          pe_firms?: string | null
           region?: string | null
           rep_id: string
           slm?: string | null
@@ -1447,6 +1452,7 @@ export type Database = {
           is_strategic_rep?: boolean
           manager?: string | null
           name?: string
+          pe_firms?: string | null
           region?: string | null
           rep_id?: string
           slm?: string | null
@@ -1685,6 +1691,7 @@ export type Database = {
           p_is_locking: boolean
           p_owner_id?: string
           p_owner_name?: string
+          p_lock_reason?: string
         }
         Returns: undefined
       }

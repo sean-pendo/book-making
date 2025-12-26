@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
+import { getAccountARR } from '@/_domain';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -117,7 +118,7 @@ export const GlobalClashDetector = () => {
         result.data?.forEach(account => {
           const key = account.sfdc_account_id;
           if (!accountsMap.has(key)) {
-            accountsMap.set(key, { account_name: account.account_name, arr: account.calculated_arr || 0, builds: [] });
+            accountsMap.set(key, { account_name: account.account_name, arr: getAccountARR(account), builds: [] });
           }
           
           const accountData = accountsMap.get(key)!;

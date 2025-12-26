@@ -3,11 +3,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Edit, CheckCircle, UserX, Lock, Unlock, Info, Building2, GitBranch } from 'lucide-react';
-import { getAccountARR, getAccountATR, formatCurrency } from '@/_domain';
+import { Edit, CheckCircle, UserX, Lock, Unlock, Info, Building2, GitBranch, ChevronUp, ChevronDown } from 'lucide-react';
+import { getAccountARR, getAccountATR, formatCurrency, getCRERiskLevel, type AssignmentConfidence } from '@/_domain';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { LockAccountDialog } from '@/components/LockAccountDialog';
+import { PriorityBadge } from '@/components/ui/PriorityBadge';
 
 interface Account {
   sfdc_account_id: string;
@@ -38,6 +40,8 @@ interface Account {
   atr?: number;
   calculated_atr?: number;
   exclude_from_reassignment?: boolean;
+  lock_reason?: string | null;
+  cre_count?: number | null;
 }
 
 interface AssignmentReason {
@@ -52,7 +56,8 @@ interface AssignmentProposal {
   proposedOwnerRegion?: string;
   assignmentReason: string;
   ruleApplied: string;
-  conflictRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+  /** How confident is the system in this assignment? @see MASTER_LOGIC.mdc §13.4.1 */
+  confidence: AssignmentConfidence;
 }
 
 interface Opportunity {
@@ -96,8 +101,17 @@ export const VirtualizedAccountTable = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingLocks, setPendingLocks] = useState<Set<string>>(new Set());
   
+  // Sorting state
+  type SortField = 'account_name' | 'arr' | 'atr' | 'owner_name' | 'new_owner_name' | 'confidence' | 'cre_count' | 'rule_applied';
+  const [sortField, setSortField] = useState<SortField>('account_name');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  
+  // State for lock dialog
+  const [lockDialogOpen, setLockDialogOpen] = useState(false);
+  const [accountToLock, setAccountToLock] = useState<Account | null>(null);
+  
   const toggleExclusionMutation = useMutation({
-    mutationFn: async ({ accountId, currentValue, account }: { accountId: string; currentValue: boolean; account: Account }) => {
+    mutationFn: async ({ accountId, currentValue, account, lockReason }: { accountId: string; currentValue: boolean; account: Account; lockReason?: string | null }) => {
       if (!buildId) {
         throw new Error('Build ID is required');
       }
@@ -119,12 +133,13 @@ export const VirtualizedAccountTable = ({
         p_build_id: buildId,
         p_is_locking: isLocking,
         p_owner_id: account.owner_id || null,
-        p_owner_name: account.owner_name || null
+        p_owner_name: account.owner_name || null,
+        p_lock_reason: isLocking ? lockReason : null
       });
       
       if (error) throw error;
     },
-    onMutate: async ({ accountId, currentValue, account }) => {
+    onMutate: async ({ accountId, currentValue, account, lockReason }) => {
       // Cancel outgoing refetches
       await queryClient.cancelQueries({ queryKey: ['build-data', buildId] });
       
@@ -146,14 +161,16 @@ export const VirtualizedAccountTable = ({
                   ...acc, 
                   exclude_from_reassignment: true,
                   new_owner_id: acc.owner_id,
-                  new_owner_name: acc.owner_name
+                  new_owner_name: acc.owner_name,
+                  lock_reason: lockReason || null
                 };
               } else {
                 return { 
                   ...acc, 
                   exclude_from_reassignment: false,
                   new_owner_id: null,
-                  new_owner_name: null
+                  new_owner_name: null,
+                  lock_reason: null
                 };
               }
             }
@@ -237,12 +254,92 @@ export const VirtualizedAccountTable = ({
     });
   }, [accounts, searchTerm, currentOwnerFilter, newOwnerFilter, lockStatusFilter, assignmentProposals]);
 
+  // Helper to get confidence for an account
+  const getAccountConfidence = useCallback((account: Account): AssignmentConfidence | null => {
+    const proposal = assignmentProposals.find(p => p.accountId === account.sfdc_account_id);
+    return proposal?.confidence || null;
+  }, [assignmentProposals]);
+
+  // Helper to get rule applied for an account (for sorting)
+  const getAccountRuleApplied = useCallback((account: Account): string => {
+    const proposal = assignmentProposals.find(p => p.accountId === account.sfdc_account_id);
+    const reasonData = assignmentReasons.find(r => r.accountId === account.sfdc_account_id);
+    return proposal?.ruleApplied || reasonData?.reason || '';
+  }, [assignmentProposals, assignmentReasons]);
+
+  // Sort handler
+  const handleSort = useCallback((field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+    setCurrentPage(1); // Reset to first page on sort
+  }, [sortField]);
+
+  // Get sort icon for column
+  const getSortIcon = useCallback((field: SortField) => {
+    if (sortField !== field) return null;
+    return sortDirection === 'asc' ? 
+      <ChevronUp className="h-4 w-4" /> : 
+      <ChevronDown className="h-4 w-4" />;
+  }, [sortField, sortDirection]);
+
+  // Sorted and paginated data
+  const sortedAccounts = useMemo(() => {
+    const sorted = [...filteredAccounts].sort((a, b) => {
+      let comparison = 0;
+      
+      switch (sortField) {
+        case 'account_name':
+          comparison = (a.account_name || '').localeCompare(b.account_name || '');
+          break;
+        case 'arr':
+          comparison = getAccountARR(a) - getAccountARR(b);
+          break;
+        case 'atr':
+          comparison = getAccountATR(a) - getAccountATR(b);
+          break;
+        case 'owner_name':
+          comparison = (a.owner_name || '').localeCompare(b.owner_name || '');
+          break;
+        case 'new_owner_name':
+          const aNewOwner = a.new_owner_name || assignmentProposals.find(p => p.accountId === a.sfdc_account_id)?.proposedOwnerName || '';
+          const bNewOwner = b.new_owner_name || assignmentProposals.find(p => p.accountId === b.sfdc_account_id)?.proposedOwnerName || '';
+          comparison = aNewOwner.localeCompare(bNewOwner);
+          break;
+        case 'confidence':
+          // Sort order: HIGH > MEDIUM > LOW > null
+          const confidenceOrder: Record<string, number> = { 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1 };
+          const aConf = getAccountConfidence(a);
+          const bConf = getAccountConfidence(b);
+          comparison = (confidenceOrder[bConf || ''] || 0) - (confidenceOrder[aConf || ''] || 0);
+          break;
+        case 'cre_count':
+          // Sort by raw CRE count (numeric sort)
+          comparison = (a.cre_count || 0) - (b.cre_count || 0);
+          break;
+        case 'rule_applied':
+          // Sort alphabetically by rule applied (P1 < P2 < P3 < ... < RO)
+          const aRule = getAccountRuleApplied(a);
+          const bRule = getAccountRuleApplied(b);
+          comparison = aRule.localeCompare(bRule);
+          break;
+      }
+      
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+    
+    return sorted;
+  }, [filteredAccounts, sortField, sortDirection, assignmentProposals, getAccountConfidence, getAccountRuleApplied]);
+
   // Memoized pagination calculation
   const paginatedData = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
-    return filteredAccounts.slice(startIndex, endIndex);
-  }, [filteredAccounts, currentPage, itemsPerPage]);
+    return sortedAccounts.slice(startIndex, endIndex);
+  }, [sortedAccounts, currentPage, itemsPerPage]);
 
   const totalPages = Math.ceil(filteredAccounts.length / itemsPerPage);
 
@@ -268,17 +365,54 @@ export const VirtualizedAccountTable = ({
       .reduce((sum, opp) => sum + (opp.net_arr || 0), 0);
   }, [opportunities]);
 
-  const getContinuityRiskBadge = useCallback((account: Account) => {
-    // Enhanced risk calculation based on CRE count from opportunities
-    const creCount = (account as any).cre_count || 0;
+  /**
+   * CRE Risk Badge - uses getCRERiskLevel from @/_domain for SSOT compliance
+   * Includes tooltip showing what CRE means and the risk breakdown
+   * @see MASTER_LOGIC.mdc §13.4 - CRE Risk vs Assignment Confidence
+   */
+  const getCRERiskBadge = useCallback((account: Account) => {
+    const creCount = account.cre_count || 0;
+    const riskLevel = getCRERiskLevel(creCount);
     
-    if (creCount === 0) {
-      return <Badge variant="outline">No Risk</Badge>;
-    } else if (creCount <= 2) {
-      return <Badge className="bg-orange-500">Medium Risk</Badge>;
-    } else {
-      return <Badge variant="destructive">High Risk</Badge>;
-    }
+    const getRiskDescription = () => {
+      switch (riskLevel) {
+        case 'none':
+          return 'No renewal risk events on this account.';
+        case 'low':
+          return `${creCount} renewal risk event${creCount > 1 ? 's' : ''} detected. Low churn probability.`;
+        case 'medium':
+          return `${creCount} renewal risk events detected. Moderate churn probability - monitor closely.`;
+        case 'high':
+          return `${creCount} renewal risk events detected. High churn probability - requires attention.`;
+      }
+    };
+    
+    const badge = (() => {
+      switch (riskLevel) {
+        case 'none':
+          return <Badge variant="outline" className="text-muted-foreground cursor-help">No CRE</Badge>;
+        case 'low':
+        case 'medium':
+          return <Badge className="bg-orange-500 text-white cursor-help">{creCount} CRE</Badge>;
+        case 'high':
+          return <Badge variant="destructive" className="cursor-help">{creCount} CRE</Badge>;
+      }
+    })();
+    
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {badge}
+        </TooltipTrigger>
+        <TooltipContent className="max-w-[280px]">
+          <p className="font-semibold mb-1">Customer Renewal at Risk</p>
+          <p className="text-xs text-muted-foreground">{getRiskDescription()}</p>
+          <p className="text-xs text-muted-foreground mt-1 border-t pt-1">
+            CRE = opportunities flagged with renewal risk status
+          </p>
+        </TooltipContent>
+      </Tooltip>
+    );
   }, []);
 
   // Rule name mapping for user-friendly display
@@ -332,7 +466,15 @@ export const VirtualizedAccountTable = ({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="min-w-[200px]">Account Details</TableHead>
+              <TableHead 
+                className="min-w-[200px] cursor-pointer hover:bg-muted/50 select-none"
+                onClick={() => handleSort('account_name')}
+              >
+                <div className="flex items-center gap-1">
+                  Account Details
+                  {getSortIcon('account_name')}
+                </div>
+              </TableHead>
               <TableHead className="min-w-[80px]">
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -354,16 +496,104 @@ export const VirtualizedAccountTable = ({
               <TableHead className="min-w-[120px]">Location</TableHead>
               <TableHead className="min-w-[100px]">Tier</TableHead>
               {accountType === 'prospect' ? (
-                <TableHead className="min-w-[120px]">Net ARR</TableHead>
+                <TableHead 
+                  className="min-w-[120px] cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort('arr')}
+                >
+                  <div className="flex items-center gap-1">
+                    Net ARR
+                    {getSortIcon('arr')}
+                  </div>
+                </TableHead>
               ) : (
                 <>
-                  <TableHead className="min-w-[100px]">ARR</TableHead>
-                  <TableHead className="min-w-[100px]">ATR</TableHead>
+                  <TableHead 
+                    className="min-w-[100px] cursor-pointer hover:bg-muted/50 select-none"
+                    onClick={() => handleSort('arr')}
+                  >
+                    <div className="flex items-center gap-1">
+                      ARR
+                      {getSortIcon('arr')}
+                    </div>
+                  </TableHead>
+                  <TableHead 
+                    className="min-w-[100px] cursor-pointer hover:bg-muted/50 select-none"
+                    onClick={() => handleSort('atr')}
+                  >
+                    <div className="flex items-center gap-1">
+                      ATR
+                      {getSortIcon('atr')}
+                    </div>
+                  </TableHead>
                 </>
               )}
-              <TableHead className="min-w-[180px]">Owner Assignment</TableHead>
-              <TableHead className="min-w-[180px]">Rule Applied</TableHead>
-              <TableHead className="min-w-[120px]">Risk</TableHead>
+              <TableHead 
+                className="min-w-[180px] cursor-pointer hover:bg-muted/50 select-none"
+                onClick={() => handleSort('new_owner_name')}
+              >
+                <div className="flex items-center gap-1">
+                  Owner Assignment
+                  {getSortIcon('new_owner_name')}
+                </div>
+              </TableHead>
+              <TableHead 
+                className="min-w-[180px] cursor-pointer hover:bg-muted/50 select-none"
+                onClick={() => handleSort('rule_applied')}
+              >
+                <div className="flex items-center gap-1">
+                  Rule Applied
+                  {getSortIcon('rule_applied')}
+                </div>
+              </TableHead>
+              <TableHead 
+                className="min-w-[120px] cursor-pointer hover:bg-muted/50 select-none"
+                onClick={() => handleSort('confidence')}
+              >
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-1 cursor-help">
+                      Confidence
+                      {getSortIcon('confidence')}
+                      <Info className="h-3 w-3 text-muted-foreground" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-[280px]">
+                    <p className="font-semibold mb-1">Assignment Confidence</p>
+                    <p className="text-xs text-muted-foreground">
+                      How confident is the system in this assignment? Based on warning severity.
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1 italic">
+                      Not the same as CRE Risk (customer churn probability).
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TableHead>
+              {/* CRE Risk column - customers only */}
+              {accountType === 'customer' && (
+                <TableHead 
+                  className="min-w-[100px] cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort('cre_count')}
+                >
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="flex items-center gap-1 cursor-help">
+                        CRE Risk
+                        {getSortIcon('cre_count')}
+                        <Info className="h-3 w-3 text-muted-foreground" />
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-[280px]">
+                      <p className="font-semibold mb-1">CRE Risk</p>
+                      <p className="text-xs text-muted-foreground">
+                        Customer Renewal at Risk - churn probability based on CRE count.
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1 italic">
+                        Not the same as Assignment Confidence (assignment quality).
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TableHead>
+              )}
               <TableHead className="min-w-[250px]">Reason</TableHead>
               <TableHead className="min-w-[100px]">Status</TableHead>
               <TableHead className="min-w-[100px]">Actions</TableHead>
@@ -401,11 +631,19 @@ export const VirtualizedAccountTable = ({
                         size="sm"
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleExclusionMutation.mutate({
-                            accountId: account.sfdc_account_id,
-                            currentValue: account.exclude_from_reassignment || false,
-                            account: account
-                          });
+                          const isCurrentlyLocked = account.exclude_from_reassignment || false;
+                          if (isCurrentlyLocked) {
+                            // Unlock immediately (no dialog needed)
+                            toggleExclusionMutation.mutate({
+                              accountId: account.sfdc_account_id,
+                              currentValue: true,
+                              account: account
+                            });
+                          } else {
+                            // Open dialog for locking
+                            setAccountToLock(account);
+                            setLockDialogOpen(true);
+                          }
                         }}
                         disabled={toggleExclusionMutation.isPending}
                         className="h-8 w-8 p-0 transition-all duration-200"
@@ -417,12 +655,20 @@ export const VirtualizedAccountTable = ({
                         )}
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>
-                      <p>
-                        {account.exclude_from_reassignment || pendingLocks.has(account.sfdc_account_id)
-                          ? 'Locked - Click to allow reassignment'
-                          : 'Click to lock and keep current owner'}
-                      </p>
+                    <TooltipContent className="max-w-xs">
+                      {account.exclude_from_reassignment || pendingLocks.has(account.sfdc_account_id) ? (
+                        <div className="space-y-1">
+                          <p className="font-medium">Locked - Account will not be reassigned</p>
+                          {account.lock_reason ? (
+                            <p className="text-sm text-muted-foreground italic">"{account.lock_reason}"</p>
+                          ) : (
+                            <p className="text-xs text-muted-foreground italic">(no reason provided)</p>
+                          )}
+                          <p className="text-xs text-muted-foreground">Click to unlock</p>
+                        </div>
+                      ) : (
+                        <p>Click to lock and keep with current owner</p>
+                      )}
                     </TooltipContent>
                   </Tooltip>
                 </TableCell>
@@ -490,39 +736,72 @@ export const VirtualizedAccountTable = ({
                     const reasonData = assignmentReasons.find(r => r.accountId === account.sfdc_account_id);
                     const proposal = assignmentProposals.find(p => p.accountId === account.sfdc_account_id);
                     
-                    const ruleApplied = proposal?.ruleApplied || (reasonData?.reason?.split(':')[0]?.trim()) || '-';
+                    // Pass full reason string so PriorityBadge can match on keywords
+                    const ruleApplied = proposal?.ruleApplied || reasonData?.reason || '-';
                     
                     if (ruleApplied === '-') {
                       return <span className="text-muted-foreground text-sm">-</span>;
                     }
                     
-                    return (
-                      <div className="text-sm font-medium">
-                        {ruleApplied}
-                      </div>
-                    );
+                    return <PriorityBadge ruleApplied={ruleApplied} />;
                   })()}
                 </TableCell>
+                {/* Confidence cell - shows "-" when no proposal */}
                 <TableCell>
                   {(() => {
-                    // Use conflict risk from proposal if available
                     const proposal = assignmentProposals.find(p => p.accountId === account.sfdc_account_id);
                     
-                    if (proposal?.conflictRisk) {
-                      const risk = proposal.conflictRisk;
-                      if (risk === 'LOW') {
-                        return <Badge className="bg-green-500 text-white">Low Risk</Badge>;
-                      } else if (risk === 'MEDIUM') {
-                        return <Badge className="bg-orange-500 text-white">Medium Risk</Badge>;
-                      } else if (risk === 'HIGH') {
-                        return <Badge variant="destructive">High Risk</Badge>;
-                      }
+                    if (proposal?.confidence) {
+                      const confidence = proposal.confidence;
+                      const confidenceInfo: Record<AssignmentConfidence, { label: string; description: string; className: string; variant: 'default' | 'destructive' | 'outline' }> = {
+                        HIGH: {
+                          label: 'High Confidence',
+                          description: 'Clean assignment with no concerns. Safe to approve.',
+                          className: '',
+                          variant: 'outline'
+                        },
+                        MEDIUM: {
+                          label: 'Medium Confidence',
+                          description: 'Some concerns detected (geo mismatch, tier concentration). Review before approving.',
+                          className: 'bg-orange-500 text-white border-orange-500',
+                          variant: 'default'
+                        },
+                        LOW: {
+                          label: 'Low Confidence',
+                          description: 'Significant issues (capacity exceeded, changing customer owner). May disrupt established relationships.',
+                          className: '',
+                          variant: 'destructive'
+                        }
+                      };
+                      
+                      const info = confidenceInfo[confidence];
+                      return (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge 
+                              variant={info.variant}
+                              className={`${info.className} cursor-help`}
+                            >
+                              {info.label}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-[250px]">
+                            <p className="text-xs">{info.description}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      );
                     }
                     
-                    // Fallback to CRE-based risk if no proposal
-                    return getContinuityRiskBadge(account);
+                    // No proposal - show dash
+                    return <span className="text-muted-foreground">-</span>;
                   })()}
                 </TableCell>
+                {/* CRE Risk cell - customers only */}
+                {accountType === 'customer' && (
+                  <TableCell>
+                    {getCRERiskBadge(account)}
+                  </TableCell>
+                )}
                 <TableCell>
                   {(() => {
                     // Show detailed reason
@@ -585,6 +864,29 @@ export const VirtualizedAccountTable = ({
           </Button>
         </div>
       )}
+
+      {/* Lock Account Dialog */}
+      <LockAccountDialog
+        open={lockDialogOpen}
+        onOpenChange={(open) => {
+          setLockDialogOpen(open);
+          if (!open) setAccountToLock(null);
+        }}
+        accountName={accountToLock?.account_name || ''}
+        onConfirm={(reason) => {
+          if (accountToLock) {
+            toggleExclusionMutation.mutate({
+              accountId: accountToLock.sfdc_account_id,
+              currentValue: false, // We're locking, so current value is "unlocked" (false)
+              account: accountToLock,
+              lockReason: reason
+            });
+          }
+          setLockDialogOpen(false);
+          setAccountToLock(null);
+        }}
+        isLoading={toggleExclusionMutation.isPending}
+      />
     </div>
   );
 };

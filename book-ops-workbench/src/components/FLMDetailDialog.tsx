@@ -401,11 +401,17 @@ export const FLMDetailDialog = ({ open, onOpenChange, flmData, buildId }: FLMDet
     return getAccountARR(account);
   };
 
+  /**
+   * Get ATR for an account using SSOT getAccountATR from @/_domain.
+   * Falls back to opportunity-sourced ATR if account field is empty.
+   * @see MASTER_LOGIC.mdc §2.2
+   */
   const getATR = (account: any) => {
-    // Get ATR from opportunities first (more accurate), fall back to account fields
+    // Use SSOT getAccountATR first (from @/_domain)
+    const atrFromAccount = getAccountATR(account);
+    // Fall back to opportunity-sourced ATR if account field is empty
     const atrFromOpps = atrByAccount?.get(account.sfdc_account_id) || 0;
-    const atrFromAccount = parseFloat(account.calculated_atr) || parseFloat(account.atr) || 0;
-    return atrFromOpps || atrFromAccount;
+    return atrFromAccount || atrFromOpps;
   };
 
   if (!flmData) return null;

@@ -278,18 +278,6 @@ export const BeforeAfterComparisonPanel: React.FC<BeforeAfterComparisonPanelProp
             </p>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="p-4 text-center">
-            <p className="text-xs text-muted-foreground mb-1">Coverage</p>
-            <p className="text-2xl font-bold">
-              {proposed.ownerCoverage.coverageRate.toFixed(1)}%
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {proposed.ownerCoverage.orphaned > 0 && `${proposed.ownerCoverage.orphaned} orphaned`}
-              {proposed.ownerCoverage.orphaned === 0 && 'all accounts assigned'}
-            </p>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );

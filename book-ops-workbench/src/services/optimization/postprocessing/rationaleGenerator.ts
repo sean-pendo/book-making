@@ -2,10 +2,12 @@
  * Rationale Generator
  *
  * Generates human-readable explanations for each assignment.
- * Based on the dominant scoring factor and lock status.
+ * Shows percentage contribution breakdowns when multiple factors are significant.
  *
  * Priority codes are now DYNAMIC based on user's priority_config.
  * Falls back to default positions if no config provided.
+ * 
+ * @see MASTER_LOGIC.mdc §11.9.1 - Rationale Transparency
  */
 
 import type {
@@ -17,6 +19,7 @@ import type {
 } from '../types';
 import { DEFAULT_LP_GEOGRAPHY_PARAMS } from '../types';
 import type { PriorityConfig } from '@/config/priorityRegistry';
+import { SIGNIFICANT_CONTRIBUTION_THRESHOLD } from '@/_domain';
 
 // =============================================================================
 // Mapping Constants
@@ -78,11 +81,28 @@ export function getPositionLabel(priorityId: string, priorityConfig?: PriorityCo
 }
 
 // =============================================================================
+// Contribution Types
+// =============================================================================
+
+interface Contribution {
+  name: string;
+  id: string;
+  value: number;
+  raw: number | null;
+  pct: number;
+}
+
+// =============================================================================
 // Main Functions
 // =============================================================================
 
 /**
  * Generate a human-readable rationale for an assignment
+ * 
+ * Shows percentage breakdowns when multiple factors contribute ≥10%.
+ * Omits factors with null values (e.g., team alignment when tier data missing).
+ * 
+ * @see MASTER_LOGIC.mdc §11.9.1 - Rationale Transparency
  */
 export function generateRationale(
   account: AggregatedAccount,
@@ -97,77 +117,126 @@ export function generateRationale(
     return generateLockRationale(lockResult, assignedRep, priorityConfig);
   }
 
-  // Calculate weighted contributions (handle N/A team alignment)
-  const contributions = [
-    { name: 'Continuity', value: scores.continuity * weights.wC, raw: scores.continuity },
-    { name: 'Geography', value: scores.geography * weights.wG, raw: scores.geography },
-    // Team alignment: null = N/A, treated as 0 contribution but not a mismatch
-    { name: 'Team Match', value: scores.teamAlignment !== null ? scores.teamAlignment * weights.wT : 0, raw: scores.teamAlignment },
-  ].sort((a, b) => b.value - a.value);
+  // Calculate weighted contributions, filtering null team alignment
+  const rawContributions: Array<{ name: string; id: string; value: number; raw: number | null }> = [
+    { name: 'Geography', id: 'geography', value: scores.geography * weights.wG, raw: scores.geography },
+    { name: 'Continuity', id: 'continuity', value: scores.continuity * weights.wC, raw: scores.continuity },
+  ];
+  
+  // Only include team alignment if not null (N/A)
+  if (scores.teamAlignment !== null) {
+    rawContributions.push({ 
+      name: 'Team', 
+      id: 'team_alignment', 
+      value: scores.teamAlignment * weights.wT, 
+      raw: scores.teamAlignment 
+    });
+  }
 
-  const totalScore = contributions.reduce((s, c) => s + c.value, 0);
+  // Calculate total and percentages (renormalized when team is N/A)
+  const total = rawContributions.reduce((s, c) => s + c.value, 0);
+  
+  // Build contribution list with percentages
+  const contributions: Contribution[] = rawContributions
+    .map(c => ({
+      ...c,
+      pct: total > 0 ? c.value / total : 0
+    }))
+    .sort((a, b) => b.pct - a.pct);
+
+  // Filter to significant contributions (≥10%)
+  const significant = contributions.filter(c => c.pct >= SIGNIFICANT_CONTRIBUTION_THRESHOLD);
+  
+  // Get priority label based on dominant factor
+  const label = getDominantPriorityLabel(contributions, scores, priorityConfig);
+  
+  // Balance-driven (low total score)
+  if (total < 0.3) {
+    return `RO: ${assignedRep.name} - optimized for balance`;
+  }
+
+  // Build breakdown string
+  const breakdown = buildContributionBreakdown(significant, contributions[0]);
+
+  return `${label}: ${assignedRep.name} - ${breakdown}`;
+}
+
+/**
+ * Determine the priority label based on dominant factors
+ */
+function getDominantPriorityLabel(
+  contributions: Contribution[],
+  scores: AssignmentScores,
+  priorityConfig?: PriorityConfig[]
+): string {
+  if (contributions.length === 0) return 'RO';
+  
   const top = contributions[0];
-
-  // Check for combined Geography + Continuity
+  
+  // Check for combined Geography + Continuity (both strong)
   const hasStrongGeo = scores.geography >= DEFAULT_LP_GEOGRAPHY_PARAMS.sibling_score;
   const hasStrongContinuity = scores.continuity >= DEFAULT_LP_GEOGRAPHY_PARAMS.parent_score;
-
+  
   if (hasStrongGeo && hasStrongContinuity) {
-    const label = getPositionLabel('geo_and_continuity', priorityConfig);
-    return `${label}: Geography + Continuity → ${assignedRep.name} (${assignedRep.region || 'matching region'}, relationship maintained, score ${totalScore.toFixed(2)})`;
+    return getPositionLabel('geo_and_continuity', priorityConfig);
   }
+  
+  // Use dominant factor for label
+  return getPositionLabel(top.id, priorityConfig);
+}
 
-  // Geography dominant
-  if (top.name === 'Geography' && top.raw >= DEFAULT_LP_GEOGRAPHY_PARAMS.exact_match_score) {
-    const label = getPositionLabel('geography', priorityConfig);
-    return `${label}: Geography Match → ${assignedRep.name} (${assignedRep.region || 'matching region'} - exact geo match, score ${totalScore.toFixed(2)})`;
+/**
+ * Build natural language contribution breakdown
+ * 
+ * Multi-factor: "Geography (65%), Continuity (25%), Team (10%)"
+ * Single dominant: "exact geographic match" (natural description)
+ */
+function buildContributionBreakdown(
+  significant: Contribution[],
+  top: Contribution
+): string {
+  // Single dominant factor - use natural language description
+  if (significant.length <= 1) {
+    return getSingleFactorDescription(top);
   }
+  
+  // Multi-factor - show percentage breakdown
+  return significant
+    .map(c => `${c.name} (${Math.round(c.pct * 100)}%)`)
+    .join(', ');
+}
 
-  if (top.name === 'Geography' && top.raw >= DEFAULT_LP_GEOGRAPHY_PARAMS.sibling_score) {
-    const label = getPositionLabel('geography', priorityConfig);
-    return `${label}: Geography Match → ${assignedRep.name} (${assignedRep.region || 'nearby region'} - sibling region, score ${totalScore.toFixed(2)})`;
+/**
+ * Get natural language description for a single dominant factor
+ */
+function getSingleFactorDescription(top: Contribution): string {
+  if (top.name === 'Geography') {
+    if (top.raw !== null && top.raw >= 1.0) return 'exact geographic match';
+    if (top.raw !== null && top.raw >= 0.65) return 'strong regional alignment';
+    if (top.raw !== null && top.raw >= 0.40) return 'regional alignment';
+    return 'geographic optimization';
   }
-
-  if (top.name === 'Geography' && top.raw >= DEFAULT_LP_GEOGRAPHY_PARAMS.parent_score) {
-    const label = getPositionLabel('geography', priorityConfig);
-    return `${label}: Geography Match → ${assignedRep.name} (${assignedRep.region || 'same macro-region'} - regional alignment, score ${totalScore.toFixed(2)})`;
+  
+  if (top.name === 'Continuity') {
+    if (top.raw !== null && top.raw > 0.7) return 'long-term relationship preserved';
+    if (top.raw !== null && top.raw > 0.4) return 'relationship continuity';
+    return 'continuity consideration';
   }
-
-  // Continuity dominant
-  if (top.name === 'Continuity' && top.raw > 0.7) {
-    const label = getPositionLabel('continuity', priorityConfig);
-    return `${label}: Account Continuity → ${assignedRep.name} (long-term relationship, score ${totalScore.toFixed(2)})`;
+  
+  if (top.name === 'Team') {
+    if (top.raw !== null && top.raw >= 1.0) return 'exact tier match';
+    if (top.raw !== null && top.raw >= 0.6) return 'good tier alignment';
+    return 'team alignment';
   }
-
-  if (top.name === 'Continuity' && top.raw > 0.4) {
-    const label = getPositionLabel('continuity', priorityConfig);
-    return `${label}: Account Continuity → ${assignedRep.name} (relationship maintained, score ${totalScore.toFixed(2)})`;
-  }
-
-  // Team alignment as a factor
-  // Skip if N/A (null)
-  if (top.name === 'Team Match' && top.raw !== null && top.raw >= 1.0) {
-    const label = getPositionLabel('team_alignment', priorityConfig);
-    return `${label}: Team Alignment → ${assignedRep.name} (${assignedRep.team_tier || assignedRep.team || 'matching tier'} - exact tier match, score ${totalScore.toFixed(2)})`;
-  }
-
-  if (top.name === 'Team Match' && top.raw !== null && top.raw >= 0.6) {
-    const label = getPositionLabel('team_alignment', priorityConfig);
-    return `${label}: Team Alignment → ${assignedRep.name} (${assignedRep.team_tier || assignedRep.team || 'close tier'} - good tier alignment, score ${totalScore.toFixed(2)})`;
-  }
-
-  // Balance-driven (RO)
-  if (totalScore < 0.3) {
-    return `RO: Balance Optimization → ${assignedRep.name} (best available for balance, score ${totalScore.toFixed(2)})`;
-  }
-
-  // Generic optimized (RO)
-  return `RO: Optimized → ${assignedRep.name} (${top.name.toLowerCase()} was primary factor, score ${totalScore.toFixed(2)})`;
+  
+  return 'optimized assignment';
 }
 
 /**
  * Generate rationale for locked accounts
  * Uses priority config to determine correct position labels
+ * 
+ * @see MASTER_LOGIC.mdc §11.9 - Rationale Generation
  */
 function generateLockRationale(
   lock: StabilityLockResult,
@@ -179,25 +248,31 @@ function generateLockRationale(
 
   switch (lock.lockType) {
     case 'manual_lock':
+      // P0 manual lock - keep as-is
       return `${label}: Excluded from reassignment → ${rep.name} (manually locked)`;
 
     case 'backfill_migration':
-      return `${label}: Stability Lock → ${rep.name} (backfill migration from departing rep)`;
+      // Distinct from stability - accounts MUST move to new owner
+      return `${label}: Backfill Migration → ${rep.name} (from departing owner)`;
 
     case 'cre_risk':
-      return `${label}: Stability Lock → ${rep.name} (CRE at-risk - relationship stability)`;
+      // Stable account - CRE at-risk
+      return `${label}: Stable Account → ${rep.name} (CRE at-risk)`;
 
     case 'renewal_soon':
-      return `${label}: Stability Lock → ${rep.name} (${lock.reason || 'renewal within threshold'})`;
+      // Stable account - renewal coming soon
+      return `${label}: Stable Account → ${rep.name} (${lock.reason || 'renewal soon'})`;
 
     case 'pe_firm':
-      return `${label}: Stability Lock → ${rep.name} (${lock.reason || 'PE firm portfolio alignment'})`;
+      // Stable account - PE firm alignment
+      return `${label}: Stable Account → ${rep.name} (${lock.reason || 'PE firm alignment'})`;
 
     case 'recent_change':
-      return `${label}: Stability Lock → ${rep.name} (${lock.reason || 'recently changed owner'})`;
+      // Stable account - recently changed owner
+      return `${label}: Stable Account → ${rep.name} (${lock.reason || 'recent owner change'})`;
 
     default:
-      return `${label}: Stability Lock → ${rep.name} (stability constraint)`;
+      return `${label}: Stable Account → ${rep.name} (stability constraint)`;
   }
 }
 

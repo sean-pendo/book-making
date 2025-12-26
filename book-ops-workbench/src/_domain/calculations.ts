@@ -577,3 +577,179 @@ export function isEligibleForContinuityTracking(
   if (!ownerId) return false;
   return validRepIds.has(ownerId);
 }
+
+// =============================================================================
+// REP BOOK METRICS
+// =============================================================================
+
+/**
+ * REP BOOK METRICS
+ * ----------------
+ * Aggregated metrics for a sales rep's book of accounts.
+ * Used for before/after comparison when reassigning accounts.
+ * 
+ * @see MASTER_LOGIC.mdc §13.7
+ */
+export interface RepBookMetrics {
+  /** Total number of parent accounts in the book */
+  accountCount: number;
+  
+  /** Number of customer accounts (is_customer = true) */
+  customerCount: number;
+  
+  /** Number of prospect accounts (is_customer = false) */
+  prospectCount: number;
+  
+  /** Total ARR across all accounts */
+  totalARR: number;
+  
+  /** Total ATR across customer accounts */
+  totalATR: number;
+  
+  /** Total pipeline value from opportunities */
+  totalPipeline: number;
+  
+  /** Count breakdown by expansion tier */
+  tierBreakdown: {
+    tier1: number;
+    tier2: number;
+    tier3: number;
+    tier4: number;
+    unclassified: number;
+  };
+  
+  /** Total CRE cases across all accounts */
+  creRiskCount: number;
+}
+
+/**
+ * Extended account data for rep book metrics calculation.
+ * Extends AccountData with additional fields needed for tier/CRE tracking.
+ */
+export interface RepBookAccountData extends AccountData {
+  /** Expansion tier classification */
+  expansion_tier?: string | null;
+  
+  /** Initial sale tier (fallback for expansion_tier) */
+  initial_sale_tier?: string | null;
+  
+  /** Count of Customer Renewal at Risk events */
+  cre_count?: number | null;
+  
+  /** Pipeline value for prospects */
+  pipeline_value?: number | null;
+  
+  /** Whether account is locked from reassignment */
+  exclude_from_reassignment?: boolean | null;
+}
+
+/**
+ * CALCULATE REP BOOK METRICS
+ * --------------------------
+ * Aggregates all key metrics for a rep's book of accounts.
+ * 
+ * This is a pure function - it calculates metrics from provided data
+ * without any side effects or async operations.
+ * 
+ * USES:
+ * - Reassignment impact preview (before/after comparison)
+ * - Rep workload visualization
+ * - Balance assessment
+ * 
+ * @param accounts - Array of accounts owned by the rep
+ * @param pipelineByAccount - Map of sfdc_account_id to pipeline value (from opportunities)
+ * 
+ * @example
+ * const metrics = calculateRepBookMetrics(repAccounts, pipelineMap);
+ * console.log(`${metrics.customerCount} customers, $${metrics.totalARR} ARR`);
+ * 
+ * @see MASTER_LOGIC.mdc §13.7
+ */
+export function calculateRepBookMetrics(
+  accounts: RepBookAccountData[],
+  pipelineByAccount: Map<string, number> = new Map()
+): RepBookMetrics {
+  const metrics: RepBookMetrics = {
+    accountCount: 0,
+    customerCount: 0,
+    prospectCount: 0,
+    totalARR: 0,
+    totalATR: 0,
+    totalPipeline: 0,
+    tierBreakdown: {
+      tier1: 0,
+      tier2: 0,
+      tier3: 0,
+      tier4: 0,
+      unclassified: 0,
+    },
+    creRiskCount: 0,
+  };
+
+  for (const account of accounts) {
+    // Count accounts
+    metrics.accountCount++;
+    
+    // Customer vs Prospect
+    if (isCustomer(account)) {
+      metrics.customerCount++;
+      metrics.totalATR += getAccountATR(account);
+    } else {
+      metrics.prospectCount++;
+    }
+    
+    // ARR (applies to all accounts, not just customers)
+    metrics.totalARR += getAccountARR(account);
+    
+    // Pipeline (from map or account field)
+    const pipeline = pipelineByAccount.get((account as any).sfdc_account_id) 
+      ?? account.pipeline_value 
+      ?? 0;
+    metrics.totalPipeline += pipeline;
+    
+    // Tier breakdown
+    const tier = account.expansion_tier?.toLowerCase().trim() 
+      ?? account.initial_sale_tier?.toLowerCase().trim();
+    if (tier?.includes('1')) {
+      metrics.tierBreakdown.tier1++;
+    } else if (tier?.includes('2')) {
+      metrics.tierBreakdown.tier2++;
+    } else if (tier?.includes('3')) {
+      metrics.tierBreakdown.tier3++;
+    } else if (tier?.includes('4')) {
+      metrics.tierBreakdown.tier4++;
+    } else {
+      metrics.tierBreakdown.unclassified++;
+    }
+    
+    // CRE Risk
+    metrics.creRiskCount += account.cre_count ?? 0;
+  }
+
+  return metrics;
+}
+
+/**
+ * CALCULATE METRICS DELTA
+ * -----------------------
+ * Calculates the change between two metric values.
+ * Returns both absolute and percentage change.
+ * 
+ * @param before - Original value
+ * @param after - New value
+ * 
+ * @example
+ * const { absolute, percent } = calculateMetricsDelta(1000000, 750000);
+ * // absolute = -250000, percent = -25
+ * 
+ * @see MASTER_LOGIC.mdc §13.7
+ */
+export function calculateMetricsDelta(
+  before: number,
+  after: number
+): { absolute: number; percent: number } {
+  const absolute = after - before;
+  const percent = before === 0 ? (after > 0 ? 100 : 0) : ((absolute / before) * 100);
+  
+  return { absolute, percent };
+}

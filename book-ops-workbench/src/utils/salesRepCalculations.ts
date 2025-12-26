@@ -144,6 +144,9 @@ export function calculateSalesRepMetrics(
     });
 
     // Calculate total ARR from parent accounts using centralized logic
+    // Note: We sum ALL parent accounts because getAccountARR() returns 0 for prospects,
+    // so filtering to customers first is unnecessary and gives identical results.
+    // @see MASTER_LOGIC.mdc §2.1 - ARR priority chain: hierarchy_bookings → calculated_arr → arr → 0
     const totalARR = parentAccounts.reduce((sum, acc) => {
       const arrValue = getAccountARR(acc);
       console.log(`[DEBUG] Adding ARR for parent ${acc.account_name}: ${arrValue}`);

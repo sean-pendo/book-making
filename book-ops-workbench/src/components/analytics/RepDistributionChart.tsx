@@ -13,8 +13,8 @@ import {
   Cell,
   ReferenceArea,
 } from 'recharts';
-import { ChevronLeft, ChevronRight, Info, DollarSign, TrendingUp, Building2, Users, Briefcase } from 'lucide-react';
-import type { RepDistributionData, RepDistributionMetric } from '@/types/analytics';
+import { Info, DollarSign, TrendingUp, Building2, Users, Briefcase, Layers, AlertTriangle } from 'lucide-react';
+import type { RepDistributionData, RepDistributionMetric, AccountSubMode } from '@/types/analytics';
 import { SALES_TOOLS_REP_ID, SALES_TOOLS_REP_NAME } from '@/_domain';
 
 /**
@@ -118,6 +118,23 @@ const STRATEGIC_REP_COLOR = '#a855f7'; // Purple-500 (for ARR/ATR/Pipeline bars)
 const STRATEGIC_REP_CUSTOMER_COLOR = '#7c3aed'; // Violet-600 (darker purple for customers)
 const STRATEGIC_REP_PROSPECT_COLOR = '#c084fc'; // Purple-400 (lighter purple for prospects)
 
+// Tier colors for tier distribution mode
+const TIER_COLORS = {
+  tier1: '#8b5cf6', // Violet-500 (highest priority)
+  tier2: '#3b82f6', // Blue-500
+  tier3: '#14b8a6', // Teal-500
+  tier4: '#6b7280', // Gray-500
+  tierNA: '#d1d5db', // Gray-300 (N/A - missing tier data)
+};
+
+// CRE Risk colors for CRE distribution mode
+const CRE_COLORS = {
+  none: '#22c55e',   // Green-500 (no risk)
+  low: '#facc15',    // Yellow-400
+  medium: '#f97316', // Orange-500
+  high: '#ef4444',   // Red-500
+};
+
 // Check if a rep is Sales Tools pseudo-rep
 const isSalesToolsRep = (repId: string, repName: string): boolean => {
   return repId === SALES_TOOLS_REP_ID || repName === SALES_TOOLS_REP_NAME;
@@ -197,6 +214,9 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
     : DEFAULT_METRICS_ORDER;
   
   const [currentMetric, setCurrentMetric] = useState<RepDistributionMetric>(metricsOrder[0]);
+  
+  // Sub-mode for accounts: counts (customer/prospect), tiers (T1-4), or cre (risk levels)
+  const [accountSubMode, setAccountSubMode] = useState<AccountSubMode>('counts');
 
   // Reset to first allowed metric if current metric is not in allowed list
   useEffect(() => {
@@ -206,7 +226,22 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
   }, [metricsOrder, currentMetric]);
 
   const config = METRIC_CONFIG[currentMetric];
-  const Icon = config.icon;
+  
+  // Get the appropriate icon based on current metric and sub-mode
+  const getActiveIcon = () => {
+    if (currentMetric === 'accounts') {
+      // For accounts, icon changes based on sub-mode
+      switch (accountSubMode) {
+        case 'counts': return Users;
+        case 'tiers': return Layers;
+        case 'cre': return AlertTriangle;
+        default: return Users;
+      }
+    }
+    // For financial metrics, use the metric's icon
+    return config.icon;
+  };
+  const Icon = getActiveIcon();
 
   // Select thresholds based on current metric
   // Prefer metricThresholds if provided, fall back to legacy thresholds (for backward compatibility)
@@ -222,18 +257,6 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
     return legacyThresholds;
   }, [currentMetric, metricThresholds, legacyThresholds]);
 
-  // Navigate to previous/next metric within allowed metrics
-  const goToPrev = () => {
-    const currentIndex = metricsOrder.indexOf(currentMetric);
-    const prevIndex = (currentIndex - 1 + metricsOrder.length) % metricsOrder.length;
-    setCurrentMetric(metricsOrder[prevIndex]);
-  };
-
-  const goToNext = () => {
-    const currentIndex = metricsOrder.indexOf(currentMetric);
-    const nextIndex = (currentIndex + 1) % metricsOrder.length;
-    setCurrentMetric(metricsOrder[nextIndex]);
-  };
 
   // Calculate statistics for current metric (Total, Average, CV)
   const stats = useMemo(() => {
@@ -281,6 +304,17 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
       pipeline: data.reduce((sum, r) => sum + r.pipeline, 0),
       customers: data.reduce((sum, r) => sum + r.customerAccounts, 0),
       prospects: data.reduce((sum, r) => sum + r.prospectAccounts, 0),
+      // Tier totals
+      tier1: data.reduce((sum, r) => sum + (r.tier1Accounts || 0), 0),
+      tier2: data.reduce((sum, r) => sum + (r.tier2Accounts || 0), 0),
+      tier3: data.reduce((sum, r) => sum + (r.tier3Accounts || 0), 0),
+      tier4: data.reduce((sum, r) => sum + (r.tier4Accounts || 0), 0),
+      tierNA: data.reduce((sum, r) => sum + (r.tierNAAccounts || 0), 0),
+      // CRE totals
+      creNone: data.reduce((sum, r) => sum + (r.creNoneAccounts || 0), 0),
+      creLow: data.reduce((sum, r) => sum + (r.creLowAccounts || 0), 0),
+      creMedium: data.reduce((sum, r) => sum + (r.creMediumAccounts || 0), 0),
+      creHigh: data.reduce((sum, r) => sum + (r.creHighAccounts || 0), 0),
     };
   }, [data]);
 
@@ -319,19 +353,69 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
               </p>
             )}
             <div className="mt-2 space-y-1">
-              <p className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded ${isSalesTools ? 'bg-orange-500' : isStrategicRep ? 'bg-violet-600' : 'bg-emerald-500'}`} />
-                Customers: <span className="font-medium">{repData.customerAccounts}</span>
-              </p>
-              <p className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded ${isStrategicRep ? 'bg-purple-400' : 'bg-blue-500'}`} />
-                Prospects: <span className="font-medium">{repData.prospectAccounts}</span>
-              </p>
+              {accountSubMode === 'counts' && (
+                <>
+                  <p className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded ${isSalesTools ? 'bg-orange-500' : isStrategicRep ? 'bg-violet-600' : 'bg-emerald-500'}`} />
+                    Customers: <span className="font-medium">{repData.customerAccounts}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded ${isStrategicRep ? 'bg-purple-400' : 'bg-blue-500'}`} />
+                    Prospects: <span className="font-medium">{repData.prospectAccounts}</span>
+                  </p>
+                </>
+              )}
+              {accountSubMode === 'tiers' && (
+                <>
+                  <p className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded" style={{ backgroundColor: TIER_COLORS.tier1 }} />
+                    Tier 1: <span className="font-medium">{repData.tier1Accounts || 0}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded" style={{ backgroundColor: TIER_COLORS.tier2 }} />
+                    Tier 2: <span className="font-medium">{repData.tier2Accounts || 0}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded" style={{ backgroundColor: TIER_COLORS.tier3 }} />
+                    Tier 3: <span className="font-medium">{repData.tier3Accounts || 0}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded" style={{ backgroundColor: TIER_COLORS.tier4 }} />
+                    Tier 4: <span className="font-medium">{repData.tier4Accounts || 0}</span>
+                  </p>
+                  {(repData.tierNAAccounts || 0) > 0 && (
+                    <p className="flex items-center gap-2 text-muted-foreground">
+                      <span className="w-2 h-2 rounded" style={{ backgroundColor: TIER_COLORS.tierNA }} />
+                      N/A: <span className="font-medium">{repData.tierNAAccounts || 0}</span>
+                    </p>
+                  )}
+                </>
+              )}
+              {accountSubMode === 'cre' && (
+                <>
+                  <p className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded" style={{ backgroundColor: CRE_COLORS.none }} />
+                    No Risk: <span className="font-medium">{repData.creNoneAccounts || 0}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded" style={{ backgroundColor: CRE_COLORS.low }} />
+                    Low: <span className="font-medium">{repData.creLowAccounts || 0}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded" style={{ backgroundColor: CRE_COLORS.medium }} />
+                    Medium: <span className="font-medium">{repData.creMediumAccounts || 0}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded" style={{ backgroundColor: CRE_COLORS.high }} />
+                    High: <span className="font-medium">{repData.creHighAccounts || 0}</span>
+                  </p>
+                </>
+              )}
               <p className="text-muted-foreground border-t pt-1 mt-1">
                 Total: <span className="font-medium">{repData.totalAccounts}</span>
               </p>
-              {/* Parent/Child breakdown if data exists */}
-              {hasParentChildData && (
+              {/* Parent/Child breakdown if data exists (only in counts mode) */}
+              {accountSubMode === 'counts' && hasParentChildData && (
                 <div className="border-t pt-1 mt-1 space-y-0.5">
                   <p><strong>Parent Accounts: {(repData.parentCustomers || 0) + (repData.parentProspects || 0)}</strong></p>
                   <p className="text-muted-foreground">Children: {(repData.childCustomers || 0) + (repData.childProspects || 0)}</p>
@@ -379,16 +463,22 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
     return null;
   };
 
-  const currentIndex = metricsOrder.indexOf(currentMetric);
+  // Labels for metric tabs
+  const METRIC_LABELS: Record<RepDistributionMetric, string> = {
+    arr: 'ARR',
+    atr: 'ATR', 
+    pipeline: 'Pipeline',
+    accounts: 'Accounts',
+  };
 
   return (
     <Card className={className}>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Icon className="h-4 w-4 text-muted-foreground" />
-              {config.label}
+            <Icon className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">
+              {currentMetric === 'accounts' ? 'Account Distribution' : 'Rep Distribution'}
             </CardTitle>
             <Tooltip>
               <TooltipTrigger>
@@ -399,31 +489,28 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
               </TooltipContent>
             </Tooltip>
           </div>
-          {/* Only show toggle when multiple metrics available */}
-          {metricsOrder.length > 1 && (
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={goToPrev}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <span className="text-xs text-muted-foreground tabular-nums">
-                {currentIndex + 1}/{metricsOrder.length}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={goToNext}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
         </div>
+        
+        {/* Metric toggle tabs (only for non-accounts metrics with multiple options) */}
+        {metricsOrder.length > 1 && !metricsOrder.every(m => m === 'accounts') && (
+          <div className="flex items-center gap-1 mt-2">
+            {metricsOrder.filter(m => m !== 'accounts').map(metric => {
+              const MetricIcon = METRIC_CONFIG[metric].icon;
+              return (
+                <Button
+                  key={metric}
+                  variant={currentMetric === metric ? 'default' : 'ghost'}
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => setCurrentMetric(metric)}
+                >
+                  <MetricIcon className="h-3 w-3 mr-1" />
+                  {METRIC_LABELS[metric]}
+                </Button>
+              );
+            })}
+          </div>
+        )}
         
         {/* Stats row with Total, Average, CV */}
         {showStats && currentMetric !== 'accounts' && (
@@ -433,7 +520,9 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
               <span className="font-semibold">{config.format(stats.total)}</span>
             </div>
             <div className="h-3 w-px bg-border" />
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
+              {/* Visual indicator for the dashed average line on the chart */}
+              <div className="w-4 h-0 border-t-2 border-dashed border-gray-500" />
               <span className="text-muted-foreground">Avg:</span>
               <span className="font-semibold">{config.format(stats.average)}</span>
             </div>
@@ -463,8 +552,41 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
           </div>
         )}
         
-        {/* Stats for accounts mode - compact single row */}
-        {showStats && currentMetric === 'accounts' && (
+        {/* Sub-mode toggle for accounts */}
+        {currentMetric === 'accounts' && (
+          <div className="flex items-center gap-1 mt-2">
+            <Button
+              variant={accountSubMode === 'counts' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => setAccountSubMode('counts')}
+            >
+              <Users className="h-3 w-3 mr-1" />
+              Counts
+            </Button>
+            <Button
+              variant={accountSubMode === 'tiers' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => setAccountSubMode('tiers')}
+            >
+              <Layers className="h-3 w-3 mr-1" />
+              Tiers
+            </Button>
+            <Button
+              variant={accountSubMode === 'cre' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => setAccountSubMode('cre')}
+            >
+              <AlertTriangle className="h-3 w-3 mr-1" />
+              CRE
+            </Button>
+          </div>
+        )}
+        
+        {/* Stats for accounts mode - counts sub-mode */}
+        {showStats && currentMetric === 'accounts' && accountSubMode === 'counts' && (
           <div className="flex items-center gap-2 text-xs mt-2 py-1.5 px-2 bg-muted/30 rounded-md">
             <span className="font-semibold">{stats.total.toLocaleString()}</span>
             <span className="text-muted-foreground">assigned to {data.length} reps</span>
@@ -484,6 +606,55 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                 <span className="text-purple-600 dark:text-purple-400 font-medium">Strategic</span>
               </>
             )}
+          </div>
+        )}
+        
+        {/* Stats for accounts mode - tiers sub-mode */}
+        {showStats && currentMetric === 'accounts' && accountSubMode === 'tiers' && (
+          <div className="flex items-center gap-2 text-xs mt-2 py-1.5 px-2 bg-muted/30 rounded-md flex-wrap">
+            <span className="font-semibold">{stats.total.toLocaleString()}</span>
+            <span className="text-muted-foreground">accounts</span>
+            <div className="h-3 w-px bg-border" />
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: TIER_COLORS.tier1 }} />
+            <span className="font-medium" style={{ color: TIER_COLORS.tier1 }}>{totals.tier1}</span>
+            <span className="text-muted-foreground">T1</span>
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: TIER_COLORS.tier2 }} />
+            <span className="font-medium" style={{ color: TIER_COLORS.tier2 }}>{totals.tier2}</span>
+            <span className="text-muted-foreground">T2</span>
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: TIER_COLORS.tier3 }} />
+            <span className="font-medium" style={{ color: TIER_COLORS.tier3 }}>{totals.tier3}</span>
+            <span className="text-muted-foreground">T3</span>
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: TIER_COLORS.tier4 }} />
+            <span className="font-medium text-muted-foreground">{totals.tier4}</span>
+            <span className="text-muted-foreground">T4</span>
+            {totals.tierNA > 0 && (
+              <>
+                <span className="w-3 h-3 rounded" style={{ backgroundColor: TIER_COLORS.tierNA }} />
+                <span className="font-medium text-muted-foreground">{totals.tierNA}</span>
+                <span className="text-muted-foreground">N/A</span>
+              </>
+            )}
+          </div>
+        )}
+        
+        {/* Stats for accounts mode - cre sub-mode */}
+        {showStats && currentMetric === 'accounts' && accountSubMode === 'cre' && (
+          <div className="flex items-center gap-2 text-xs mt-2 py-1.5 px-2 bg-muted/30 rounded-md flex-wrap">
+            <span className="font-semibold">{stats.total.toLocaleString()}</span>
+            <span className="text-muted-foreground">accounts</span>
+            <div className="h-3 w-px bg-border" />
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: CRE_COLORS.none }} />
+            <span className="font-medium" style={{ color: CRE_COLORS.none }}>{totals.creNone}</span>
+            <span className="text-muted-foreground">No Risk</span>
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: CRE_COLORS.low }} />
+            <span className="font-medium" style={{ color: CRE_COLORS.low }}>{totals.creLow}</span>
+            <span className="text-muted-foreground">Low</span>
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: CRE_COLORS.medium }} />
+            <span className="font-medium" style={{ color: CRE_COLORS.medium }}>{totals.creMedium}</span>
+            <span className="text-muted-foreground">Med</span>
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: CRE_COLORS.high }} />
+            <span className="font-medium" style={{ color: CRE_COLORS.high }}>{totals.creHigh}</span>
+            <span className="text-muted-foreground">High</span>
           </div>
         )}
         
@@ -507,12 +678,6 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
           </div>
         )}
         
-        {/* Minimal legend when no thresholds but showStats is enabled - just shows average */}
-        {showStats && !thresholds && currentMetric !== 'accounts' && stats.average > 0 && (
-          <div className="flex items-center gap-2 text-xs mt-1">
-            <span className="text-muted-foreground">Avg: {config.format(stats.average)}</span>
-          </div>
-        )}
         
         {/* Threshold legend - compact single-line format */}
         {showThresholdLegend && thresholds && currentMetric !== 'accounts' && (
@@ -592,7 +757,7 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                   />
                 )}
                 
-                {currentMetric === 'accounts' ? (
+                {currentMetric === 'accounts' && accountSubMode === 'counts' ? (
                   // Stacked bar for accounts - customers green, prospects blue
                   // Sales Tools gets orange color to stand out
                   // Strategic reps get two shades of purple
@@ -625,6 +790,23 @@ export const RepDistributionChart: React.FC<RepDistributionChartProps> = ({
                         />
                       ))}
                     </Bar>
+                  </>
+                ) : currentMetric === 'accounts' && accountSubMode === 'tiers' ? (
+                  // Stacked bar for tiers - T1 (violet) -> T2 (blue) -> T3 (teal) -> T4 (gray) -> N/A (light gray)
+                  <>
+                    <Bar dataKey="tier1Accounts" name="Tier 1" stackId="tiers" radius={[0, 0, 0, 0]} barSize={16} fill={TIER_COLORS.tier1} />
+                    <Bar dataKey="tier2Accounts" name="Tier 2" stackId="tiers" radius={[0, 0, 0, 0]} barSize={16} fill={TIER_COLORS.tier2} />
+                    <Bar dataKey="tier3Accounts" name="Tier 3" stackId="tiers" radius={[0, 0, 0, 0]} barSize={16} fill={TIER_COLORS.tier3} />
+                    <Bar dataKey="tier4Accounts" name="Tier 4" stackId="tiers" radius={[0, 0, 0, 0]} barSize={16} fill={TIER_COLORS.tier4} />
+                    <Bar dataKey="tierNAAccounts" name="N/A" stackId="tiers" radius={[0, 4, 4, 0]} barSize={16} fill={TIER_COLORS.tierNA} />
+                  </>
+                ) : currentMetric === 'accounts' && accountSubMode === 'cre' ? (
+                  // Stacked bar for CRE risk - None (green) -> Low (yellow) -> Medium (orange) -> High (red)
+                  <>
+                    <Bar dataKey="creNoneAccounts" name="No Risk" stackId="cre" radius={[0, 0, 0, 0]} barSize={16} fill={CRE_COLORS.none} />
+                    <Bar dataKey="creLowAccounts" name="Low" stackId="cre" radius={[0, 0, 0, 0]} barSize={16} fill={CRE_COLORS.low} />
+                    <Bar dataKey="creMediumAccounts" name="Medium" stackId="cre" radius={[0, 0, 0, 0]} barSize={16} fill={CRE_COLORS.medium} />
+                    <Bar dataKey="creHighAccounts" name="High" stackId="cre" radius={[0, 4, 4, 0]} barSize={16} fill={CRE_COLORS.high} />
                   </>
                 ) : (
                   // Single bar for monetary metrics

@@ -1,10 +1,7 @@
-import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import { EnhancedAssignmentService } from '@/services/enhancedAssignmentService';
-import { toast } from '@/hooks/use-toast';
 import { calculateEnhancedRepMetrics } from '@/utils/enhancedRepMetrics';
-import { autoMapTerritoryToRegion, getAccountARR, isRenewalOpportunity } from '@/_domain';
+import { autoMapTerritoryToRegion, getAccountARR, isRenewalOpportunity, getAccountExpansionTier, getCRERiskLevel, SUPABASE_LIMITS } from '@/_domain';
 
 export interface AccountDetail {
   sfdc_account_id: string;
@@ -52,6 +49,19 @@ export interface RepMetrics {
   creCount: number;
   /** Strategic rep flag - balanced separately from normal reps */
   is_strategic_rep?: boolean;
+  
+  // Tier breakdown (Tier 1-4 from expansion_tier or initial_sale_tier)
+  tier1Accounts: number;
+  tier2Accounts: number;
+  tier3Accounts: number;
+  tier4Accounts: number;
+  tierNAAccounts: number;
+  
+  // CRE Risk breakdown (based on cre_count thresholds)
+  creNoneAccounts: number;
+  creLowAccounts: number;
+  creMediumAccounts: number;
+  creHighAccounts: number;
 }
 
 interface EnhancedBalancingData {
@@ -97,8 +107,6 @@ interface EnhancedBalancingData {
 }
 
 export const useEnhancedBalancing = (buildId?: string) => {
-  const queryClient = useQueryClient();
-  const [rebalancingLoading, setRebalancingLoading] = useState(false);
 
   // Main data fetching function - returns data instead of setting state
   const fetchBalancingData = async (buildId: string): Promise<EnhancedBalancingData> => {
@@ -132,10 +140,11 @@ export const useEnhancedBalancing = (buildId?: string) => {
       console.log(`[useEnhancedBalancing] ARR Thresholds: Min=${(minARR/1000000).toFixed(2)}M, Target=${(targetARR/1000000).toFixed(2)}M, Max=${(maxARR/1000000).toFixed(2)}M`);
 
       // Fetch accounts with assignments - use LEFT JOIN to handle missing assignment records
+      // Uses SSOT pagination from @/_domain
       const fetchAssignedAccounts = async () => {
         let allAccounts: any[] = [];
         let from = 0;
-        const batchSize = 1000;
+        const batchSize = SUPABASE_LIMITS.FETCH_PAGE_SIZE;
         let hasMore = true;
 
         while (hasMore) {
@@ -246,6 +255,32 @@ export const useEnhancedBalancing = (buildId?: string) => {
         const prospectAccounts = accounts.filter(a => 
           ((a.new_owner_id || a.owner_id) === rep.rep_id) && !a.is_customer
         );
+        
+        // Get all rep accounts (parent accounts for tier/CRE distribution)
+        const allRepAccounts = accounts.filter(a => 
+          ((a.new_owner_id || a.owner_id) === rep.rep_id) && a.is_parent
+        );
+        
+        // Calculate tier breakdown
+        let tier1Count = 0, tier2Count = 0, tier3Count = 0, tier4Count = 0, tierNACount = 0;
+        allRepAccounts.forEach(a => {
+          const tier = getAccountExpansionTier(a);
+          if (tier === 'Tier 1') tier1Count++;
+          else if (tier === 'Tier 2') tier2Count++;
+          else if (tier === 'Tier 3') tier3Count++;
+          else if (tier === 'Tier 4') tier4Count++;
+          else tierNACount++;
+        });
+        
+        // Calculate CRE risk breakdown
+        let creNoneCount = 0, creLowCount = 0, creMediumCount = 0, creHighCount = 0;
+        allRepAccounts.forEach(a => {
+          const level = getCRERiskLevel((a as any).cre_count || 0);
+          if (level === 'none') creNoneCount++;
+          else if (level === 'low') creLowCount++;
+          else if (level === 'medium') creMediumCount++;
+          else creHighCount++;
+        });
 
         // Calculate customer-only retention rate (only count assigned accounts that stayed with same owner)
         const assignedCustomerAccounts = customerAccounts.filter(acc => acc.new_owner_id);
@@ -400,7 +435,18 @@ export const useEnhancedBalancing = (buildId?: string) => {
           renewalsQ3: enhancedMetrics.renewals.Q3,
           renewalsQ4: enhancedMetrics.renewals.Q4,
           creCount,
-          is_strategic_rep: rep.is_strategic_rep ?? false
+          is_strategic_rep: rep.is_strategic_rep ?? false,
+          // Tier breakdown
+          tier1Accounts: tier1Count,
+          tier2Accounts: tier2Count,
+          tier3Accounts: tier3Count,
+          tier4Accounts: tier4Count,
+          tierNAAccounts: tierNACount,
+          // CRE Risk breakdown
+          creNoneAccounts: creNoneCount,
+          creLowAccounts: creLowCount,
+          creMediumAccounts: creMediumCount,
+          creHighAccounts: creHighCount,
         });
       });
 
@@ -549,54 +595,10 @@ export const useEnhancedBalancing = (buildId?: string) => {
     staleTime: 30000, // Consider data fresh for 30 seconds
   });
 
-  const generateRebalancingPlan = async () => {
-    if (!buildId) return;
-
-    try {
-      setRebalancingLoading(true);
-      console.log('[useEnhancedBalancing] Generating rebalancing plan...');
-
-      // First sync any missing assignment records
-      const syncResult = await supabase.functions.invoke('sync-assignments', {
-        body: { buildId }
-      });
-
-      if (syncResult.error) {
-        console.error('Error syncing assignments:', syncResult.error);
-      } else {
-        console.log('Sync result:', syncResult.data);
-      }
-
-      const enhancedService = EnhancedAssignmentService.getInstance();
-      const result = await enhancedService.generateBalancedAssignments(buildId);
-
-      console.log('[useEnhancedBalancing] Rebalancing plan generated:', result);
-
-      toast({
-        title: "Success",
-        description: `Generated ${result.assignedAccounts} balanced assignments`,
-      });
-
-      // Invalidate cache to refresh data
-      queryClient.invalidateQueries({ queryKey: ['enhanced-balancing', buildId] });
-
-    } catch (err) {
-      console.error('[useEnhancedBalancing] Error generating rebalancing plan:', err);
-      toast({
-        title: "Error",
-        description: "Failed to generate rebalancing plan",
-        variant: "destructive",
-      });
-    } finally {
-      setRebalancingLoading(false);
-    }
-  };
-
   return {
     data: data ?? null,
-    isLoading: isLoading || rebalancingLoading,
+    isLoading,
     error: error instanceof Error ? error.message : error ? String(error) : null,
-    refetch,
-    generateRebalancingPlan
+    refetch
   };
 };

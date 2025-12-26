@@ -440,11 +440,14 @@ Accounts have a `sales_territory` field with free-text values. We map these to r
 | Territory Value | Maps To | Rule |
 |-----------------|---------|------|
 | "California", "CA", "San Francisco" | West | State/city name |
+| "MID-WEST", "MIDWEST", "MOUNTAIN" | West | Regional keyword (business rule) |
 | "NYC", "New York", "Boston" | North East | City name |
 | "Texas", "Dallas", "Houston" | South East | State/city name |
-| "Chicago", "IL", "Midwest" | Central | State/city/keyword |
+| "Chicago", "IL", "Great Lakes" | Central | State/city/keyword |
 | "UK", "London", "Britain" | UK | Country/city name |
 | "Global", "Worldwide" | UNMAPPED | Requires manual mapping |
+
+> **Note**: "MID-WEST", "MIDWEST", and "MOUNTAIN" territories map to **West** region per business rules (not Central). This differs from traditional US geographic definitions.
 
 **Priority Order for Matching**:
 1. Keywords (most specific) - e.g., "PAC NW" → West
@@ -489,12 +492,37 @@ Global (can take anything)
 | **Cross-Region** | 0.20 | Account "West" → Rep "EMEA" (avoid!) |
 | **Unknown** | 0.50 | Can't determine territory |
 
+**Input Normalization**: Both account territory and rep region are normalized before comparison using `normalizeRegion()`. This handles common variations:
+- `"Northeast"` → `"North East"`
+- `"Southeast"` → `"South East"`
+- `"NYC"`, `"New York"` → `"North East"`
+- See `normalization.ts` for full mapping.
+
 **Key Principle**: The optimization model should reward specificity. 
 - NYC account → NYC rep is ideal (1.0)
 - NYC account → North East rep is good (0.85) 
 - NYC account → AMER rep is acceptable (0.65)
 - NYC account → Global rep is last resort (0.40)
 - France account → France rep (exact) → EMEA rep (parent fallback)
+
+### 4.3.1 LP Solver Geography Scores (Tighter Constraints)
+
+**Impl**: `optimization/types.ts` - `DEFAULT_LP_GEOGRAPHY_PARAMS`
+
+The LP solver uses more aggressive scoring to drive stronger geographic alignment during optimization. These are intentionally **lower** than the display scores in `GEO_MATCH_SCORES`:
+
+| Match Type | Display Score | LP Score | Rationale |
+|------------|---------------|----------|-----------|
+| Exact match | 1.00 | 1.00 | Same - perfect matches get full credit |
+| Sibling region | 0.85 | 0.65 | LP needs stronger geo pressure to avoid cross-subregion |
+| Parent region | 0.65 | 0.40 | Penalize cross-subregion assignments more heavily |
+| Global fallback | 0.40 | 0.20 | Strongly discourage global rep assignments |
+
+**Why the difference?**
+- **Display scores** (`GEO_MATCH_SCORES` in constants.ts) show users a softer view for analytics and rationale explanations
+- **LP scores** (`DEFAULT_LP_GEOGRAPHY_PARAMS` in types.ts) drive optimization behavior with stricter penalties
+
+This design allows the UI to show "good regional alignment" (0.65) while the solver actively pushes for exact matches.
 
 ---
 
@@ -702,6 +730,7 @@ Dashboards group accounts by manager hierarchy:
 | `is_backfill_target` | `sales_reps` | TRUE = Rep was created as backfill for leaving Rep |
 | `backfill_target_rep_id` | `sales_reps` | Links leaving Rep to their backfill Rep |
 | `is_placeholder` | `sales_reps` | TRUE = Open headcount (no actual person) |
+| `pe_firms` | `sales_reps` | Comma-separated PE firm names this rep handles (see §10.7) |
 
 **Account Flags**:
 
@@ -711,6 +740,7 @@ Dashboards group accounts by manager hierarchy:
 | `is_parent` | `accounts` | TRUE = Top of hierarchy (no ultimate_parent_id) |
 | `is_strategic` | `accounts` | TRUE = Strategic account, goes to strategic reps only |
 | `exclude_from_reassignment` | `accounts` | TRUE = Manual lock, stays with current owner |
+| `lock_reason` | `accounts` | Text note explaining why account is locked (max 500 chars) |
 | `has_customer_hierarchy` | `accounts` | TRUE = Has child accounts |
 | `has_split_ownership` | `accounts` | TRUE = Children have different owners than parent |
 
@@ -735,6 +765,33 @@ When importing Reps CSV:
 - If `rep_id` is blank but `name` is provided → auto-generates placeholder ID
 - Sets `is_placeholder = true`
 - Used for capacity planning ("what if we hire 2 more reps?")
+
+#### 8.4.1 Open Headcount Name Detection
+
+**Impl**: `normalization.ts` - `isOpenHeadcountName()`
+
+Names are detected as Open Headcount if they match any of:
+- Exact phrase "Open Headcount" (case-insensitive)
+- Contains "open head" (catches typos like "Open Head Count")
+- Contains both "open" AND "headcount" anywhere in name
+
+#### 8.4.2 Duplicate Rep ID Handling
+
+When multiple rows share the same `rep_id` during import:
+
+1. **Auto-number if distinguishable**: If the name matches Open Headcount patterns (§8.4.1) OR any other fields differ (name, region, team, FLM, SLM, team_tier, pe_firms), append numbered suffixes:
+   - `XX` → `XX-1`, `XX-2`, `XX-3`, etc.
+   - Each becomes a distinct rep that can receive assignments
+
+2. **Warning for true duplicates**: If all fields are identical, add a warning to the import result but still attempt import:
+   - One will succeed, database constraint will reject duplicates
+   - Warning is shown in data overview UI
+
+| Scenario | Result |
+|----------|--------|
+| Same `rep_id`, different FLM/SLM/team/region | Auto-numbered: `XX-1`, `XX-2` |
+| Same `rep_id`, Open Headcount name pattern | Auto-numbered: `XX-1`, `XX-2` |
+| Same `rep_id`, all fields identical | Warning shown, only first imported |
 
 ---
 
@@ -774,13 +831,22 @@ Database operations use batching to avoid timeouts:
 | Delete | 1000 | Faster cleanup |
 
 **Supabase Limits**:
-- Default page size: 1000 rows (use `.range()` for more)
+- **Fetch page size: 2,000 rows** (optimal for reliability - avoids timeouts)
+- **Max concurrent requests: 3** (avoids rate limiting)
 - Max rows per insert: 500
+- Supabase `max_rows` should be set to 10,000 in Dashboard for headroom
+
+> **IMPORTANT**: All services must use `SUPABASE_LIMITS.FETCH_PAGE_SIZE` from `@/_domain` for pagination.
+> We use 2,000 (not 10,000) because larger payloads cause timeout/rate-limit errors.
 
 ```typescript
-// From constants.ts
+// From constants.ts - SSOT for all Supabase pagination
 const BATCH_SIZES = { IMPORT: 500, UPDATE: 100, DELETE: 1000 };
-const SUPABASE_LIMITS = { DEFAULT_PAGE_SIZE: 1000, MAX_ROWS_PER_INSERT: 500 };
+const SUPABASE_LIMITS = { 
+  FETCH_PAGE_SIZE: 2_000,       // Optimal for reliability (5k+ times out)
+  MAX_ROWS_PER_INSERT: 500,
+  MAX_CONCURRENT_REQUESTS: 3,   // Avoid rate limiting
+};
 ```
 
 ### 9.4 Post-Import Calculations
@@ -992,6 +1058,10 @@ EMEA/APAC:   P0 → P1 → P2 → P3 → P4 → P5 → P6
 **Condition**: `exclude_from_reassignment = true` OR `is_strategic = true`
 **Effect**: Account stays with current owner. Cannot be disabled.
 
+**Lock Reason**: When locking via UI, users can optionally provide a reason (max 500 chars).
+This reason is stored in `accounts.lock_reason` and displayed on hover over the lock icon.
+The reason is cleared when the account is unlocked. Lock reasons can also be imported via CSV.
+
 #### P1: Sales Tools Bucket (COMMERCIAL only)
 **Condition**: `hierarchy_bookings_arr_converted < $25,000` AND `is_customer = true`
 **Effect**: Routes to Sales Tools team (no SLM/FLM hierarchy)
@@ -1057,13 +1127,50 @@ Strategic accounts are handled separately from normal accounts:
 
 ### 10.7 PE Firm Accounts (P2)
 
+PE accounts require special handling to ensure relationship continuity with dedicated PE reps.
+
+#### 10.7.1 Dedicated PE Rep Routing
+
+When an account belongs to a PE firm, the assignment engine checks if any rep is dedicated to that PE firm:
+
+| Condition | Behavior |
+|-----------|----------|
+| Account has `pe_firm` AND a rep has that firm in `pe_firms` | Route to dedicated PE rep (stability lock) |
+| Account has `pe_firm` but NO rep is dedicated | Stay with current owner (legacy stability) |
+| Account has NO `pe_firm` | Normal assignment flow |
+
+**Routing Priority**: PE rep assignment takes precedence over current ownership. If an account is currently owned by Rep A, but Rep B is the dedicated PE rep for that PE firm, the account routes to Rep B.
+
+**Child Account Handling**: When a parent account routes to a PE-dedicated rep, all child accounts in that hierarchy ALSO route to the same rep (maintains relationship integrity).
+
+#### 10.7.2 PE Firms Field Format
+
+The `pe_firms` field on sales reps is a **comma-separated list** of PE firm names:
+
+```
+Examples:
+- "Vista Equity Partners"                    → Single PE firm
+- "JMI Private Equity, Vista Equity Partners" → Multiple PE firms
+- "" or NULL                                 → Rep is not PE-dedicated
+```
+
+**Matching Logic**:
+1. Both account `pe_firm` and rep `pe_firms` values are normalized (see §6.2)
+2. Comparison is case-insensitive after normalization
+3. Partial matches are NOT supported - must match a complete firm name
+
+#### 10.7.3 Implementation Rules
+
 | Rule | Description |
 |------|-------------|
-| **Stability Lock** | PE accounts stay with current owner (relationship continuity) |
+| **Dedicated Rep Priority** | If a dedicated PE rep exists, they MUST own all accounts for that PE firm |
+| **Hierarchy Integrity** | Parent + all children go to the same PE-dedicated rep |
+| **Single Owner per PE Firm** | Only ONE rep should be dedicated to each PE firm (validation warning if multiple) |
 | **PE Firm Normalization** | Typos normalized on import (see Section 6.2) |
 
 **Data Fields**:
-- `accounts.pe_firm` → PE firm name (normalized)
+- `accounts.pe_firm` → PE firm name (normalized) - which PE firm owns this account
+- `sales_reps.pe_firms` → Comma-separated list of PE firms this rep handles
 
 ### 10.8 Key Constants
 
@@ -1087,12 +1194,75 @@ Strategic accounts are handled separately from normal accounts:
 
 ### 11.1 Model Formulations: Waterfall vs Relaxed
 
-The app supports two assignment models:
+The app supports two assignment models. Neither is objectively "better" — they optimize for different goals.
 
-| Model | Description | When to Use |
-|-------|-------------|-------------|
-| **Waterfall** | Cascading priority levels (P0→P7). Each level locks accounts before next level runs. | When priority order is strict (strategic → stability → optimization) |
-| **Relaxed** | Single global LP solve with weighted objectives. All factors considered simultaneously. | When seeking globally optimal balance |
+#### Quick Comparison
+
+| Aspect | Waterfall | Relaxed Optimization |
+|--------|-----------|---------------------|
+| **How it works** | Priorities are **filters** — processes P0→P7 sequentially, locking accounts at each level | Priorities are **weights** — all factors considered simultaneously in one global solve |
+| **Runtime** | **~1-2 minutes** (many small LP solves) | **~4-6 minutes** (one large global LP solve) |
+| **Priority adherence** | **Strict** — P1 always beats P2, P2 always beats P3 | **Soft** — an account might be 60% P2 + 40% P3 |
+| **Explainability** | Easy to trace: "This account matched P3 criteria" | Harder: "This account scored highest on weighted combination" |
+| **Balance quality** | Good within each priority tier | Better globally — sees all accounts at once |
+
+#### When to Use Waterfall 🌊
+
+**Best for:**
+- ✅ **Strict priority enforcement** — "Strategic accounts MUST be handled before anything else"
+- ✅ **Auditability** — "I need to explain every assignment to stakeholders"
+- ✅ **Speed** — Need results in under 2 minutes
+- ✅ **Debugging** — Easier to trace why each decision was made
+- ✅ **Reproducibility** — Same inputs produce same outputs, easy to recreate manually
+
+**The mental model**: Like loading suitcases into cars one at a time. You pick the "best" car for each suitcase without seeing what's left.
+
+**Trade-off**: May create suboptimal global balance. Early priorities "steal" capacity from later priorities.
+
+#### When to Use Relaxed Optimization ⚡
+
+**Best for:**
+- ✅ **Global balance** — "I want the most even ARR distribution possible"
+- ✅ **Trade-off flexibility** — "I'm okay with a great geo match over a perfect priority match"
+- ✅ **Exploratory analysis** — "What's the theoretical best we could achieve?"
+- ✅ **Complex trade-offs** — When multiple factors are all important, not strictly ordered
+
+**The mental model**: Like seeing all suitcases and all cars at once, then using math to find the optimal packing.
+
+**Trade-off**: Harder to explain individual decisions. An assignment might be "50% geo match + 30% continuity + 20% balance" — valid, but complex to communicate.
+
+#### Example: Same Account, Different Outcomes
+
+| Scenario | Waterfall Result | Relaxed Result |
+|----------|-----------------|----------------|
+| NYC customer, current owner is Boston rep, Boston rep is overloaded | **Stays with Boston rep** (P3 continuity wins first) | **Moves to NYC rep** (60% geo + 20% balance outweighs 40% continuity penalty) |
+| High-ARR account, great geo match but would overload rep | **Assigned to geo-matched rep** (geo wins in P2) | **Assigned to nearby rep** (balance penalty dominates) |
+
+#### Priority Label Interpretation
+
+| Label | Waterfall Meaning | Relaxed Meaning |
+|-------|-------------------|-----------------|
+| P0: Manual | Locked by user | Locked by user (same) |
+| P1: Stability | Matched stability lock criteria | Stability score was dominant factor |
+| P2: Geo+Continuity | Both geo AND continuity matched | Geo + Continuity had highest combined weight |
+| P3: Geography | Geography matched, continuity didn't | Geography was the dominant scoring factor |
+| P4: Continuity | Continuity matched, geography didn't | Continuity was the dominant scoring factor |
+| RO: Balance | N/A (waterfall doesn't use this) | Balance/team alignment drove the decision |
+
+#### Performance Expectations
+
+| Build Size | Waterfall Time | Relaxed Time |
+|------------|---------------|--------------|
+| 1,000 accounts | ~30 seconds | ~2 minutes |
+| 3,000 accounts | ~1 minute | ~3-4 minutes |
+| 5,000 accounts | ~1.5 minutes | ~5 minutes |
+| 8,000+ accounts | ~2 minutes | ~6+ minutes (Cloud Run) |
+
+**Why Relaxed is slower**: It builds a single LP with `accounts × reps` decision variables. For 5,000 accounts × 50 reps = 250,000 variables. The solver must find the global optimum across all of them.
+
+**Why Waterfall is faster**: Each priority level only considers remaining unassigned accounts. By P4, most accounts are already locked.
+
+#### Formulations
 
 **Waterfall Formulation**:
 ```
@@ -1113,9 +1283,9 @@ Where:
 - Penalties = balance deviation penalties
 ```
 
-**Why Both Matter**:
+**Key Difference**:
 - **Waterfall**: Guarantees priority order is respected (strategic accounts ALWAYS go first)
-- **Relaxed**: May find better global balance but could assign lower-priority factors first
+- **Relaxed**: May find better global balance but priorities become weighted preferences, not strict filters
 
 ### 11.2 Solver & Full LP Formulation
 
@@ -1491,10 +1661,66 @@ The optimization generates human-readable rationales for each assignment:
 | Priority Level | Rationale Format |
 |----------------|------------------|
 | P0 Strategic | `P0: Strategic Account → {rep_name} (strategic rep, ARR-balanced)` |
-| P1 Stability Lock | `P1: Stability Lock → {rep_name} ({lock_type})` |
-| Optimization | `Optimized: {rep_name} (geo={score}, cont={score}, team={score})` |
+| P0 Manual Lock | `P0: Excluded from reassignment → {rep_name} (manually locked)` |
+| P2 Stable Account | `P2: Stable Account → {rep_name} ({stability_reason})` |
+| P2 Backfill | `P2: Backfill Migration → {rep_name} (from departing owner)` |
+| Optimization | `{priority}: {rep_name} - {factor breakdown}` |
+
+#### Stability Reason Types
+
+Stable accounts are automatically locked to their current owner. The `{stability_reason}` explains why:
+
+| Stability Type | Reason Text | Example |
+|----------------|-------------|---------|
+| CRE Risk | `CRE at-risk` | `P2: Stable Account → Sarah (CRE at-risk)` |
+| Renewal Soon | `Renewal in X days` | `P2: Stable Account → John (Renewal in 45 days)` |
+| PE Firm | `PE firm: {name}` | `P2: Stable Account → Mike (PE firm: Vista Equity)` |
+| Recent Change | `recent owner change` | `P2: Stable Account → Lisa (recent owner change)` |
+
+**Note**: Backfill Migration is distinct from stability - it indicates accounts that MUST move to a new owner because the current owner is leaving.
 
 **Highest-Scoring Display**: Even in relaxed mode, the rationale shows which factor scored highest for transparency.
+
+### 11.9.1 Rationale Transparency
+
+**Impl**: `rationaleGenerator.ts`, `_domain/constants.ts` - `SIGNIFICANT_CONTRIBUTION_THRESHOLD`
+
+Assignment rationales show percentage breakdowns when multiple factors contribute significantly. This provides transparency into optimization decisions - "transparency = trust".
+
+#### Contribution Threshold
+
+```
+SIGNIFICANT_CONTRIBUTION_THRESHOLD = 0.10 (10%)
+```
+
+**Rationale**: Factors under 10% add noise without meaningfully influencing decisions, and showing too many small percentages clutters the UI.
+
+#### Output Format
+
+| Scenario | Format |
+|----------|--------|
+| Multi-factor | `{priority}: {rep} - {primary} ({pct}%), {secondary} ({pct}%)` |
+| Single dominant | `{priority}: {rep} - {description}` |
+| Balance-driven | `RO: {rep} - optimized for balance` |
+| Stable Account | `{priority}: Stable Account → {rep} ({stability_reason})` |
+| Backfill | `{priority}: Backfill Migration → {rep} (from departing owner)` |
+| Manual Lock | `P0: Excluded from reassignment → {rep} (manually locked)` |
+
+#### N/A Handling
+
+When team alignment is null (missing employee data), **omit silently** from breakdown. Remaining factors are renormalized to sum to 100%.
+
+Example: If Geo contributes 0.50 and Continuity contributes 0.25 (Team N/A), display as:
+- Geography (67%), Continuity (33%)
+
+#### Examples
+
+| Weights | Rationale |
+|---------|-----------|
+| Geo 65%, Cont 25%, Team 10% | `P4: Sarah - Geography (65%), Continuity (25%), Team (10%)` |
+| Geo 85%, Cont 8%, Team 7% | `P4: Sarah - exact geographic match` |
+| Cont 40%, Geo 35%, Team 25% | `P5: Sarah - Continuity (40%), Geography (35%), Team (25%)` |
+| Total < 0.3 | `RO: Sarah - optimized for balance` |
 
 ### 11.10 Scale Limits (Solver Routing)
 
@@ -1506,12 +1732,14 @@ The solver routing system handles problems of varying sizes:
 |-------|-------|--------|
 | **MAX_ACCOUNTS_FOR_GLOBAL_LP** | 8,000 | Cloud Run native HiGHS handles large problems reliably |
 | **WARN_ACCOUNTS_THRESHOLD** | 3,000 | Performance warning threshold |
+| **MAX_LP_BINARY_VARIABLES** | 500,000 | JavaScript string length limit for LP problem text |
 
 **Why these limits:**
 - Each balance constraint (ARR, ATR, Tier 1-4) references ALL accounts
 - For N accounts and R reps, constraint matrix has ~N × R × 6 non-zeros
 - At 8000 accounts × 48 reps × 6 metrics = ~2.3M non-zeros
 - Testing showed Cloud Run native HiGHS handles this (~85s solve time)
+- LP problem text with >500K binary variables can exceed JavaScript's ~512MB string limit
 
 **What happens when exceeded:**
 ```
@@ -1640,7 +1868,25 @@ getMinimumFloor(): number {
 - If `absoluteMinARR >= targetARR`: Log warning, use 0 as floor (prevents infeasible LP)
 - If config values are null: Fall back to calculated defaults
 
-### 12.1.3 Capacity Gating & LP Solver Consistency
+### 12.1.3 LP Balance Variance (Tighter Than Display)
+
+**Impl**: `optimization/types.ts` - `DEFAULT_LP_BALANCE_CONFIG`
+
+The LP solver uses tighter variance bands than the display defaults to enforce stricter balance:
+
+| Metric | Display Variance | LP Variance | Rationale |
+|--------|------------------|-------------|-----------|
+| ARR | 25% | 10% | LP needs stricter balance enforcement for fair distribution |
+| ATR | 25% | 15% | Slightly looser for renewal timing variability |
+| Pipeline | 25% | 15% | Slightly looser for prospect uncertainty |
+
+**Why the difference?**
+- **Display variance** (`DEFAULT_VARIANCE` in constants.ts) is used for UI thresholds and "overloaded" warnings
+- **LP variance** (`DEFAULT_LP_BALANCE_CONFIG` in types.ts) drives optimization constraint boundaries
+
+The tighter LP variance creates stronger incentives for the solver to achieve balanced distribution, while the display variance allows for more tolerance in user-facing metrics.
+
+### 12.1.4 Capacity Gating & LP Solver Consistency
 
 **Impl**: `simplifiedAssignmentEngine.ts` - `hasCapacity()`, `batchAssignPriority4()`
 
@@ -1851,6 +2097,115 @@ CRE_RISK_THRESHOLDS = {
 }
 ```
 
+### 13.4.1 Assignment Confidence
+
+**Impl**: `_domain/constants.ts` - `AssignmentConfidence`, `calculateAssignmentConfidence()`
+
+Assignment Confidence indicates how confident the system is in a proposed assignment. This is **NOT the same as CRE Risk** (churn probability).
+
+| Confidence | Warning Severity | Badge Style | Meaning |
+|------------|------------------|-------------|---------|
+| High | No warnings | Outline (subtle) | Clean assignment, no concerns |
+| Medium | Medium severity | Orange background | Some concerns (geo mismatch, tier concentration) |
+| Low | High severity | Red (destructive) | Significant issues (capacity exceeded, no reps available, CRE overload) |
+
+**Calculation**:
+```typescript
+// From _domain/constants.ts
+function calculateAssignmentConfidence(warnings): AssignmentConfidence {
+  if (warnings.some(w => w.severity === 'high')) return 'LOW';
+  if (warnings.some(w => w.severity === 'medium')) return 'MEDIUM';
+  return 'HIGH';
+}
+```
+
+**Warning Types That Affect Confidence**:
+
+| Warning Type | Severity | Trigger |
+|--------------|----------|---------|
+| `unassigned` | High | No reps available to assign account |
+| `capacity_exceeded` | High | All reps at capacity, forced assignment |
+| `strategic_overflow` | High | No strategic reps for strategic account |
+| `cre_risk` | High | Rep has too many CRE accounts |
+| `tier_concentration` (Tier 1) | Medium | Rep has too many Tier 1 accounts |
+| `tier_concentration` (Tier 2) | Low | Rep has too many Tier 2 accounts |
+| `cross_region` | Low | Account assigned outside home geography |
+
+**Key Distinction**:
+- **CRE Risk** (§13.4): Will this customer churn? Based on `cre_count`.
+- **Assignment Confidence** (§13.4.1): How good is this assignment decision? Based on warning severity.
+
+**UI Display** (VirtualizedAccountTable):
+
+| Column | Source | Visibility | When Empty |
+|--------|--------|------------|------------|
+| **Confidence** | `proposal.confidence` | Always | Shows "-" |
+| **CRE Risk** | `account.cre_count` | Customers only | N/A (always has value) |
+
+The columns are intentionally separate because they measure different things - mixing them was confusing for users who saw "No CRE" in a column labeled "Confidence".
+
+### 13.4.2 Hierarchical Ownership Warnings
+
+**Impl**: `constants.ts` - `HIERARCHY_WARNING_TYPES`
+
+**Definition**: Hierarchical Ownership means a parent account and all its children share the same owner. Breaking this creates a "Hierarchy Split."
+
+**Warning Triggers**:
+
+| Scenario | Warning | Severity | Confidence |
+|----------|---------|----------|------------|
+| Child moved separately from parent | Hierarchy Split | HIGH | LOW |
+| Parent moved without children | Hierarchy Split | HIGH | LOW |
+| Parent cascade skips locked children | Notice (info only) | NONE | No change |
+| Locked children force-overridden | Hierarchy Split + Lock Override | HIGH | LOW |
+| Parent moved with all children | None | NONE | No change |
+
+**User-Facing Terminology**:
+- "Hierarchy Split" - when parent and child have different owners
+- NOT "Split Ownership" (internal DB term)
+
+**UI Behavior**:
+- Default toggle: Keep hierarchy together (ON)
+- Warning panel appears only when toggle is OFF (user opts to split)
+- Confirmation required for any Hierarchy Split action
+- Summary shown before all reassignments (account count + ARR impact)
+
+**Warning Types**:
+
+| Warning Type | Severity | Label | Description |
+|--------------|----------|-------|-------------|
+| `hierarchy_split` | HIGH | Hierarchy Split | Account will have different owner than parent/children |
+| `lock_override` | HIGH | Lock Override | Locked accounts were force-reassigned |
+
+**Key Distinction**:
+- **Hierarchy Split**: About ownership alignment within a corporate hierarchy (parent/child)
+- **Continuity**: About keeping an account with its current owner over time
+- These are independent concepts - a hierarchy can be split while maintaining continuity, or vice versa
+
+### 13.4.3 Stability Lock Breakdown
+
+**Impl**: `components/analytics/StabilityLocksPieChart.tsx`, `hooks/useStabilityLockBreakdown.ts`
+
+Stability locks are displayed as a pie chart in balancing dashboards to show which accounts are locked (excluded from optimization) and why.
+
+| Lock Type | Display Name | Color | Description |
+|-----------|--------------|-------|-------------|
+| `manual_lock` | Manual Lock | Emerald | `exclude_from_reassignment = true` |
+| `backfill_migration` | Backfill | Blue | Owner leaving → migrating to replacement |
+| `cre_risk` | CRE Risk | Red | At-risk accounts stay with experienced owner |
+| `renewal_soon` | Renewal Soon | Amber | Renewing within configured days |
+| `pe_firm` | PE Firm | Violet | PE-owned accounts routed to dedicated rep |
+| `recent_change` | Recent Change | Gray | Recently changed owner → minimize churn |
+
+**Display Rules**:
+- Only parent accounts are counted (child locks are inherited)
+- Chart only appears when `total > 0` (at least one locked account)
+- Empty state: "No stability locks active" (chart hidden)
+
+**Data Source**: Uses `identifyLockedAccounts()` from `constraints/stabilityLocks.ts` which already computes `lockStats` as part of the assignment engine flow.
+
+**Cross-Reference**: See §11.5 for lock priority order and configuration defaults.
+
 ### 13.5 Balance Threshold Calculator
 
 **Impl**: `services/balanceThresholdCalculator.ts`
@@ -1881,57 +2236,71 @@ Calculates dynamic per-rep targets for additional balance metrics beyond ARR:
 
 The `types/analytics.ts` file imports from `@/_domain` to ensure consistency.
 
-### 13.7 Continuity Eligibility (Analytics Filter)
+### 13.7 Rep Book Metrics
 
-**Impl**: `calculations.ts` - `getValidRepIdsForContinuity()`, `isEligibleForContinuityTracking()`
+**Impl**: `calculations.ts` - `RepBookMetrics`, `calculateRepBookMetrics()`
 
-**Problem**: Accounts whose past owner isn't in the current reps CSV are counted as "not retained" in the continuity percentage denominator. This artificially deflates the metric since these accounts can never be retained - their owner left the company.
+When manually reassigning accounts, users need to see the impact on both the losing and gaining rep. The `RepBookMetrics` interface aggregates all key metrics for a rep's book:
 
-**Solution**: Only include accounts in continuity calculations where the original owner exists in the current sales reps list and is not a backfill source (leaving).
+| Metric | Description | Source |
+|--------|-------------|--------|
+| `accountCount` | Number of parent accounts | Count where `is_parent = true` |
+| `customerCount` | Number of customer accounts | Count where `is_customer = true` |
+| `prospectCount` | Number of prospect accounts | Count where `is_customer = false` |
+| `totalARR` | Sum of ARR across all accounts | `SUM(getAccountARR(account))` |
+| `totalATR` | Sum of ATR across customer accounts | `SUM(getAccountATR(account))` |
+| `totalPipeline` | Sum of pipeline value | From opportunities data |
+| `tierBreakdown` | Count by expansion tier (T1-T4) | Grouped by `expansion_tier` |
+| `creRiskCount` | Total CRE cases | `SUM(cre_count)` |
 
-**Eligibility Criteria**:
-An account is **eligible for continuity tracking** if:
-1. `owner_id` is not null/undefined
-2. `owner_id` exists in current `sales_reps` table
-3. That rep is NOT a backfill source (`is_backfill_source = false`)
+**Usage**: The `ReassignmentImpactPanel` component uses this to show before/after comparison when reassigning accounts.
+
+**Delta Display**:
+- Losing rep: Values decrease (red indicators, ▼ arrows)
+- Gaining rep: Values increase (green indicators, ▲ arrows)
+- Percentage change: `((after - before) / before) × 100`
+
+### 13.8 Continuity Metric (Simplified Formula)
+
+**Impl**: `buildDataService.ts` - `calculateContinuityMetrics()`, `metricsCalculator.ts` - `calculateMetrics()`
 
 **Formula**:
 ```
-eligible_accounts = accounts WHERE owner_id IN (valid_rep_ids)
-valid_rep_ids = reps WHERE is_backfill_source = false
-
-continuity_rate = (eligible_accounts with same owner) / (eligible_accounts) × 100
+continuity_rate = (parent_accounts with same owner) / (total parent_accounts) × 100
 ```
 
-**Example**:
-| Scenario | Retained | Total | Continuity % |
-|----------|----------|-------|--------------|
-| **Without filter (wrong)** | 50 | 100 | **50%** |
-| **With filter (correct)** | 50 | 70 | **71%** |
+This is a simple ratio: what percentage of parent accounts stayed with their original owner after assignment generation.
 
-The 30 accounts whose owner left were never going to be retained - excluding them gives the true retention rate.
+**Edge Case Handling**:
 
-**Files Using This Filter**:
-- `buildDataService.ts` → `calculateContinuityScore()` (dashboard analytics)
-- `metricsCalculator.ts` → `calculateMetrics()` (LP post-processing)
+| owner_id | new_owner_id | Classification | Rationale |
+|----------|--------------|----------------|-----------|
+| `'rep_a'` | `NULL` | Retained | No proposed change = stays with original |
+| `'rep_a'` | `'rep_a'` | Retained | Same owner |
+| `'rep_a'` | `'rep_b'` | Changed | Different owner |
+| `NULL` | `NULL` | Retained | Orphan unchanged (no owner to lose) |
+| `NULL` | `'rep_b'` | Changed | Was orphan, now assigned |
 
-**Note**: The LP objective scoring (`continuityScore.ts`) is NOT affected. It already returns 0 for non-owners, and departed owners aren't in the eligible reps list anyway.
+**Files Using This Formula**:
+- `buildDataService.ts` → `calculateContinuityMetrics()` (dashboard analytics)
+- `metricsCalculator.ts` → `calculateMetrics()` (LP post-processing telemetry)
+
+**Note**: The LP objective SCORING (`continuityScore.ts`) uses a different, more nuanced formula with tenure/stability/value weights. That scoring function influences which rep gets an account. This metric is purely for analytics display.
+
+> **Historical Note (December 2025)**: Prior to v1.1.0, this metric used eligibility filtering that excluded accounts whose owner was not in the reps list or was a backfill source. This was removed to simplify the metric. The `getValidRepIdsForContinuity()` and `isEligibleForContinuityTracking()` functions in `calculations.ts` are no longer used for continuity metrics but remain available for other use cases.
 
 ### 13.7.1 Continuity Metrics Structure
 
 **Impl**: `types/analytics.ts` - `ContinuityMetrics`, `buildDataService.ts` - `calculateContinuityMetrics()`
 
-For UI display, the continuity calculation returns a full metrics object with counts:
+For UI display, the continuity calculation returns a metrics object with counts:
 
 | Field | Formula | Description |
 |-------|---------|-------------|
-| `score` | `retainedCount / eligibleCount` | 0-1, the percentage |
-| `retainedCount` | eligible accounts WHERE `new_owner_id = owner_id` OR `new_owner_id IS NULL` | Accounts staying with same owner |
-| `changedCount` | `eligibleCount - retainedCount` | Accounts moving to different owner |
-| `eligibleCount` | parent accounts WHERE `owner_id IN valid_rep_ids` | Denominator for score |
-| `excludedCount` | `parentAccounts.length - eligibleCount` | Accounts excluded (owner not in reps file) |
-
-**Why excludedCount matters**: Accounts whose original owner isn't in the uploaded reps file cannot be "retained" - there's no one to retain them with. These are excluded from the continuity percentage but shown separately in the UI for transparency.
+| `score` | `retainedCount / totalCount` | 0-1, the percentage |
+| `retainedCount` | parent accounts WHERE `new_owner_id = owner_id` OR `new_owner_id IS NULL` | Accounts staying with same owner |
+| `changedCount` | `totalCount - retainedCount` | Accounts moving to different owner |
+| `totalCount` | all parent accounts | Denominator for score |
 
 **TypeScript Interface** (in `types/analytics.ts`):
 ```typescript
@@ -1939,10 +2308,63 @@ interface ContinuityMetrics {
   score: number;           // 0-1
   retainedCount: number;
   changedCount: number;
-  eligibleCount: number;
-  excludedCount: number;
+  totalCount: number;
 }
 ```
+
+### 13.8 Analytics Pages Overview
+
+The app has multiple analytics views that serve different purposes. **It's important to understand which page shows which data.**
+
+| Page | Purpose | Data Source |
+|------|---------|-------------|
+| **Data Overview** | Understand the book **as it was uploaded** | Original imported data (`owner_id`) |
+| **Balancing Overview** | Review **new/proposed assignments** | Proposed assignments (`new_owner_id`) |
+
+#### Data Overview (Import Analytics)
+
+**Location**: BuildDetail → "Data Overview" tab
+
+**Purpose**: Analyze the book as it was imported from Salesforce. This shows the **current state** of the book before any optimization.
+
+**What it shows**:
+- Original account ownership (from CSV import)
+- Current ARR/ATR distribution by original owners
+- Orphaned accounts (no valid owner in imported data)
+- Data quality issues (missing fields, mapping failures)
+- Import statistics and warnings
+
+**Key principle**: Data Overview reflects the **source data**—the book as your CRM/Salesforce currently has it. Use this to understand "what we're starting with."
+
+**Impl**: `DataOverviewAnalytics.tsx` - passes `useProposed=false` to analytics hooks
+
+#### Balancing Overview (Assignment Analytics)
+
+**Location**: BuildDetail → "Balancing" tab → Overview section
+
+**Purpose**: Review the **results of running the assignment engine**. This shows the **proposed state** after optimization.
+
+**What it shows**:
+- Proposed account ownership after optimization
+- Balance metrics (ARR/ATR/Pipeline distribution across proposed owners)
+- Continuity scores (how many accounts stayed with same owner)
+- Before/After comparisons
+- Rep-level load distribution with proposed assignments
+
+**Key principle**: Balancing Overview reflects **proposed assignments**—the book as it would be if you commit these changes. Use this to understand "what the new book looks like."
+
+**Impl**: Uses `new_owner_id` from assignments table, or `useProposed=true` in analytics hooks
+
+#### Side-by-Side Summary
+
+| Question | Use This Page |
+|----------|---------------|
+| "What did we import from Salesforce?" | **Data Overview** |
+| "How is ARR currently distributed?" | **Data Overview** |
+| "Are there data quality issues?" | **Data Overview** |
+| "What will the new book look like?" | **Balancing Overview** |
+| "How balanced are the proposed assignments?" | **Balancing Overview** |
+| "Which accounts are changing owners?" | **Balancing Overview** (Before/After) |
 
 ---
 
@@ -1954,7 +2376,7 @@ interface ContinuityMetrics {
 
 | File | Key Exports | Doc Section |
 |------|-------------|-------------|
-| `calculations.ts` | `getAccountARR()`, `getAccountATR()`, `isCustomer()`, `calculateBalanceTarget()`, `getValidRepIdsForContinuity()`, `isEligibleForContinuityTracking()` | §2, §3, §12, §13.7 |
+| `calculations.ts` | `getAccountARR()`, `getAccountATR()`, `isCustomer()`, `calculateBalanceTarget()`, `calculateBalanceMax()`, `RepBookMetrics`, `calculateRepBookMetrics()` | §2, §3, §12, §13.7 |
 | `tiers.ts` | `classifyTeamTier()`, `TEAM_TIER_ORDER`, `getTierDistance()`, `isEnterprise()` | §5 |
 | `geography.ts` | `REGION_HIERARCHY`, `REGION_ANCESTRY`, `calculateGeoMatchScore()`, `autoMapTerritoryToUSRegion()` | §4 |
 | `normalization.ts` | `normalizeRegion()`, `normalizePEFirm()`, `normalizeTeamTier()`, `REGION_ALIASES`, `PE_FIRM_ALIASES` | §6 |

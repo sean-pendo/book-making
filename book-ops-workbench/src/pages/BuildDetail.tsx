@@ -21,7 +21,7 @@ import { DataVisualizationCard } from '@/components/DataVisualizationCard';
 import { SkeletonLoader } from '@/components/SkeletonLoader';
 import { EnhancedLoader } from '@/components/EnhancedLoader';
 import { AnimatedCounter } from '@/components/AnimatedCounter';
-import { Database, Users, Target, AlertTriangle, CheckCircle, FileText, Cog, DollarSign, TrendingUp, Shield, Building2, UserCheck, Calendar, PieChart, RefreshCw, Upload, ChevronRight, Lock } from 'lucide-react';
+import { Database, Users, Target, AlertTriangle, CheckCircle, FileText, Cog, DollarSign, TrendingUp, Shield, Building2, Calendar, PieChart, RefreshCw, Upload, ChevronRight, Lock } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { GlobalClashDetector } from './GlobalClashDetector';
 import { SameBuildClashDetector } from '@/components/SameBuildClashDetector';
@@ -131,7 +131,7 @@ export const BuildDetail = () => {
   // Track loading progress for large datasets
   const loadProgress = useLoadProgress();
 
-  // Get analytics metrics for Coverage and Team Fit cards on Data Overview tab
+  // Get analytics metrics for Team Fit card on Data Overview tab
   // Use useProposed=false to show original imported data (not proposed assignments)
   const { data: analyticsMetrics } = useAnalyticsMetrics(id, false);
   
@@ -527,7 +527,7 @@ export const BuildDetail = () => {
             </Card>
           </div>
 
-          {/* Row 2: Pipeline, Team, Coverage, Team Fit */}
+          {/* Row 2: Pipeline, Team, Team Fit */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card className="card-elevated card-glass hover-lift group cursor-pointer" onClick={() => setActiveTab('data-opportunities')}>
               <CardContent className="p-5">
@@ -574,33 +574,6 @@ export const BuildDetail = () => {
                     <span className="text-sm font-medium text-muted-foreground">{buildData?.salesReps.inactiveReps || 0}</span>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-
-            {/* Coverage Card */}
-            <Card className="card-elevated card-glass hover-lift group">
-              <CardContent className="p-5">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="p-2 bg-emerald-500/20 rounded-lg">
-                    <UserCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-foreground">Coverage</h3>
-                    <p className="text-xs text-muted-foreground">Owner assigned</p>
-                  </div>
-                </div>
-                {analyticsMetrics?.ownerCoverage ? (
-                  <>
-                    <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-                      {analyticsMetrics.ownerCoverage.coverageRate.toFixed(1)}%
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {analyticsMetrics.ownerCoverage.withOwner.toLocaleString()} of {(analyticsMetrics.ownerCoverage.withOwner + analyticsMetrics.ownerCoverage.orphaned).toLocaleString()} accounts
-                    </p>
-                  </>
-                ) : (
-                  <div className="text-2xl font-bold text-muted-foreground">N/A</div>
-                )}
               </CardContent>
             </Card>
 

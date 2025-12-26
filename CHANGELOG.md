@@ -2,6 +2,1012 @@
 
 ---
 
+## [2025-12-26] - SSOT: LP Batching for Large Residual Optimization + UI Fixes
+
+**Summary:** Fixed multiple issues with large-scale assignment generation (130K+ accounts). Added automatic batching for residual optimization to prevent JavaScript string length errors, fixed progress dialog showing "0 assignments", fixed preview dialog crash, and fixed DOM nesting warning.
+
+### SSOT Changes
+
+| Step | File | Change |
+|------|------|--------|
+| **1. Document** | `MASTER_LOGIC.mdc §11.10` | Added `MAX_LP_BINARY_VARIABLES = 500,000` to scale limits |
+| **2. Implement** | `_domain/constants.ts` | Added `LP_SCALE_LIMITS.MAX_LP_BINARY_VARIABLES` with JSDoc |
+| **3. Import** | `simplifiedAssignmentEngine.ts` | Uses `LP_SCALE_LIMITS.MAX_LP_BINARY_VARIABLES` for batch sizing |
+
+### Bug Fixes
+
+| Issue | File | Fix |
+|-------|------|-----|
+| **RangeError: Invalid string length** | `simplifiedAssignmentEngine.ts` | `batchAssignPriority4()` now batches large residual optimizations (75K accounts × 44 reps = 3.3M vars exceeds JS string limit) |
+| **"Generated 0 assignments"** | `useAssignmentEngine.ts` | `getProgressDialogData()` now includes `assignmentsMade`, `conflicts`, `rulesCompleted`, `totalRules`, `stage` |
+| **Preview dialog crash** | `AssignmentPreviewDialog.tsx` | Added pagination (100 per page) - rendering 132K rows crashed the browser |
+| **DOM nesting warning** | `AssignmentGenerationDialog.tsx` | Added `asChild` to `DialogDescription` with nested divs |
+
+### Performance
+
+- Residual optimization (arr_balance priority) now automatically splits into ~11K account batches
+- Each batch solves in ~8s on Cloud Run, total ~8 batches for 75K accounts
+- Greedy fallback still triggers on LP errors, but batching prevents most errors
+
+---
+
+## [2025-12-23] - SSOT: Centralize ALL Supabase pagination to 10,000 rows
+
+**Summary:** All Supabase pagination and batch sizes now use a single source of truth from `@/_domain/constants.ts`. This ensures consistent data loading across the entire codebase.
+
+### SSOT Constants Added
+
+```typescript
+// From _domain/constants.ts
+export const SUPABASE_LIMITS = {
+  FETCH_PAGE_SIZE: 10_000,      // For SELECT queries - requires Supabase max_rows = 10000
+  MAX_ROWS_PER_INSERT: 500,     // For INSERT batching
+  MAX_CONCURRENT_REQUESTS: 5,   // Limit parallel requests to avoid rate limiting
+};
+```
+
+### Files Updated (12 consumers)
+
+| File | Change |
+|------|--------|
+| `MASTER_LOGIC.mdc §9.3` | Documented 10k page size requirement |
+| `_domain/constants.ts` | Added `FETCH_PAGE_SIZE`, `MAX_CONCURRENT_REQUESTS` |
+| `hooks/useAssignmentEngine.ts` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+| `hooks/useBuildData.ts` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+| `hooks/useEnhancedBalancing.ts` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+| `services/buildDataService.ts` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` (3 places) |
+| `services/assignmentService.ts` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+| `services/buildCountService.ts` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+| `services/optimization/preprocessing/dataLoader.ts` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+| `pages/Dashboard.tsx` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` + `MAX_ROWS_PER_INSERT` |
+| `pages/ComprehensiveReview.tsx` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+| `components/FullAssignmentConfig.tsx` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+| `components/BalanceThresholdConfig.tsx` | Uses `SUPABASE_LIMITS.FETCH_PAGE_SIZE` |
+
+### Why
+
+- **Before:** Hardcoded values scattered across 12+ files (1000, 5000, 10000, 50000)
+- **After:** Single constant controls all pagination - change once, applies everywhere
+- **Benefit:** No more data loading issues due to inconsistent page sizes
+
+### Requirements
+
+**Supabase project must have `max_rows = 10000` configured in Dashboard → Settings → API.**
+
+### Performance Impact
+
+| Before | After |
+|--------|-------|
+| 147 requests (1k rows each) | 15 requests (10k rows each) |
+| ~60 seconds load time | ~8 seconds load time |
+
+---
+
+## [2025-12-23] - Fix: Assignments tab showing wrong customer/prospect counts
+
+**Problem:** The Assignments tab showed "Customers (0)" and "Prospects (14000)" even though the Data Overview showed 2,830 customers and 140,666 prospects.
+
+**Root Cause:** The Assignments tab was using the `is_customer` database field directly (`account.is_customer === true`), while Data Overview was using the dynamic `getAccountARR() > 0` calculation. The `is_customer` field wasn't properly synced because the sync function only checked `hierarchy_bookings_arr_converted > 0` but not `calculated_arr` or `arr`.
+
+**Fix:** Updated both `AssignmentEngine.tsx` and `useAssignmentEngine.ts` to use `getAccountARR() > 0` for customer/prospect classification, matching the Data Overview logic.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `pages/AssignmentEngine.tsx` | Use `getAccountARR(acc) > 0` instead of `acc.is_customer` |
+| `hooks/useAssignmentEngine.ts` | Use `getAccountARR(account) > 0` instead of `account.is_customer === true` |
+
+**SSOT Compliance:** This change aligns both views with `MASTER_LOGIC.mdc §3.1` which defines Customer = `getAccountARR() > 0`.
+
+---
+
+## [2025-12-22] - SSOT: Add PE Firms field for dedicated PE rep routing
+
+**Summary:** Added `pe_firms` field to sales reps to support routing PE-owned accounts to dedicated PE reps.
+
+### SSOT Flow
+
+| Step | File | Change |
+|------|------|--------|
+| 1. Document | `MASTER_LOGIC.mdc §10.7` | Documented PE rep routing rules, field format, implementation rules |
+| 2. Document | `MASTER_LOGIC.mdc §8.2` | Added `pe_firms` to Sales Reps Flags table |
+| 3. Implement | `_domain/normalization.ts` | Added `parsePEFirmsList()` and `repHandlesPEFirm()` functions |
+| 4. Database | `migrations/20251222100001_add_pe_firms_to_sales_reps.sql` | Added `pe_firms` column |
+| 5. Types | `integrations/supabase/types.ts` | Added `pe_firms` to Row/Insert/Update |
+| 6. Types | `optimization/types.ts` | Added `pe_firms` to `EligibleRep` and `SalesRep` interfaces |
+| 7. Import | `pages/DataImport.tsx` | Added `pe_firms` to sales rep field mappings |
+| 8. Import | `utils/importUtils.ts` | Added `pe_firms` to `transformSalesRepData()` |
+| 9. Import | `utils/autoMappingUtils.ts` | Added auto-mapping aliases for `pe_firms` |
+| 10. Engine | `services/optimization/constraints/stabilityLocks.ts` | Updated PE firm lock to route to dedicated rep |
+| 11. Engine | `services/simplifiedAssignmentEngine.ts` | Updated PE firm handling to find dedicated rep |
+| 12. Data | `services/optimization/preprocessing/dataLoader.ts` | Added `pe_firms` to EligibleRep mapping |
+
+### How It Works
+
+**Before:** PE accounts were locked to their current owner (relationship continuity).
+
+**After:** 
+1. If account has `pe_firm` AND a rep has that firm in `pe_firms` → Route to dedicated PE rep
+2. If account has `pe_firm` but NO rep is dedicated → Stay with current owner (legacy behavior)
+
+**Field Format:** Comma-separated PE firm names (e.g., "JMI Private Equity, Vista Equity Partners")
+
+**Child Accounts:** When a parent routes to PE rep, children follow (hierarchy integrity).
+
+---
+
+## [2025-12-22] - Refactor: Remove deprecated 'team' field from sales rep import
+
+**Summary:** Removed the deprecated `team` field from the sales rep import flow. Users should now use `team_tier` (SMB/Growth/MM/ENT) for team alignment scoring.
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `pages/DataImport.tsx` | Removed `team` field from salesRepMappings |
+| `utils/importUtils.ts` | Removed `team` from transformSalesRepData |
+| `services/optimization/scoring/teamAlignmentScore.ts` | Removed fallback from `team_tier` to `team` |
+| `services/optimization/types.ts` | Removed `team` from `EligibleRep` interface |
+| `services/simplifiedAssignmentEngine.ts` | Removed `team` from `toEligibleRep()` |
+| `services/optimization/preprocessing/dataLoader.ts` | Removed `team` from rep mapping |
+| `services/buildDataService.ts` | Removed `team` fallback in region lookups |
+| `services/assignmentService.ts` | Updated `filterRepsByTier()` to use `team_tier` instead of `team`; added `team_tier` to interface |
+
+### Why
+The `team` field was a legacy free-text field that was unreliable for tier alignment. The `team_tier` field with standardized values (SMB/Growth/MM/ENT) is now the sole source for team alignment scoring.
+
+### Notes
+- Display components (dialogs, tables) still show `team` for existing database records
+- The database column still exists for backward compatibility
+- New imports will no longer populate the `team` field
+
+---
+
+## [2025-12-22] - UI: Enhanced Import Field Mapping with Fallback Chain Indicators
+
+**Summary:** Made the relationship between primary, secondary, and tertiary fields much clearer in the import mapping UI.
+
+### Problem
+During import, users weren't sure which field to map when they had multiple options (e.g., `sales_territory` vs `hq_country` vs `geo`). The previous "PRIMARY:" text prefix wasn't visually obvious.
+
+### Solution
+Added visual badges with tooltips that clearly indicate the fallback chain:
+
+| Badge | Meaning | Example Fields |
+|-------|---------|----------------|
+| **1st Choice** (blue) | Primary source - map this if available | `sales_territory`, `hierarchy_bookings_arr_converted` |
+| **2nd Choice** (slate) | Fallback when primary is empty | `hq_country`, `arr` |
+| **3rd Choice** (gray) | Last resort | `geo` |
+
+### Changes
+- Added `fallbackGroup` and `fallbackOrder` properties to `PriorityFieldMapping` interface
+- Updated field descriptions to explain the relationship more clearly
+- Added color-coded badges with helpful tooltips on hover
+
+### Fallback Chains
+
+**Geography**: `sales_territory` → `hq_country` → `geo`
+**ARR**: `hierarchy_bookings_arr_converted` → `arr`
+
+---
+
+## [2025-12-22] - SSOT: Territory Mapping - MID-WEST and MOUNTAIN to West
+
+**Summary:** Updated territory-to-region mapping rules so "MID-WEST", "MIDWEST", and "MOUNTAIN" territories map to **West** region instead of Central.
+
+### Changes (SSOT Flow)
+
+| Step | File | Change |
+|------|------|--------|
+| 1. Document | `_domain/MASTER_LOGIC.mdc` §4.2 | Added note that MID-WEST/MIDWEST/MOUNTAIN → West per business rules |
+| 2. Implement | `_domain/geography.ts` | Moved MIDWEST, MID-WEST, MOUNTAIN keywords from Central to West; moved CO, WY, MT, ID states to West |
+| 3. Consumers | `components/SimplifiedAssignmentConfig.tsx` | Updated legacy auto-mapping to match |
+| 4. AI Prompt | `supabase/functions/gemini-territory-mapping/index.ts` | Updated Gemini prompt to map these territories to West |
+
+**Rationale:** Business rule per user - these territories should be mapped to West, not Central.
+
+---
+
+## [2025-12-22] - Fix: Missed SSOT Violation in ManagerReassignmentPanel
+
+**Summary:** Fixed a missed inline ARR calculation in the reassignment confirmation display.
+
+| File | Change |
+|------|--------|
+| `components/ManagerReassignmentPanel.tsx` | Line 281: Replaced `selectedAccountData.calculated_arr \|\| 0` with `getAccountARR(selectedAccountData)` |
+
+This was a leftover from the Phase 4 SSOT fixes that was missed in the original sweep.
+
+---
+
+## [2025-12-22] - SSOT: Sales Rep Table Consistency Fixes
+
+**Summary:** Fixed customer classification SSOT violation where `buildDataService.ts` used only `hierarchy_bookings_arr_converted > 0` instead of the canonical `getAccountARR() > 0` priority chain.
+
+### SSOT Compliance Fixes
+
+**Fix 5: Customer Classification (HIGH PRIORITY)**
+
+| File | Change |
+|------|--------|
+| `services/buildDataService.ts` | Replaced `a.hierarchy_bookings_arr_converted > 0` with `getAccountARR(a) > 0` for customer/prospect classification |
+| `services/buildDataService.ts` | Replaced `a.is_parent` JS filtering with `isParentAccount(a)` for SSOT compliance |
+
+**Fix 2: Clarifying Comment**
+
+| File | Change |
+|------|--------|
+| `utils/salesRepCalculations.ts` | Added comment explaining why all parent accounts are summed (getAccountARR returns 0 for prospects) |
+
+### Why This Matters
+
+An account with `hierarchy_bookings_arr_converted = 0` but `calculated_arr > 0` would have been misclassified as a prospect in analytics but correctly classified as a customer in drill-downs. This caused inconsistent customer/prospect counts between views.
+
+### References
+
+- MASTER_LOGIC.mdc §3.1 - Customer = `getAccountARR() > 0`
+- MASTER_LOGIC.mdc §2.1 - ARR priority chain: `hierarchy_bookings → calculated_arr → arr → 0`
+
+---
+
+## [2025-12-22] - SSOT: Reassignment Impact Panel
+
+**Summary:** Added comprehensive before/after metrics preview when manually reassigning accounts.
+
+### SSOT Documentation
+
+- **Updated MASTER_LOGIC.mdc §13.7** - Documented `RepBookMetrics` interface and `calculateRepBookMetrics()` function
+  - Metrics included: Account Count, ARR, ATR, Pipeline, Tier Breakdown, CRE Risk
+  - Delta display rules: Losing rep (red ▼), Gaining rep (green ▲)
+
+### Domain Layer
+
+- **Added to `_domain/calculations.ts`**:
+  - `RepBookMetrics` interface - aggregated metrics for a rep's book
+  - `RepBookAccountData` interface - extended account data with tier/CRE fields
+  - `calculateRepBookMetrics()` - pure function to calculate metrics from account array
+  - `calculateMetricsDelta()` - helper for before/after change calculation
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `hooks/useRepMetrics.ts` | Hook for fetching and computing rep book metrics using React Query |
+| `components/ReassignmentImpactPanel.tsx` | Side-by-side comparison UI for losing/gaining rep metrics |
+
+### Hook Features (`useRepMetrics`)
+
+- `useRepMetrics(repId, buildId)` - Basic metrics fetch
+- `useRepMetricsWithDelta(repId, buildId, accountsBeingMoved, isGainingRep)` - Current + projected metrics
+- Caches results with 30s stale time
+- Includes pipeline calculation from opportunities (Expansion + New Subscription for customers)
+
+### Panel Features (`ReassignmentImpactPanel`)
+
+- Side-by-side cards for losing (red) and gaining (green) rep
+- Metrics with before → after and percentage change
+- Tier breakdown display (T1/T2/T3/T4)
+- CRE risk badge
+- Geo alignment indicator (checkmark/X)
+- Skeleton loading state
+- "Previously Unassigned" state for accounts without prior owner
+
+### Integration
+
+- **Updated `HierarchyAwareReassignDialog.tsx`**:
+  - Integrated `useRepMetricsWithDelta` hook for both reps
+  - Added `ReassignmentImpactPanel` after owner selection
+  - Calculates `accountsBeingMoved` including hierarchy cascade logic
+  - Respects `overrideLocks` toggle for locked children
+
+### Edge Cases Handled
+
+| Scenario | Behavior |
+|----------|----------|
+| Unassigned account | Shows "Previously Unassigned" instead of losing rep card |
+| Parent with children (cascade) | Impact includes all children's metrics |
+| Locked children | Excluded unless `overrideLocks` is enabled |
+| Child account (split) | Only child's metrics move |
+
+---
+
+## [2025-12-22] - SSOT: Hierarchical Ownership Reassignment Feature
+
+**Summary:** Added hierarchy-aware manual reassignment flow with warnings for hierarchy splits.
+
+### SSOT Documentation
+
+- **Added MASTER_LOGIC.mdc §13.4.2** - Documented "Hierarchical Ownership Warnings"
+  - Definition: Hierarchical Ownership means parent + children share same owner
+  - Warning triggers for hierarchy splits (parent/child with different owners)
+  - User-facing terminology: "Hierarchy Split" (not "Split Ownership")
+  - UI behavior: defaults to keeping hierarchy together
+
+### Domain Constants
+
+- **Added `HIERARCHY_WARNING_TYPES` to constants.ts**
+  - `HIERARCHY_SPLIT`: severity='high', triggers LOW confidence
+  - `LOCK_OVERRIDE`: severity='high', for force-reassigning locked accounts
+
+### Service Utilities
+
+- **Added hierarchy cascade utilities to `assignmentServiceHelpers.ts`**
+  - `getHierarchyInfo()` - Detect parent/child/standalone status, locked children count
+  - `cascadeToChildren()` - Cascade reassignment from parent to children
+  - `getHierarchyTotalARR()` - Calculate total ARR across hierarchy
+
+### New Component
+
+- **Created `HierarchyAwareReassignDialog.tsx`**
+  - Unified dialog for reassigning parent, child, or standalone accounts
+  - Defaults to keeping hierarchy together
+  - Toggle for parent: "Include all child accounts" (default: ON)
+  - Toggle for child: "Move this account only" (default: OFF)
+  - Optional lock override for locked children
+  - Shows summary: accounts affected, total ARR
+  - Three confirmation dialogs: standard, hierarchy split warning, lock override warning
+
+### Updated Entry Points
+
+| File | Change |
+|------|--------|
+| `AssignmentEngine.tsx` | Replaced inline reassignment dialog with `HierarchyAwareReassignDialog` |
+| `AccountDetailDialog.tsx` | Replaced inline Select+Button with dialog trigger |
+| `ManagerHierarchyView.tsx` | Added hierarchy awareness notes in proposal dialog |
+| `ManagerReassignmentPanel.tsx` | Added parent/child badges and hierarchy warning notes |
+
+### Testing Scenarios
+
+| Scenario | Expected Behavior |
+|----------|-------------------|
+| Reassign parent (default) | All unlocked children cascade |
+| Reassign parent, toggle OFF | Warning shown, parent moves alone, LOW confidence |
+| Reassign child (default) | Entire hierarchy moves |
+| Reassign child, toggle ON | Warning shown, child moves alone, LOW confidence |
+| Reassign standalone | Simple flow, no warnings |
+| Locked children | Info shown, optional override with extra warning |
+
+---
+
+## [2025-12-22] - SSOT: Comprehensive Business Logic Consolidation
+
+**Summary:** Fixed all SSOT violations identified in code audit. All business logic now flows through `@/_domain` as required by architecture.
+
+### Phase 0: Documentation
+- Documented LP-specific geo scores in MASTER_LOGIC.mdc §4.3.1
+  - LP solver uses tighter geo scores (0.65, 0.40, 0.20) vs display (0.85, 0.65, 0.40)
+- Documented LP variance differences in MASTER_LOGIC.mdc §12.1.3
+  - LP solver uses 10-15% variance vs display 25%
+
+### Phase 1: New Constants
+- Added `APPROACHING_CAPACITY_THRESHOLD` (1.2) to constants.ts
+  - Used for "approaching capacity" warnings at 120% of target
+
+### Phase 2: Balance Function Usage
+- `FullAssignmentConfig.tsx` now uses `calculateBalanceMax()` from `@/_domain`
+  - Replaced inline `Math.max(target × 1.5, largest × 1.2)` calculation
+  - Also uses `APPROACHING_CAPACITY_THRESHOLD` for variance
+
+### Phase 3: Telemetry Fix
+- `optimizationTelemetry.ts` now uses `getBalancePenaltyMultiplier()` from `@/_domain`
+  - Removed duplicated `BALANCE_INTENSITY_PRESETS` values
+
+### Phase 4: UI Component ARR Fixes
+Replaced inline ARR calculations with `getAccountARR()` in 6 files:
+| File | Lines Fixed |
+|------|-------------|
+| `ManagerReassignmentPanel.tsx` | 153, 158, 161, 164, 167 |
+| `ParentChildRelationshipDialog.tsx` | 318, 380 |
+| `ChangeChildOwnerDialog.tsx` | 183 |
+| `UnassignedAccountsModal.tsx` | 456, 457 |
+| `SameBuildClashDetector.tsx` | 72 |
+| `GlobalClashDetector.tsx` | 120 |
+
+### Bug Fix: Hardcoded 1.2 Threshold Replaced
+Fixed additional hardcoded `* 1.2` capacity thresholds to use `APPROACHING_CAPACITY_THRESHOLD`:
+| File | Change |
+|------|--------|
+| `ManagerReassignmentPanel.tsx` | "approaching capacity" check now uses constant |
+| `assignmentService.ts` | `overloadThreshold` calculation now uses constant |
+| `WorkloadBalanceVisualization.tsx` | Bar color and badge logic now use constant |
+
+### Phase 5: Legacy Service ARR Fixes
+- `assignmentService.ts` - Fixed 6 instances of inverted ARR priority chain
+  - Was: `account.arr || account.calculated_arr || 0`
+  - Now: `getAccountARR(account)` (uses correct priority: `hierarchy_bookings → calculated_arr → arr`)
+
+### Deferred Items
+- **30 vs 90 days continuity default**: Awaiting product decision
+- **Weight key consolidation** (lpProblemBuilder.ts): Cost exceeds benefit, documented in code
+
+---
+
+## [2025-12-22] - SSOT: Virtual Table Views Audit
+
+**Summary:** Comprehensive audit of all virtual table views and drill-down components to ensure SSOT compliance for ARR, ATR, CRE, and tier calculations.
+
+### Audit Results
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `VirtualizedAccountTable.tsx` | ✅ Compliant | Uses `getAccountARR()`, `getAccountATR()`, `getCRERiskLevel()` from `@/_domain` |
+| `SalesRepDetailDialog.tsx` | ✅ Compliant | Uses `getAccountARR()`, `getAccountATR()`, `isParentAccount()`, `isRenewalOpportunity()` from `@/_domain` |
+| `AccountsTable.tsx` | ✅ Compliant | Uses `getAccountARR()` from `@/_domain` |
+| `SalesRepsTable.tsx` | ✅ Compliant | Uses shared `calculateSalesRepMetrics()` utility which imports from `@/_domain` |
+| `AccountDetailDialog.tsx` | ✅ Compliant | Uses `formatCurrency()`, `getAccountARR()`, `getAccountATR()` from `@/_domain` |
+| `FLMDetailDialog.tsx` | ⚠️ Fixed | Had inline ATR calculation with `parseFloat()` - refactored to use `getAccountATR()` |
+
+### Fix Applied
+
+**FLMDetailDialog.tsx** - The `getATR()` helper was using inline calculations instead of the SSOT function:
+
+```typescript
+// BEFORE (inline calculation - SSOT violation)
+const getATR = (account: any) => {
+  const atrFromAccount = parseFloat(account.calculated_atr) || parseFloat(account.atr) || 0;
+  return atrFromOpps || atrFromAccount;
+};
+
+// AFTER (SSOT compliant)
+const getATR = (account: any) => {
+  const atrFromAccount = getAccountATR(account); // from @/_domain
+  return atrFromAccount || atrFromOpps;
+};
+```
+
+### Shared Utilities Verified
+
+- `salesRepCalculations.ts` - Uses `getAccountARR()`, `isRenewalOpportunity()`, `isParentAccount()` from `@/_domain`
+- All drill-down views (rep → accounts, FLM → reps → accounts) use consistent calculations
+
+---
+
+## [2025-12-22] - Feature: Separate Confidence and CRE Risk Columns
+
+**Summary:** Split the mixed "Confidence" column into two distinct columns for clearer user experience.
+
+### Problem Solved
+
+The "Confidence" column previously showed CRE Risk as a fallback when no proposal existed, causing confusion (users saw "No CRE" in a column labeled "Confidence").
+
+### New Column Layout
+
+| Column | Source | Visibility | When Empty |
+|--------|--------|------------|------------|
+| **Confidence** | `proposal.confidence` | Always | Shows "-" |
+| **CRE Risk** | `account.cre_count` | Customers only | N/A (always shows badge) |
+
+### SSOT Compliance
+
+- Refactored `getCRERiskBadge()` to use `getCRERiskLevel()` from `@/_domain/constants.ts`
+- Added `cre_count` to Account interface (removes `(account as any)` type cast)
+- Updated `MASTER_LOGIC.mdc` §13.4.1 with UI display documentation
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `VirtualizedAccountTable.tsx` | Add cre_count to interface, separate columns, SSOT-compliant badge, add sorting |
+| `MASTER_LOGIC.mdc` | Document separate column display in §13.4.1 |
+
+---
+
+## [2025-12-22] - SSOT: Enhanced Model Selection Documentation & Tooltips
+
+**Summary:** Added comprehensive documentation and UI tooltips explaining the differences between Waterfall and Relaxed Optimization models.
+
+### Key Distinction
+
+| Aspect | Waterfall | Relaxed Optimization |
+|--------|-----------|---------------------|
+| **How priorities work** | **Filters** — strict sequential order (P1 always beats P2) | **Weights** — simultaneous evaluation (account might be 60% P2 + 40% P3) |
+| **Runtime** | ~1-2 minutes | ~4-6 minutes |
+| **Explainability** | Easy to trace and audit | Complex weighted combinations |
+| **Balance quality** | Good within each tier | Better globally |
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `_domain/MASTER_LOGIC.mdc` | Expanded §11.1 from ~30 lines to ~100+ lines with detailed comparison, use cases, examples, and performance expectations |
+| `components/optimization/ModelSelector.tsx` | Added tooltip to Waterfall option (was missing), enhanced both tooltips with "Best for" / "Trade-off" sections and runtime info |
+
+### Use Case Guidance Added
+
+- **Waterfall**: Strict priority enforcement, auditability, speed, debugging, reproducibility
+- **Relaxed**: Global balance, trade-off flexibility, exploratory analysis, complex multi-factor decisions
+
+---
+
+## [2025-12-22] - Docs: Clarify Primary/Secondary Field Relationships
+
+**Summary:** Updated import field descriptions to clearly indicate PRIMARY vs SECONDARY data sources.
+
+### Geographic Fields Priority Chain
+| Priority | Field | Description |
+|----------|-------|-------------|
+| PRIMARY | `sales_territory` | Most specific (e.g., "US-West", "EMEA-UK") |
+| SECONDARY | `hq_country` | Fallback when territory missing |
+| TERTIARY | `geo` | Broad region (AMER/EMEA/APAC) - last resort |
+
+### ARR Fields Priority Chain
+| Priority | Field | Description |
+|----------|-------|-------------|
+| PRIMARY | `hierarchy_bookings_arr_converted` | Prevents double-counting in hierarchies |
+| SECONDARY | `arr` | Raw ARR value |
+
+---
+
+## [2025-12-22] - Refactor: Remove Deprecated Field Comments
+
+**Summary:** Cleaned up all deprecated field comments (v1.3.9) that were left as documentation breadcrumbs. These were redundant since the fields were already removed from the codebase.
+
+### Removed Deprecated Comments From
+
+| File | Deprecated Fields Mentioned |
+|------|----------------------------|
+| `AccountsTable.tsx` | `industry`, `account_type` |
+| `OpportunitiesTable.tsx` | `stage`, `close_date`, `created_date` |
+| `SalesRepDetailDialog.tsx` | `industry`, `account_type`, `sub_region` |
+| `autoMappingUtils.ts` | `ultimate_parent_employee_size`, `account_type`, `industry`, `expansion_score`, `initial_sale_score`, `in_customer_hierarchy`, `include_in_emea`, `is_2_0`, `inbound_count`, `idr_count`, `stage`, `amount`, `close_date`, `created_date` |
+| `importUtils.ts` | `ultimate_parent_employee_size`, `account_type`, `industry`, `expansion_score`, `initial_sale_score`, `in_customer_hierarchy`, `include_in_emea`, `is_2_0`, `inbound_count`, `idr_count`, `stage`, `close_date`, `created_date`, `manager` |
+| `DataImport.tsx` | `ultimate_parent_employee_size`, `account_type`, `industry`, `expansion_score`, `initial_sale_score`, `in_customer_hierarchy`, `include_in_emea`, `is_2_0`, `inbound_count`, `idr_count`, `stage`, `close_date`, `created_date`, `manager` |
+| `useMappedFields.ts` | `is_renewal_specialist`, `sub_region`, `team` |
+| `ComprehensiveReview.tsx` | `manager` |
+| `modeDetectionService.ts` | `hasRenewalSpecialists`, `renewalSpecialistCount`, `is_renewal_specialist` |
+| `commercialPriorityHandlers.ts` | `shouldRouteToRenewalSpecialist`, `getEligibleRepsForAccount`, `RSWorkloadMetrics`, `calculateRSWorkloadMetrics` |
+| `exportUtils.ts` | `expansion_score`, `inbound_count`, `idr_count` |
+| `optimization/types.ts` | `sub_region`, `is_renewal_specialist` |
+
+### Impact
+- No functional changes - this is purely a cleanup of documentation comments
+- Code is now cleaner without stale deprecation notices
+
+---
+
+## [2025-12-22] - Feature: Confidence Badge Tooltips and Table Sorting
+
+**Summary:** Enhanced assignment tables with sorting capabilities, added reasoning tooltips to confidence badges, and fixed color scheme.
+
+### Changes
+
+**VirtualizedAccountTable:**
+- Added sortable columns: Account Name, ARR, ATR, Owner Assignment, Confidence
+- Added tooltip with reasoning description to confidence badges (High/Medium/Low)
+- Column headers now show sort indicators (chevron up/down)
+- Sorting resets to page 1
+- **Fixed fallback display**: When no proposal exists, shows "CRE" count badge instead of confusing "Risk" label
+- Renamed `getContinuityRiskBadge` → `getCRERiskBadge` for clarity
+
+**AssignmentPreviewDialog:**
+- Added sortable columns: Account, Current Owner, Proposed Owner, Confidence  
+- Sorting state maintained within dialog session
+
+### Confidence Badge Color Scheme (Updated)
+
+| Level | Badge Style | Description |
+|-------|-------------|-------------|
+| High Confidence | Outline (subtle, no background) | Clean assignment with no concerns. Safe to approve. |
+| Medium Confidence | Orange background | Some concerns detected (geo mismatch, tier concentration). Review before approving. |
+| Low Confidence | Red (destructive) | Significant issues (capacity exceeded, changing customer owner). May disrupt established relationships. |
+
+### CRE Fallback Display (When No Proposal)
+
+When an account has no assignment proposal, the Confidence column shows CRE status instead:
+- **No CRE** → Outline badge
+- **1-2 CRE** → Orange badge  
+- **3+ CRE** → Red badge
+
+---
+
+## [2025-12-22] - SSOT: Rename Assignment Risk to Assignment Confidence
+
+**Summary:** Refactored "Assignment Risk" terminology to "Assignment Confidence" for better UX clarity. The scale is inverted: HIGH warnings now result in LOW confidence (instead of HIGH risk).
+
+### Why This Change
+
+The term "Risk" was confusing because it sounded like business risk (churn, revenue loss) when it actually measured assignment quality/confidence. "Confidence" is more intuitive:
+- **High Confidence** = Clean assignment, no concerns
+- **Medium Confidence** = Some concerns (geo mismatch, tier concentration)
+- **Low Confidence** = Significant issues (capacity exceeded, changing customer owner)
+
+### SSOT Flow Followed
+
+1. **MASTER_LOGIC.mdc §13.4.1** - Documented Assignment Confidence definition and calculation
+2. **_domain/constants.ts** - Added `AssignmentConfidence` type and `calculateAssignmentConfidence()` helper
+3. **Consumer files** - Updated to import from `@/_domain`
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `_domain/MASTER_LOGIC.mdc` | Added §13.4.1 documenting Assignment Confidence |
+| `_domain/constants.ts` | Added `AssignmentConfidence` type and helper function |
+| `types/assignment.ts` | Renamed `conflictRisk` to `confidence`, imports type from `@/_domain` |
+| `hooks/useAssignmentEngine.ts` | Updated to use `calculateAssignmentConfidence()` |
+| `services/assignmentService.ts` | Updated interface and all assignments with inverted logic |
+| `services/assignmentServiceHelpers.ts` | Updated `confidence` field |
+| `components/AssignmentPreviewDialog.tsx` | Updated column header, tooltip, and badge labels |
+| `components/VirtualizedAccountTable.tsx` | Updated badge rendering and interface |
+| `pages/AssignmentEngine.tsx` | Updated priority mapping |
+
+### Key Distinction Preserved
+
+- **CRE Risk** (customer churn probability based on `cre_count`) - unchanged
+- **Assignment Confidence** (assignment quality based on warning severity) - renamed
+
+---
+
+## [2025-12-22] - Critical Fix: Rep Metrics Data Discrepancies
+
+**Summary:** Fixed multiple instances where rep account filtering was excluding unchanged accounts, causing metrics to differ between views.
+
+### Root Cause
+
+The pattern `accounts.filter(acc => acc.new_owner_id === repId)` was used in several places, but this **only** returns accounts where an assignment change was made. It **excludes** accounts where the owner remained unchanged (where `new_owner_id IS NULL` but `owner_id` is valid).
+
+The correct pattern must include both cases:
+```typescript
+accounts.filter(acc => 
+  acc.new_owner_id === repId || 
+  (acc.owner_id === repId && !acc.new_owner_id)
+)
+```
+
+### Files Fixed
+
+| File | Issue | Fix |
+|------|-------|-----|
+| `ManagerHierarchyView.tsx` (line 448) | `getRepAccounts()` only checked `new_owner_id` | Added fallback to check `owner_id` when `new_owner_id` is null |
+| `ManagerHierarchyView.tsx` (line 673) | `getPendingProposalsForRep()` only checked `new_owner_id` | Same fix applied |
+| `ManagerHierarchyView.tsx` (line 239) | Opportunities query only fetched `new_owner_id` matches | Added second query for unchanged opportunities |
+| `RevOpsFinalView.tsx` (line 93-99) | Account query explicitly excluded `new_owner_id IS NULL` | Removed exclusion filter, added `owner_id` to selection |
+| `RevOpsFinalView.tsx` (line 129-134) | Account filtering only used `new_owner_id` | Added `getEffectiveOwnerId()` helper that uses `new_owner_id || owner_id` |
+| `ManagerReassignmentPanel.tsx` (line 63-68) | Account query only fetched `new_owner_id` matches | Added second query for unchanged accounts, combined and deduped |
+
+### Impact
+
+These fixes ensure that:
+1. **Manager Hierarchy View** shows correct totals including unchanged accounts
+2. **RevOps Final View** includes all accounts in the final state
+3. **Reassignment Panel** allows managers to reassign unchanged accounts
+4. **Metrics match** between the summary row and the detail dialog
+
+---
+
+## [2025-12-22] - Fix: PriorityBadge Now Shows "P3: Geo+Cont" Format
+
+**Summary:** Fixed PriorityBadge to display both the priority position number (from configuration) AND the short label in format "P3: Geo+Cont".
+
+### Problem
+
+1. `VirtualizedAccountTable.tsx` was extracting only the prefix from reason strings, passing just "P3" to the badge
+2. `PriorityBadge` component was showing only the `shortLabel` (e.g., "Continuity") without the position number
+
+### Solution
+
+1. **VirtualizedAccountTable.tsx**: Pass full `reasonData.reason` string so keywords can be matched
+2. **PriorityBadge.tsx**: Extract position prefix (P3, RO, etc.) from the `ruleApplied` string and combine with the `shortLabel` from the registry
+
+The position number comes from the actual assignment engine which uses `formatPriorityLabel()` based on the priority configuration. This ensures the display reflects the actual configured priority order.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `components/VirtualizedAccountTable.tsx` | Pass full `reason` string to `PriorityBadge` instead of just the prefix |
+| `components/ui/PriorityBadge.tsx` | Extract position prefix from ruleApplied and display as "P3: Geo+Cont" format |
+
+### Display Format
+
+| Before | After |
+|--------|-------|
+| Continuity | P3: Continuity |
+| Geo+Cont | P4: Geo+Cont |
+| P3 | P3: Continuity + Geography (fallback) |
+
+---
+
+## [2025-12-22] - Refactor: Remove Dead Code - SalesRepDetailModal
+
+**Summary:** Deleted unused `SalesRepDetailModal.tsx` component that was never imported anywhere in the codebase.
+
+### Context
+
+During a deep audit of data discrepancy issues reported by beta users, discovered this component was dead code:
+- **Never imported** anywhere in the codebase
+- Superseded by `SalesRepDetailDialog.tsx` in `data-tables/` folder
+- Had different title ("Sales Rep Analysis") vs the active component ("Detailed View")
+- Contained outdated calculation logic that could cause confusion
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `components/SalesRepDetailModal.tsx` | **DELETED** - 1,106 lines of dead code removed |
+
+### Verification
+
+- Grep confirmed no imports of `SalesRepDetailModal` anywhere
+- TypeScript compilation passes
+- Linter shows no new errors
+
+---
+
+## [2025-12-22] - Docs: Terminology Fix - Book Balancing, Not Territory Balancing
+
+**Summary:** Fixed terminology across the codebase to reflect that Book Builder is a **book balancing** tool, not a territory balancing tool.
+
+### Why This Matters
+
+- **Book balancing** = distributing accounts fairly across reps based on ARR, workload, continuity, team tier
+- **Territory balancing** = would imply geography is the PRIMARY driver (it's not - it's just one factor)
+
+Geography is ONE of many factors, not the core purpose of the tool.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `.cursor/rules/CURSOR.mdc` | Updated project overview description |
+| `book-ops-workbench/README.md` | Updated project description |
+
+### Future Refactor (Not Done)
+
+Component/page names still contain "Territory" and could be renamed:
+- `TerritoryBalancingDashboard.tsx` → `BalancingDashboard.tsx`
+- `TerritoryBalancingTabbedView.tsx` → `BalancingTabbedView.tsx`
+
+These are lower priority as they're internal names that don't affect user experience.
+
+---
+
+## [2025-12-22] - Refactor: Remove Unused AI Balance Optimizer Edge Function
+
+**Summary:** Deleted the `ai-balance-optimizer` Supabase edge function that was never integrated into the frontend.
+
+### What Was Removed
+
+`supabase/functions/ai-balance-optimizer/index.ts` - A 419-line edge function that used Gemini AI (via Lovable gateway) to suggest account moves for book balancing. It had 3 modes:
+1. **Default** - Multi-dimensional optimization suggestions
+2. **Rebalance** - Regional imbalance fixing
+3. **Final Arbiter** - AI review of LP solver proposals
+
+### Why Removed
+
+- No frontend code ever invoked this function (`functions.invoke('ai-balance-optimizer')` not found anywhere)
+- The primary assignment logic uses `simplifiedAssignmentEngine.ts` and `pureOptimizationEngine.ts` (HiGHS LP solver)
+- This was dead code / an abandoned experiment
+
+### Other Potentially Unused Edge Functions (Not Removed Yet)
+
+These functions also appear to have no frontend invocations:
+- `optimize-balancing`
+- `parse-ai-balancer-config`
+- `manager-ai-assistant`
+- `lp-solver`
+- `calculate-balance-thresholds`
+- `generate-assignment-rule`
+- `process-large-import`
+- `sync-assignments`
+- `serve-app`
+
+Consider removing these in a future cleanup pass.
+
+---
+
+## [2025-12-22] - SSOT: Centralized Priority Badge Component
+
+**Summary:** Fixed incorrect assignment reason badges in the preview dialog by creating a centralized `PriorityBadge` component that matches on priority names instead of hardcoded P# positions.
+
+### Problem
+
+The `getRuleAppliedBadge()` function in `AssignmentPreviewDialog.tsx` used hardcoded P# position matching (e.g., `rule.startsWith('P1:')` for Continuity+Geo), but priority positions vary by mode:
+
+| Priority | ENT Position | COMMERCIAL Position |
+|----------|-------------|---------------------|
+| `geo_and_continuity` | P2 | P4 |
+| `stability_accounts` | P1 | P2 |
+
+This caused incorrect badges (e.g., P4 assignments showed "Balance" instead of "Geo+Cont").
+
+### Solution
+
+1. Added `displayConfig` to `PriorityDefinition` interface in `priorityRegistry.ts` (SSOT)
+2. Created centralized `PriorityBadge` component that matches on priority NAME keywords
+3. Updated consumers to use the new component
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `config/priorityRegistry.ts` | Added `PriorityDisplayConfig` interface and `displayConfig` to each `PRIORITY_REGISTRY` entry with icon, color, label, and match keywords |
+| `components/ui/PriorityBadge.tsx` | New centralized component that looks up display config by keyword matching |
+| `components/AssignmentPreviewDialog.tsx` | Removed `getRuleAppliedBadge()` function, now uses `PriorityBadge` |
+| `components/VirtualizedAccountTable.tsx` | Now uses `PriorityBadge` instead of plain text |
+
+### Priority Display Configuration
+
+| Priority ID | Label | Icon | Color |
+|-------------|-------|------|-------|
+| `manual_holdover` | Protected | Shield | amber |
+| `sales_tools_bucket` | Sales Tools | TrendingUp | orange |
+| `stability_accounts` | Stable | Shield | amber |
+| `team_alignment` | Team Fit | Users | indigo |
+| `geo_and_continuity` | Geo+Cont | Users | green |
+| `continuity` | Continuity | Users | purple |
+| `geography` | Geography | Globe | blue |
+| `arr_balance` | Balance | TrendingUp | cyan |
+
+---
+
+## [2025-12-22] - SSOT: Fix Geo Alignment Scoring Normalization
+
+**Summary:** Fixed geo alignment scoring bug where rep regions with non-standard formatting (e.g., "Northeast" vs "North East") failed to match the REGION_HIERARCHY, causing scores to fall back to UNKNOWN (0.50) instead of properly calculating alignment.
+
+### Problem
+
+- `REGION_HIERARCHY.AMER` contains: `['North East', 'South East', 'Central', 'West']`
+- Database rep regions: `'Northeast'`, `'Southeast'` (no space)
+- Result: `getParentRegion('Northeast')` returned `null`, causing UNKNOWN score (0.50)
+
+### Solution
+
+Added normalization to both `calculateGeoMatchScore()` and `getParentRegion()` using the existing `normalizeRegion()` function which maps:
+- `'northeast'` → `'North East'`
+- `'southeast'` → `'South East'`
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `_domain/geography.ts` | Added `normalizeRegion()` import, updated `calculateGeoMatchScore()` and `getParentRegion()` to normalize inputs before comparison |
+| `_domain/MASTER_LOGIC.mdc` | Documented input normalization behavior in geo match scoring section |
+
+### Impact
+
+- Rep regions like `"Northeast"` now correctly match `"North East"` → EXACT_MATCH (1.0)
+- `getParentRegion("Northeast")` now returns `"AMER"` instead of `null`
+- Geo alignment percentages should now reflect actual geographic alignment
+
+---
+
+## [2025-12-22] - Docs: Analytics Pages Overview
+
+**Summary:** Added documentation clarifying the difference between Data Overview and Balancing Overview pages.
+
+### What Changed
+
+Added new section `§13.8 Analytics Pages Overview` to `MASTER_LOGIC.mdc` explaining:
+
+| Page | Purpose |
+|------|---------|
+| **Data Overview** | Understand the book **as it was uploaded** (original import data) |
+| **Balancing Overview** | Review **new/proposed assignments** (after running optimization) |
+
+### Why This Matters
+- Users were confused about which page shows what data
+- Data Overview = current state from Salesforce import
+- Balancing Overview = proposed state after running assignment engine
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `_domain/MASTER_LOGIC.mdc` | Added §13.8 with page purpose table and detailed explanations |
+
+---
+
+## [2025-12-22] - SSOT: Stability Account Reasoning Enhancement
+
+**Summary:** Clarified stability rationales by renaming "Stability Lock" to "Stable Account" for true stability cases, and separating "Backfill Migration" for accounts that must move.
+
+### What Changed
+
+**Before:**
+```
+P2: Stability Lock → John Smith (CRE at-risk - relationship stability)
+P2: Stability Lock → John Smith (Renewal in 45 days)
+P2: Stability Lock → John Smith (backfill migration from departing rep)
+```
+
+**After:**
+```
+P2: Stable Account → John Smith (CRE at-risk)
+P2: Stable Account → John Smith (Renewal in 45 days)
+P2: Backfill Migration → John Smith (from departing owner)
+```
+
+### Why This Matters
+- **Clarity:** "Stable Account" clearly indicates the account is staying with its owner
+- **Distinction:** "Backfill Migration" is semantically different - accounts MUST move because owner is leaving
+- **No confusion with manual locks:** Manual locks (P0) remain distinct from automatic stability (P2)
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `_domain/MASTER_LOGIC.mdc` | Updated §11.9 and §11.9.1 with new rationale formats |
+| `services/optimization/postprocessing/rationaleGenerator.ts` | Updated `generateLockRationale()` with new format |
+
+---
+
+## [2025-12-22] - SSOT: Simplify Continuity Metric Formula
+
+**Summary:** Simplified the continuity metric from a filtered formula to a simple ratio: parent accounts with same owner / total parent accounts.
+
+### What Changed
+
+**Before (v1.0.x):**
+```
+continuity = eligible_parent_accounts_with_same_owner / eligible_parent_accounts
+where eligible = owner_id IN valid_rep_ids (non-backfill-source reps)
+```
+
+**After (v1.1.0):**
+```
+continuity = parent_accounts_with_same_owner / total_parent_accounts
+```
+
+### Breaking Changes
+
+- **Telemetry:** The `continuity_rate` in `optimization_runs` table is now calculated differently. Historical comparisons with pre-v1.1.0 data are invalid.
+- **ContinuityMetrics interface:** `eligibleCount` renamed to `totalCount`, `excludedCount` removed.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `_domain/MASTER_LOGIC.mdc` | Updated Section 13.7 with simplified formula |
+| `_domain/constants.ts` | Bumped `OPTIMIZATION_MODEL_VERSION` to 1.1.0 |
+| `types/analytics.ts` | Updated `ContinuityMetrics` interface |
+| `services/buildDataService.ts` | Simplified `calculateContinuityMetrics()` |
+| `services/optimization/postprocessing/metricsCalculator.ts` | Simplified continuity calculation |
+| `components/balancing/BalancingSuccessMetrics.tsx` | Updated UI to show Retained/Changed/Total |
+
+**Note:** The LP solver continuity SCORING (`continuityScore.ts`) was NOT changed. Only the analytics display metric was simplified.
+
+---
+
+## [2025-12-22] - Feature: Locked Account Import with Lock Reason Notes
+
+**Feature Summary:** Users can now pre-lock accounts via CSV import and provide optional lock reasons that are visible throughout the build.
+
+### Changes
+
+**Database:**
+- Added `lock_reason` VARCHAR(500) column to `accounts` table
+- Updated `toggle_account_lock()` RPC to accept and clear `p_lock_reason` parameter
+
+**CSV Import:**
+- Added `locked` column alias mapping for `exclude_from_reassignment` field
+- Added `lock_reason` column alias mapping for lock notes
+- Added both fields to DataImport.tsx field mappings UI
+- Fixed boolean parsing to explicitly handle `exclude_from_reassignment`
+
+**UI:**
+- Created `LockAccountDialog` component - shows when locking an account, allows optional reason (max 500 chars)
+- Updated lock icon tooltips in VirtualizedAccountTable and AccountsTable to show lock reason
+- Unlocking remains immediate (no dialog), locking now prompts for optional reason
+
+**SSOT Documentation:**
+- Updated MASTER_LOGIC.mdc §6.6 (Account Flags) with `lock_reason` field
+- Updated MASTER_LOGIC.mdc §10.5.1 (P0: Manual Holdover) with lock reason behavior
+
+**Files Changed:**
+- `supabase/migrations/20251222071938_add_lock_reason.sql` (new)
+- `src/integrations/supabase/types.ts`
+- `src/utils/autoMappingUtils.ts`
+- `src/pages/DataImport.tsx`
+- `src/utils/importUtils.ts`
+- `src/components/LockAccountDialog.tsx` (new)
+- `src/components/VirtualizedAccountTable.tsx`
+- `src/components/data-tables/AccountsTable.tsx`
+- `src/_domain/MASTER_LOGIC.mdc`
+
+---
+
 ## [2025-12-18 17:42 PST] - DEPLOYED v1.4.1 to Production
 
 **Git:** `d141cfd` pushed to `origin/master`

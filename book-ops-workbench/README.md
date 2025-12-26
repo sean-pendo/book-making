@@ -1,6 +1,6 @@
 # Book Builder - Territory Assignment Platform
 
-A comprehensive territory balancing and assignment tool for Sales Operations (RevOps). Book Builder enables teams to import sales data, configure assignment rules, and generate fair territory assignments based on ARR, geography, and other business metrics.
+A comprehensive book balancing and account assignment tool for Sales Operations (RevOps). Book Builder enables teams to import sales data, configure assignment rules, and generate fair account assignments based on ARR, workload, continuity, team tier, and geography.
 
 ## Project Status
 

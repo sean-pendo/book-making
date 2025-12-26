@@ -187,8 +187,6 @@ async function checkAccountFieldPresence(buildId: string): Promise<Set<string>> 
  * Check which sales_reps fields have actual data
  */
 async function checkSalesRepFieldPresence(buildId: string): Promise<Set<string>> {
-  // DEPRECATED: is_renewal_specialist, sub_region - removed in v1.3.9
-  // DEPRECATED: team - removed in v1.4.1, use team_tier instead
   const fieldsToCheck = [
     'region',
     'is_strategic_rep',

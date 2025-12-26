@@ -51,11 +51,9 @@ export function AppSidebar() {
       <SidebarContent className="bg-gradient-subtle">
         <SidebarGroup>
           <SidebarGroupContent className="px-2">
-            {/* Collapse Toggle - aligned with nav dots */}
-            <div className="flex items-center h-16 px-2">
-              <div className="flex items-center justify-center w-[6px]">
-                <SidebarTrigger className="hover-scale -ml-[2px]" />
-              </div>
+            {/* Collapse Toggle - aligned with nav dots when expanded, centered when collapsed */}
+            <div className={`flex items-center h-16 ${isCollapsed ? 'justify-center -mx-2' : ''}`}>
+              <SidebarTrigger className="hover-scale" />
             </div>
             
             {/* Clean Vertical Stepper */}
@@ -120,16 +118,17 @@ export function AppSidebar() {
                           to={item.url}
                           end
                           className={`
-                            flex items-center gap-3 px-2 py-2.5 rounded-lg transition-all duration-200 group relative
+                            flex items-center py-2.5 rounded-lg transition-all duration-200 group relative
+                            ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-2'}
                             ${isItemActive 
-                              ? 'bg-primary/10 text-primary' 
+                              ? isCollapsed ? 'text-primary' : 'bg-primary/10 text-primary' 
                               : isCompleted
                                 ? 'text-primary/70 hover:text-primary hover:bg-muted/50'
                                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
                             }
                           `}
                         >
-                          {/* Dot indicator - centered at 11px (8px padding + 3px half of 6px dot) */}
+                          {/* Dot indicator - centered when collapsed */}
                           <div className={`
                             relative z-10 w-[6px] h-[6px] rounded-full shrink-0 transition-all duration-200
                             ${isItemActive 
@@ -171,7 +170,7 @@ export function AppSidebar() {
         )}
 
         {/* User info and Settings link */}
-        <div className="mt-auto p-3 border-t border-sidebar-border/50 bg-gradient-subtle">
+        <div className={`mt-auto border-t border-sidebar-border/50 bg-gradient-subtle ${isCollapsed ? 'py-3 px-0' : 'p-3'}`}>
           {!isCollapsed && effectiveProfile && (
             <div className="mb-3 p-3 card-glass rounded-lg border bg-card text-card-foreground shadow-sm">
               <div className="text-xs space-y-1">
@@ -197,9 +196,11 @@ export function AppSidebar() {
           <NavLink
             to="/settings"
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 w-full ${
+              `flex items-center py-2 rounded-lg transition-all duration-200 w-full ${
+                isCollapsed ? 'justify-center px-0' : 'gap-3 px-3'
+              } ${
                 isActive
-                  ? 'bg-primary/10 text-primary'
+                  ? isCollapsed ? 'text-primary' : 'bg-primary/10 text-primary'
                   : 'hover:bg-sidebar-accent/70 text-sidebar-foreground'
               }`
             }

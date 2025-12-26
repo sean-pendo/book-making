@@ -48,7 +48,6 @@ interface AccountWithHierarchy {
   calculated_atr: number;
   hierarchy_bookings_arr_converted: number;
   cre_count: number;
-  // DEPRECATED: industry, account_type - removed in v1.3.9
   geo: string | null;
   sales_territory: string | null;
   expansion_tier: string | null;
@@ -203,7 +202,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
           team: repInfo.team,
           flm: repInfo.flm,
           slm: repInfo.slm,
-          // DEPRECATED: sub_region - removed in v1.3.9
           team_tier: repInfo.team_tier,
           is_active: true,
           include_in_assignments: true,
@@ -329,7 +327,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
       ],
       placeholder: 'All types'
     },
-    // DEPRECATED: industry filter - removed in v1.3.9
     {
       key: 'geo',
       label: 'Region',
@@ -523,7 +520,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
               const customerStatus = getAccountCustomerStatus(account, accountsByParent);
               if (customerStatus !== filters.account_type) return false;
             }
-            // DEPRECATED: industry filter - removed in v1.3.9
             if (filters.geo && account.geo !== filters.geo) return false;
             if (filters.tier) {
               const tier = account.expansion_tier || account.initial_sale_tier;
@@ -584,7 +580,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
         return {
           accounts: accountsWithRationale,
           summary,
-          // DEPRECATED: industries - removed in v1.3.9
           geos: [...new Set(accounts.map(a => a.geo).filter(Boolean))],
           hierarchyOpportunities: opportunities || [],
           accountsByParent: accountsByParent
@@ -923,7 +918,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
               <TableFilters
                 title="Account Filters"
                 filters={filterConfigs.map(config => {
-                  // DEPRECATED: industry filter - removed in v1.3.9
                   if (config.key === 'geo') {
                     return {
                       ...config,
@@ -1020,7 +1014,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
                                   })()}
                                 </div>
                               </TableCell>
-                              {/* DEPRECATED: industry column - removed in v1.3.9 */}
                               <TableCell className="text-sm">{account.geo || '-'}</TableCell>
                               <TableCell>
                                 {getTierBadge(account.expansion_tier || account.initial_sale_tier)}
@@ -1075,15 +1068,49 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
                               <TableCell>
                                 {(() => {
                                   // Calculate CRE risk from opportunities - ALIGN WITH SalesRepsTable  
-                                  const accountCRECount = repDetail?.hierarchyOpportunities?.filter(o => 
+                                  const accountCREOpps = repDetail?.hierarchyOpportunities?.filter(o => 
                                     o.sfdc_account_id === account.sfdc_account_id && 
                                     o.cre_status && o.cre_status.trim() !== ''
-                                  ).length || 0;
+                                  ) || [];
+                                  const accountCRECount = accountCREOpps.length;
+                                  
+                                  // Group by CRE status for tooltip breakdown
+                                  const statusCounts = accountCREOpps.reduce<Record<string, number>>((acc, opp) => {
+                                    const status = opp.cre_status || 'Unknown';
+                                    acc[status] = (acc[status] || 0) + 1;
+                                    return acc;
+                                  }, {});
                                   
                                   if (accountCRECount === 0) {
-                                    return <Badge variant="secondary" className="text-xs">No Risk</Badge>;
+                                    return (
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Badge variant="secondary" className="text-xs cursor-help">No Risk</Badge>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p className="text-xs">No renewal risk events on this account.</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    );
                                   } else {
-                                    return <Badge variant="destructive" className="text-xs">{accountCRECount} CRE</Badge>;
+                                    return (
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Badge variant="destructive" className="text-xs cursor-help">{accountCRECount} CRE</Badge>
+                                        </TooltipTrigger>
+                                        <TooltipContent className="max-w-[250px]">
+                                          <p className="font-semibold mb-1">Customer Renewal at Risk</p>
+                                          <div className="text-xs space-y-0.5">
+                                            {Object.entries(statusCounts).map(([status, count]) => (
+                                              <p key={status} className="flex justify-between gap-3">
+                                                <span className="text-muted-foreground">{status}:</span>
+                                                <span className="font-medium">{count}</span>
+                                              </p>
+                                            ))}
+                                          </div>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    );
                                   }
                                 })()}
                               </TableCell>
@@ -1122,7 +1149,6 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
                                     );
                                   })()}
                                  </TableCell>
-                                {/* DEPRECATED: industry column - removed in v1.3.9 */}
                                 <TableCell className="text-sm">{child.geo || '-'}</TableCell>
                                 <TableCell>
                                   {getTierBadge(child.expansion_tier || child.initial_sale_tier)}
@@ -1177,15 +1203,49 @@ export const SalesRepDetailDialog = ({ open, onOpenChange, rep, buildId, onDataR
                                  <TableCell>
                                   {(() => {
                                     // Calculate CRE risk from opportunities for this child account - ALIGN WITH SalesRepsTable  
-                                    const childCRECount = repDetail?.hierarchyOpportunities?.filter(o => 
+                                    const childCREOpps = repDetail?.hierarchyOpportunities?.filter(o => 
                                       o.sfdc_account_id === child.sfdc_account_id && 
                                       o.cre_status && o.cre_status.trim() !== ''
-                                    ).length || 0;
+                                    ) || [];
+                                    const childCRECount = childCREOpps.length;
+                                    
+                                    // Group by CRE status for tooltip breakdown
+                                    const statusCounts = childCREOpps.reduce<Record<string, number>>((acc, opp) => {
+                                      const status = opp.cre_status || 'Unknown';
+                                      acc[status] = (acc[status] || 0) + 1;
+                                      return acc;
+                                    }, {});
                                     
                                     if (childCRECount === 0) {
-                                      return <Badge variant="secondary" className="text-xs">No Risk</Badge>;
+                                      return (
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Badge variant="secondary" className="text-xs cursor-help">No Risk</Badge>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p className="text-xs">No renewal risk events on this account.</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      );
                                     } else {
-                                      return <Badge variant="destructive" className="text-xs">{childCRECount} CRE</Badge>;
+                                      return (
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Badge variant="destructive" className="text-xs cursor-help">{childCRECount} CRE</Badge>
+                                          </TooltipTrigger>
+                                          <TooltipContent className="max-w-[250px]">
+                                            <p className="font-semibold mb-1">Customer Renewal at Risk</p>
+                                            <div className="text-xs space-y-0.5">
+                                              {Object.entries(statusCounts).map(([status, count]) => (
+                                                <p key={status} className="flex justify-between gap-3">
+                                                  <span className="text-muted-foreground">{status}:</span>
+                                                  <span className="font-medium">{count}</span>
+                                                </p>
+                                              ))}
+                                            </div>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      );
                                     }
                                   })()}
                                  </TableCell>

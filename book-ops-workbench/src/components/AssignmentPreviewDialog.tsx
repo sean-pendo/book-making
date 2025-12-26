@@ -1,15 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { CheckCircle, AlertTriangle, TrendingUp, Users, Loader2, Sparkles, Shield, Globe, Info } from 'lucide-react';
+import { CheckCircle, AlertTriangle, Users, Loader2, Sparkles, Info, ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { RebalancingSuggestionsDialog } from './RebalancingSuggestionsDialog';
+import { PriorityBadge } from '@/components/ui/PriorityBadge';
 import type { AssignmentResult } from '@/services/assignmentService';
+
+// Pagination constants - rendering 100K+ rows would crash the browser
+const PROPOSALS_PER_PAGE = 100;
+const CONFLICTS_PER_PAGE = 50;
 
 interface AssignmentPreviewDialogProps {
   open: boolean;
@@ -32,7 +37,72 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
 }) => {
   const [showRebalanceSuggestions, setShowRebalanceSuggestions] = useState(false);
   
+  // Pagination state - critical for large datasets (100K+ proposals)
+  const [proposalsPage, setProposalsPage] = useState(0);
+  const [conflictsPage, setConflictsPage] = useState(0);
+  
+  // Sorting state for proposals table
+  type SortField = 'accountName' | 'currentOwnerName' | 'proposedOwnerName' | 'confidence';
+  const [sortField, setSortField] = useState<SortField>('accountName');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+  
+  const getSortIcon = (field: SortField) => {
+    if (sortField !== field) return null;
+    return sortDirection === 'asc' ? 
+      <ChevronUp className="h-4 w-4" /> : 
+      <ChevronDown className="h-4 w-4" />;
+  };
+  
   if (!result) return null;
+  
+  // Sort proposals - memoized to avoid re-sorting on every render
+  const sortedProposals = useMemo(() => {
+    return [...result.proposals].sort((a, b) => {
+      let comparison = 0;
+      
+      switch (sortField) {
+        case 'accountName':
+          comparison = (a.accountName || '').localeCompare(b.accountName || '');
+          break;
+        case 'currentOwnerName':
+          comparison = (a.currentOwnerName || '').localeCompare(b.currentOwnerName || '');
+          break;
+        case 'proposedOwnerName':
+          comparison = (a.proposedOwnerName || '').localeCompare(b.proposedOwnerName || '');
+          break;
+        case 'confidence':
+          // Sort order: HIGH > MEDIUM > LOW
+          const confidenceOrder: Record<string, number> = { 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1 };
+          comparison = (confidenceOrder[b.confidence || ''] || 0) - (confidenceOrder[a.confidence || ''] || 0);
+          break;
+      }
+      
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [result.proposals, sortField, sortDirection]);
+  
+  // Paginated proposals - only render PROPOSALS_PER_PAGE at a time
+  const totalProposalsPages = Math.ceil(sortedProposals.length / PROPOSALS_PER_PAGE);
+  const paginatedProposals = sortedProposals.slice(
+    proposalsPage * PROPOSALS_PER_PAGE,
+    (proposalsPage + 1) * PROPOSALS_PER_PAGE
+  );
+  
+  // Paginated conflicts
+  const totalConflictsPages = Math.ceil(result.conflicts.length / CONFLICTS_PER_PAGE);
+  const paginatedConflicts = result.conflicts.slice(
+    conflictsPage * CONFLICTS_PER_PAGE,
+    (conflictsPage + 1) * CONFLICTS_PER_PAGE
+  );
 
   const hasRebalanceSuggestions = result.rebalancingSuggestions && result.rebalancingSuggestions.length > 0;
   const hasRebalanceWarnings = result.rebalanceWarnings && result.rebalanceWarnings.length > 0;
@@ -43,29 +113,30 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
     setShowRebalanceSuggestions(false);
   };
 
-  const getConflictRiskBadge = (risk: 'LOW' | 'MEDIUM' | 'HIGH') => {
-    const riskInfo = {
+  /** Get badge for assignment confidence level @see MASTER_LOGIC.mdc §13.4.1 */
+  const getConfidenceBadge = (confidence: 'LOW' | 'MEDIUM' | 'HIGH') => {
+    const confidenceInfo = {
       HIGH: {
-        label: 'High Risk',
+        label: 'High Confidence',
         className: '',
-        variant: 'destructive' as const,
-        description: 'Reassigning an existing customer account. This may disrupt established relationships.'
+        variant: 'outline' as const,
+        description: 'Clean assignment with no concerns. Safe to approve.'
       },
       MEDIUM: {
-        label: 'Medium Risk',
-        className: 'bg-orange-500',
+        label: 'Medium Confidence',
+        className: 'bg-orange-500 text-white border-orange-500',
         variant: 'default' as const,
-        description: 'High-value account (ARR > $100K) or has a risk flag. Review before approving.'
+        description: 'Some concerns detected (geo mismatch, tier concentration). Review before approving.'
       },
       LOW: {
-        label: 'Low Risk',
-        className: 'bg-green-500',
-        variant: 'default' as const,
-        description: 'Safe to reassign. Typically a prospect or low-value account with no relationship disruption.'
+        label: 'Low Confidence',
+        className: '',
+        variant: 'destructive' as const,
+        description: 'Significant issues (capacity exceeded, changing customer owner). May disrupt established relationships.'
       }
     };
     
-    const info = riskInfo[risk];
+    const info = confidenceInfo[confidence];
     
     return (
       <Tooltip>
@@ -82,48 +153,6 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
         </TooltipContent>
       </Tooltip>
     );
-  };
-
-  const getRuleAppliedBadge = (rule: string) => {
-    // Sales Tools Bucket - distinct from protected
-    if (rule.includes('Sales Tools')) {
-      return <Badge variant="outline" className="border-orange-500 text-orange-600"><TrendingUp className="w-3 h-3 mr-1" />Sales Tools</Badge>;
-    }
-    // P0: Protected accounts (Strategic, Manual Holdover)
-    if (rule.startsWith('P0:') || rule.includes('Manual') || rule.includes('Strategic')) {
-      return <Badge variant="outline" className="border-amber-500 text-amber-700"><Shield className="w-3 h-3 mr-1" />Protected</Badge>;
-    }
-    // P1: Continuity + Geography
-    if (rule.startsWith('P1:') || rule.includes('Continuity + Geo')) {
-      return <Badge variant="outline" className="border-green-500 text-green-700"><Users className="w-3 h-3 mr-1" />Continuity+Geo</Badge>;
-    }
-    // P2: Geography Match
-    if (rule.startsWith('P2:') || rule.includes('Geographic')) {
-      return <Badge variant="outline" className="border-blue-500 text-blue-700"><Globe className="w-3 h-3 mr-1" />Geography</Badge>;
-    }
-    // P3: Continuity (any geo)
-    if (rule.startsWith('P3:') || (rule.includes('Continuity') && !rule.includes('+'))) {
-      return <Badge variant="outline" className="border-purple-500 text-purple-700"><Users className="w-3 h-3 mr-1" />Continuity</Badge>;
-    }
-    // P4/RO: Load Balance / Residual
-    if (rule.startsWith('P4:') || rule.startsWith('RO:') || rule.includes('Residual') || rule.includes('Best Available')) {
-      return <Badge variant="outline" className="border-cyan-500 text-cyan-700"><TrendingUp className="w-3 h-3 mr-1" />Balance</Badge>;
-    }
-    // Legacy exact matches for backward compatibility
-    if (rule === 'GEO_FIRST') {
-      return <Badge variant="outline"><Globe className="w-3 h-3 mr-1" />Geo-First</Badge>;
-    }
-    if (rule === 'CONTINUITY') {
-      return <Badge variant="outline"><Users className="w-3 h-3 mr-1" />Continuity</Badge>;
-    }
-    if (rule === 'LOAD_BALANCE') {
-      return <Badge variant="outline"><TrendingUp className="w-3 h-3 mr-1" />Load Balance</Badge>;
-    }
-    if (rule === 'CAPACITY_OVERFLOW' || rule === 'MIN_THRESHOLDS_OVERFLOW') {
-      return <Badge variant="destructive"><AlertTriangle className="w-3 h-3 mr-1" />Overflow</Badge>;
-    }
-    // Default fallback
-    return <Badge variant="outline">{rule}</Badge>;
   };
 
   return (
@@ -216,22 +245,50 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Account</TableHead>
-                      <TableHead>Current Owner</TableHead>
-                      <TableHead>Proposed Owner</TableHead>
+                      <TableHead 
+                        className="cursor-pointer hover:bg-muted/50 select-none"
+                        onClick={() => handleSort('accountName')}
+                      >
+                        <div className="flex items-center gap-1">
+                          Account
+                          {getSortIcon('accountName')}
+                        </div>
+                      </TableHead>
+                      <TableHead 
+                        className="cursor-pointer hover:bg-muted/50 select-none"
+                        onClick={() => handleSort('currentOwnerName')}
+                      >
+                        <div className="flex items-center gap-1">
+                          Current Owner
+                          {getSortIcon('currentOwnerName')}
+                        </div>
+                      </TableHead>
+                      <TableHead 
+                        className="cursor-pointer hover:bg-muted/50 select-none"
+                        onClick={() => handleSort('proposedOwnerName')}
+                      >
+                        <div className="flex items-center gap-1">
+                          Proposed Owner
+                          {getSortIcon('proposedOwnerName')}
+                        </div>
+                      </TableHead>
                       <TableHead>Rule Applied</TableHead>
-                      <TableHead>
+                      <TableHead 
+                        className="cursor-pointer hover:bg-muted/50 select-none"
+                        onClick={() => handleSort('confidence')}
+                      >
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <div className="flex items-center gap-1 cursor-help">
-                              Risk
+                              Confidence
+                              {getSortIcon('confidence')}
                               <Info className="h-3 w-3 text-muted-foreground" />
                             </div>
                           </TooltipTrigger>
                           <TooltipContent className="max-w-[280px]">
-                            <p className="font-semibold mb-1">Assignment Risk</p>
+                            <p className="font-semibold mb-1">Assignment Confidence</p>
                             <p className="text-xs text-muted-foreground">
-                              How risky is this ownership change? Based on account value and customer status.
+                              How confident is the system in this assignment? Based on warning severity.
                             </p>
                             <p className="text-xs text-muted-foreground mt-1 italic">
                               Not the same as CRE Risk (customer churn probability).
@@ -243,7 +300,7 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {result.proposals.map((proposal) => (
+                    {paginatedProposals.map((proposal) => (
                       <TableRow key={proposal.accountId}>
                         <TableCell>
                           <div>
@@ -262,10 +319,10 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                           <div className="font-medium">{proposal.proposedOwnerName}</div>
                         </TableCell>
                         <TableCell>
-                          {getRuleAppliedBadge(proposal.ruleApplied)}
+                          <PriorityBadge ruleApplied={proposal.ruleApplied} />
                         </TableCell>
                         <TableCell>
-                          {getConflictRiskBadge(proposal.conflictRisk)}
+                          {getConfidenceBadge(proposal.confidence)}
                         </TableCell>
                         <TableCell>
                           {(proposal as any).warningDetails ? (
@@ -289,6 +346,52 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                     ))}
                   </TableBody>
                 </Table>
+                
+                {/* Pagination controls for proposals */}
+                {totalProposalsPages > 1 && (
+                  <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                    <div className="text-sm text-muted-foreground">
+                      Showing {proposalsPage * PROPOSALS_PER_PAGE + 1} - {Math.min((proposalsPage + 1) * PROPOSALS_PER_PAGE, sortedProposals.length)} of {sortedProposals.length.toLocaleString()} proposals
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setProposalsPage(0)}
+                        disabled={proposalsPage === 0}
+                      >
+                        First
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setProposalsPage(p => Math.max(0, p - 1))}
+                        disabled={proposalsPage === 0}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      <span className="text-sm px-2">
+                        Page {proposalsPage + 1} of {totalProposalsPages.toLocaleString()}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setProposalsPage(p => Math.min(totalProposalsPages - 1, p + 1))}
+                        disabled={proposalsPage >= totalProposalsPages - 1}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setProposalsPage(totalProposalsPages - 1)}
+                        disabled={proposalsPage >= totalProposalsPages - 1}
+                      >
+                        Last
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -298,11 +401,12 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
               <CardHeader>
                 <CardTitle>Assignment Conflicts</CardTitle>
                 <CardDescription>
-                  High-risk assignments that require manual review, including cutoff violations
+                  Low-confidence assignments that require manual review, including cutoff violations
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 {result.conflicts.length > 0 ? (
+                  <>
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -313,14 +417,14 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <div className="flex items-center gap-1 cursor-help">
-                                Risk Level
+                                Confidence
                                 <Info className="h-3 w-3 text-muted-foreground" />
                               </div>
                             </TooltipTrigger>
                             <TooltipContent className="max-w-[280px]">
-                              <p className="font-semibold mb-1">Assignment Risk</p>
+                              <p className="font-semibold mb-1">Assignment Confidence</p>
                               <p className="text-xs text-muted-foreground">
-                                How risky is this ownership change? Based on account value and customer status.
+                                How confident is the system in this assignment? Based on warning severity.
                               </p>
                               <p className="text-xs text-muted-foreground mt-1 italic">
                                 Not the same as CRE Risk (customer churn probability).
@@ -332,7 +436,7 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {result.conflicts.map((conflict) => (
+                      {paginatedConflicts.map((conflict) => (
                         <TableRow key={conflict.accountId}>
                           <TableCell>
                             <div>
@@ -349,7 +453,7 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                             <div className="font-medium">{conflict.proposedOwnerName}</div>
                           </TableCell>
                           <TableCell>
-                            {getConflictRiskBadge(conflict.conflictRisk)}
+                            {getConfidenceBadge(conflict.confidence)}
                           </TableCell>
                           <TableCell>
                             <div className="text-sm">{conflict.assignmentReason}</div>
@@ -358,12 +462,59 @@ export const AssignmentPreviewDialog: React.FC<AssignmentPreviewDialogProps> = (
                       ))}
                     </TableBody>
                   </Table>
+                  
+                  {/* Pagination controls for conflicts */}
+                  {totalConflictsPages > 1 && (
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                      <div className="text-sm text-muted-foreground">
+                        Showing {conflictsPage * CONFLICTS_PER_PAGE + 1} - {Math.min((conflictsPage + 1) * CONFLICTS_PER_PAGE, result.conflicts.length)} of {result.conflicts.length.toLocaleString()} conflicts
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setConflictsPage(0)}
+                          disabled={conflictsPage === 0}
+                        >
+                          First
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setConflictsPage(p => Math.max(0, p - 1))}
+                          disabled={conflictsPage === 0}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                        </Button>
+                        <span className="text-sm px-2">
+                          Page {conflictsPage + 1} of {totalConflictsPages.toLocaleString()}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setConflictsPage(p => Math.min(totalConflictsPages - 1, p + 1))}
+                          disabled={conflictsPage >= totalConflictsPages - 1}
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setConflictsPage(totalConflictsPages - 1)}
+                          disabled={conflictsPage >= totalConflictsPages - 1}
+                        >
+                          Last
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
                 ) : (
                   <div className="text-center py-8">
                     <CheckCircle className="mx-auto h-12 w-12 text-green-500" />
                     <h3 className="mt-4 text-lg font-semibold">No Conflicts Found</h3>
                     <p className="text-muted-foreground">
-                      All assignments are low risk and can be applied safely.
+                      All assignments are high confidence and can be applied safely.
                     </p>
                   </div>
                 )}

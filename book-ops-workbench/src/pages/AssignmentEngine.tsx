@@ -42,6 +42,7 @@ import { PriorityConfig, getDefaultPriorityConfig } from '@/config/priorityRegis
 import { useMappedFields } from '@/hooks/useMappedFields';
 import { notifyOptimizationComplete } from '@/services/slackNotificationService';
 import { useAuth } from '@/contexts/AuthContext';
+import { HierarchyAwareReassignDialog } from '@/components/HierarchyAwareReassignDialog';
 
 interface Account {
   sfdc_account_id: string;
@@ -129,14 +130,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   const [showReassignDialog, setShowReassignDialog] = useState(false);
   const [showResetProgress, setShowResetProgress] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
-  const [reassignmentReason, setReassignmentReason] = useState('');
-  const [selectedOwnerId, setSelectedOwnerId] = useState('');
-  const [selectedOwnerName, setSelectedOwnerName] = useState('');
-  const [isReassigning, setIsReassigning] = useState(false);
+  // Reassignment state now handled internally by HierarchyAwareReassignDialog
   const [isResetting, setIsResetting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [workloadBalanceData, setWorkloadBalanceData] = useState<any>(null);
-  const [sophisticatedAssignmentResult, setSophisticatedAssignmentResult] = useState<any>(null);
   const [resetCancelToken, setResetCancelToken] = useState<{ cancelled: boolean }>({ cancelled: false });
   // AI Optimizer state removed - using HIGHS optimization
   const [resetProgress, setResetProgress] = useState<ResetProgress>({
@@ -281,68 +277,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   // Get query client for cache invalidation
   const queryClient = useQueryClient();
 
-  // Enhanced execution function for sophisticated assignments
-  const executeSophisticatedAssignments = async (result: any) => {
-    if (!buildId || !result?.proposals) {
-      throw new Error('Invalid assignment result or build ID');
-    }
-
-    console.log('[Execute Sophisticated] 🚀 Starting execution with', result.proposals.length, 'proposals');
-    console.log('[Execute Sophisticated] 📋 Execution Details:', {
-      buildId,
-      proposalCount: result.proposals.length,
-      sampleProposal: result.proposals[0],
-      timestamp: new Date().toISOString()
-    });
-    
-    // Convert sophisticated result to format expected by legacy service
-    const legacyProposals = result.proposals.map((proposal: any) => ({
-      accountId: proposal.accountId,
-      accountName: proposal.accountName,
-      currentOwnerId: proposal.currentOwnerId,
-      currentOwnerName: proposal.currentOwnerName,
-      proposedOwnerId: proposal.proposedOwnerId,
-      proposedOwnerName: proposal.proposedOwnerName,
-      rationale: proposal.rationale || proposal.reason || 'Sophisticated assignment',
-      ruleApplied: proposal.ruleApplied,
-      conflictRisk: proposal.conflictRisk
-    }));
-
-    console.log('[Execute Sophisticated] 🔄 Executing assignments via assignment service...');
-    
-    // Execute assignments using the assignment service
-    await assignmentService.executeAssignments(buildId, legacyProposals);
-    
-    console.log('[Execute Sophisticated] ✅ Assignment service execution completed');
-    
-    // Verify database updates with sample check
-    try {
-      const { data: sampleUpdates } = await supabase
-        .from('accounts')
-        .select('sfdc_account_id, new_owner_id, new_owner_name')
-        .eq('build_id', buildId)
-        .in('sfdc_account_id', legacyProposals.slice(0, 3).map(p => p.accountId));
-      
-      console.log('[Execute Sophisticated] 📊 Database Update Verification:', {
-        sampleUpdates,
-        expectedUpdates: legacyProposals.slice(0, 3).map(p => ({
-          accountId: p.accountId,
-          expectedOwnerId: p.proposedOwnerId,
-          expectedOwnerName: p.proposedOwnerName
-        }))
-      });
-    } catch (error) {
-      console.warn('[Execute Sophisticated] ⚠️ Could not verify database updates:', error);
-    }
-    
-    console.log('[Execute Sophisticated] 🔄 Starting comprehensive data refresh...');
-    
-    // Force comprehensive data refresh
-    await refreshAllData();
-    
-    console.log('[Execute Sophisticated] 🎉 Execution and refresh completed successfully');
-  };
-
   // Check if AI optimization is available from assignment result
   const checkIfOptimizationAvailable = useCallback((result: any) => {
     // Check if result has AI optimizations from post-processing
@@ -359,7 +293,8 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
         toRepName: opt.proposedOwnerName,
         reasoning: opt.rationale || opt.assignmentReason,
         arrImpact: 0, // Calculate if needed
-        priority: opt.conflictRisk === 'LOW' ? 1 : (opt.conflictRisk === 'MEDIUM' ? 3 : 5)
+        // HIGH confidence = priority 1 (best), LOW confidence = priority 5 (needs review)
+        priority: opt.confidence === 'HIGH' ? 1 : (opt.confidence === 'MEDIUM' ? 3 : 5)
       }));
       
       setAiOptimizerSuggestions(suggestions);
@@ -536,8 +471,11 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
   };
 
   // Process accounts from useAssignmentEngine
-  const allCustomerAccounts = filterAccountsByAssignmentType(accounts?.filter(acc => acc.is_customer) || []);
-  const allProspectAccounts = filterAccountsByAssignmentType(accounts?.filter(acc => !acc.is_customer) || []);
+  // Use getAccountARR() to determine customer vs prospect - consistent with buildDataService/Data Overview
+  // This ensures Assignments tab and Data Overview show the same counts
+  // @see MASTER_LOGIC.mdc §3.1 - Customer = getAccountARR() > 0
+  const allCustomerAccounts = filterAccountsByAssignmentType(accounts?.filter(acc => getAccountARR(acc) > 0) || []);
+  const allProspectAccounts = filterAccountsByAssignmentType(accounts?.filter(acc => getAccountARR(acc) === 0) || []);
   const calculationsLoading = accountsLoading || ownersLoading;
   const calculationsError = accountsError;
   
@@ -561,77 +499,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       });
     }
   }, [refreshAllData]);
-
-  // Handle sophisticated assignment generation
-  const handleSophisticatedAssignment = async (config: any) => {
-    console.log(`[SophisticatedAssignment] Starting sophisticated assignment for all accounts with config:`, config);
-    
-    // Import and use the enhanced assignment service (uses database rules)
-    const { EnhancedAssignmentService } = await import('@/services/enhancedAssignmentService');
-    const service = EnhancedAssignmentService.getInstance();
-    
-    try {
-      // Set up progress callback
-      service.setProgressCallback((progress) => {
-        setAssignmentProgress(prev => ({
-          ...prev,
-          progress: progress.progress,
-          status: progress.status,
-          stages: prev.stages.map(s => ({
-            ...s,
-            isActive: s.id === progress.stage,
-            progress: s.id === progress.stage ? progress.progress : s.progress
-          }))
-        }));
-      });
-
-      setShowAssignmentProgress(true);
-      
-      const result = await service.generateBalancedAssignments(buildId!, 'All', 'all');
-      
-      if (result) {
-        // Update workload balance data
-        setWorkloadBalanceData({
-          reps: result.statistics.repWorkloads.map(rep => ({
-            repId: rep.repId,
-            repName: rep.repName,
-            region: rep.region,
-            currentARR: rep.currentARR,
-            proposedARR: rep.proposedARR,
-            currentAccounts: rep.currentAccounts,
-            proposedAccounts: rep.proposedAccounts,
-            territories: rep.territories || new Set()
-          })),
-          balanceScore: result.statistics.balanceScore,
-          variance: result.statistics.varianceScore,
-          repsAboveMinimum: 0, // Will be calculated by visualization component
-          averageARR: result.statistics.averageAssignmentsPerRep
-        });
-
-        // Store result for preview dialog
-        setSophisticatedAssignmentResult(result);
-
-        // Show preview dialog
-        setTimeout(() => {
-          setShowAssignmentProgress(false);
-          setShowPreviewDialog(true);
-        }, 1000);
-
-        toast({
-          title: "Sophisticated Assignment Complete",
-          description: `Generated ${result.assignedAccounts} assignments with ${result.statistics.balanceScore}% balance score`,
-        });
-      }
-    } catch (error) {
-      console.error('Sophisticated assignment failed:', error);
-      setShowAssignmentProgress(false);
-      toast({
-        title: "Assignment Failed",
-        description: error instanceof Error ? error.message : "Unknown error occurred",
-        variant: "destructive"
-      });
-    }
-  };
 
   // Handle tab-aware assignment generation
   const onGenerateAssignments = async (accountType: 'customers' | 'prospects' | 'all' = 'all') => {
@@ -729,9 +596,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
 
   // Handle preview assignments - show generated assignments if they exist
   const onPreviewAssignments = () => {
-    const resultToPreview = sophisticatedAssignmentResult || assignmentResult;
-    
-    if (!resultToPreview || !resultToPreview.proposals || resultToPreview.proposals.length === 0) {
+    if (!assignmentResult || !assignmentResult.proposals || assignmentResult.proposals.length === 0) {
       toast({
         title: "No Assignments Generated",
         description: "Please generate assignments first before previewing them.",
@@ -755,10 +620,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     setApplyingStatus('saving');
     
     try {
-      // Handle both sophisticated and regular assignment results
-      const resultToExecute = sophisticatedAssignmentResult || assignmentResult;
-      
-      if (!resultToExecute) {
+      if (!assignmentResult) {
         toast({
           title: "No Assignments to Execute",
           description: "Please generate assignments first.",
@@ -769,35 +631,27 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
         return;
       }
 
-      const executionType = sophisticatedAssignmentResult ? 'sophisticated' : 'regular';
-      const proposalCount = resultToExecute.proposals?.length || 0;
+      const proposalCount = assignmentResult.proposals?.length || 0;
       
       console.log('[Execute] 🚀 Starting assignment execution:', {
-        type: executionType,
+        type: 'regular',
         proposals: proposalCount,
-        assignedAccounts: resultToExecute.assignedAccounts || 0,
-        conflicts: resultToExecute.conflicts?.length || 0,
+        assignedAccounts: assignmentResult.assignedAccounts || 0,
+        conflicts: assignmentResult.conflicts?.length || 0,
         buildId
       });
 
-      // Execute using the hook's function but pass the correct result
-      if (sophisticatedAssignmentResult) {
-        console.log('[Execute] 🎯 Executing sophisticated assignments...');
-        await executeSophisticatedAssignments(sophisticatedAssignmentResult);
-      } else {
-        console.log('[Execute] 🎯 Executing regular assignments...');
-        const executed = await handleExecuteAssignments();
-        if (!executed) {
-          // Execution was blocked by imbalance warning - don't continue to success
-          // User will see the warning dialog and can choose to proceed or go back
-          console.log('[Execute] ⚠️ Execution blocked by imbalance warning');
-          setIsApplyingAssignments(false);
-          setShowApplyingOverlay(false);
-          return;
-        }
+      // Execute using the hook's function
+      console.log('[Execute] 🎯 Executing assignments...');
+      const executed = await handleExecuteAssignments();
+      if (!executed) {
+        // Execution was blocked by imbalance warning - don't continue to success
+        // User will see the warning dialog and can choose to proceed or go back
+        console.log('[Execute] ⚠️ Execution blocked by imbalance warning');
+        setIsApplyingAssignments(false);
+        setShowApplyingOverlay(false);
+        return;
       }
-      
-      setSophisticatedAssignmentResult(null);
       
       console.log('[Execute] ✅ Assignment execution completed successfully');
 
@@ -1173,9 +1027,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
           // Clear cache and refresh ALL data (not just accounts)
           buildDataService.clearBuildCache(buildId);
           
-          // Clear local assignment state
-          setSophisticatedAssignmentResult(null);
-          
           await refreshAllData();
           
           // Complete
@@ -1380,9 +1231,6 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       // Clear service cache and refresh ALL data (not just accounts)
       buildDataService.clearBuildCache(buildId);
       
-      // Clear local assignment state
-      setSophisticatedAssignmentResult(null);
-      
       await refreshAllData();
 
       // Complete - ensure 100% progress
@@ -1566,68 +1414,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
     }
   };
 
-  // Handle account reassignment
-  const handleReassignAccount = async () => {
-    if (!buildId || !selectedAccount || !selectedOwnerId || !selectedOwnerName) return;
-
-    setIsReassigning(true);
-    try {
-      // Update account assignment
-      const { error: accountError } = await supabase
-        .from('accounts')
-        .update({
-          new_owner_id: selectedOwnerId,
-          new_owner_name: selectedOwnerName
-        })
-        .eq('sfdc_account_id', selectedAccount.sfdc_account_id)
-        .eq('build_id', buildId);
-
-      if (accountError) throw accountError;
-
-      // Save assignment reason if provided
-      if (reassignmentReason.trim()) {
-        const { error: assignmentError } = await supabase
-          .from('assignments')
-          .upsert({
-            build_id: buildId,
-            sfdc_account_id: selectedAccount.sfdc_account_id,
-            proposed_owner_id: selectedOwnerId,
-            proposed_owner_name: selectedOwnerName,
-            assignment_type: 'MANUAL_REASSIGNMENT',
-            rationale: `MANUAL_REASSIGNMENT: ${reassignmentReason.trim()}`,
-            created_by: (await supabase.auth.getUser()).data.user?.id,
-            updated_at: new Date().toISOString()
-          });
-
-        if (assignmentError) {
-          console.warn('Failed to save assignment reason:', assignmentError);
-        }
-      }
-
-      // Refresh the data
-      await handleRefresh();
-
-      toast({
-        title: "Account Reassigned",
-        description: `Successfully reassigned ${selectedAccount.account_name} to ${selectedOwnerName}.`
-      });
-
-      setShowReassignDialog(false);
-      setSelectedAccount(null);
-      setReassignmentReason('');
-      setSelectedOwnerId('');
-      setSelectedOwnerName('');
-    } catch (error) {
-      console.error('Reassignment error:', error);
-      toast({
-        title: "Reassignment Failed",
-        description: "There was an error reassigning the account.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsReassigning(false);
-    }
-  };
+  // Account reassignment is now handled by HierarchyAwareReassignDialog
 
   // Utility functions for UI rendering
   const getContinuityRiskBadge = (account: Account) => {
@@ -1941,7 +1728,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       </div>
 
       {/* Pending Assignments Alert - show when proposals exist but haven't been applied */}
-      {(assignmentResult?.proposals?.length > 0 || sophisticatedAssignmentResult?.proposals?.length > 0) && (
+      {(assignmentResult?.proposals?.length > 0) && (
         <Card className="border-amber-500 bg-amber-50 dark:bg-amber-900/20">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -1949,7 +1736,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
                 <AlertTriangle className="h-5 w-5 text-amber-600" />
                 <div>
                   <p className="font-semibold text-amber-900 dark:text-amber-100">
-                    {(sophisticatedAssignmentResult?.proposals?.length || assignmentResult?.proposals?.length || 0)} pending assignments not yet applied
+                    {assignmentResult.proposals.length} pending assignments not yet applied
                   </p>
                   <p className="text-sm text-amber-700 dark:text-amber-300">
                     These assignments are in memory only. Click Apply to save them to the database.
@@ -1970,7 +1757,7 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
                   className="bg-amber-600 hover:bg-amber-700 text-white"
                 >
                   <Play className="h-4 w-4 mr-2" />
-                  Apply {(sophisticatedAssignmentResult?.proposals?.length || assignmentResult?.proposals?.length || 0)} Assignments
+                  Apply {assignmentResult.proposals.length} Assignments
                 </Button>
               </div>
             </div>
@@ -2251,12 +2038,9 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
       {/* Assignment Preview Dialog */}
       <AssignmentPreviewDialog
           open={showPreviewDialog}
-          onClose={() => {
-            setShowPreviewDialog(false);
-            setSophisticatedAssignmentResult(null);
-          }}
+          onClose={() => setShowPreviewDialog(false)}
           onExecute={onExecuteAssignments}
-          result={sophisticatedAssignmentResult || assignmentResult}
+          result={assignmentResult}
           isExecuting={isExecuting || isApplyingAssignments}
           assignmentType={activeTab === 'prospects' ? 'prospect' : 'customer'}
           buildId={buildId}
@@ -2316,69 +2100,20 @@ export const AssignmentEngine: React.FC<AssignmentEngineProps> = ({ buildId, onP
 
       {/* AI Balancing Optimizer Dialog removed - using HIGHS optimization */}
 
-      {/* Account Reassignment Dialog */}
-      <Dialog open={showReassignDialog} onOpenChange={(open) => {
-        setShowReassignDialog(open);
-        if (!open) {
-          setSelectedAccount(null);
-          setReassignmentReason('');
-          setSelectedOwnerId('');
-          setSelectedOwnerName('');
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Reassign Account</DialogTitle>
-            <DialogDescription>
-              Change the assignment for {selectedAccount?.account_name}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="owner-select">New Owner</Label>
-              <Select 
-                value={selectedOwnerId ? `${selectedOwnerId}|${selectedOwnerName}` : ''} 
-                onValueChange={(value) => {
-                  const [ownerId, ownerName] = value.split('|');
-                  setSelectedOwnerId(ownerId);
-                  setSelectedOwnerName(ownerName);
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select new owner..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {owners.map((owner) => (
-                    <SelectItem key={owner.rep_id} value={`${owner.rep_id}|${owner.name}`}>
-                      {owner.name} {owner.team && `(${owner.team})`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="reason">Reassignment Reason</Label>
-              <Textarea
-                id="reason"
-                placeholder="Enter reason for reassignment..."
-                value={reassignmentReason}
-                onChange={(e) => setReassignmentReason(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowReassignDialog(false)}>
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleReassignAccount}
-              disabled={!selectedOwnerId || !selectedOwnerName || isReassigning}
-            >
-              {isReassigning ? 'Reassigning...' : 'Submit Reassignment'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Account Reassignment Dialog - Hierarchy Aware */}
+      <HierarchyAwareReassignDialog
+        open={showReassignDialog}
+        onOpenChange={(open) => {
+          setShowReassignDialog(open);
+          if (!open) {
+            setSelectedAccount(null);
+          }
+        }}
+        account={selectedAccount}
+        buildId={buildId}
+        availableReps={owners}
+        onSuccess={handleRefresh}
+      />
 
       {/* Reset Progress Dialog */}
       <ResetProgressDialog

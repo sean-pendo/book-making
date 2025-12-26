@@ -107,3 +107,4 @@ COMMENT ON COLUMN optimization_runs.engine_type IS 'waterfall = priority-based c
 COMMENT ON COLUMN optimization_runs.solver_type IS 'highs-wasm = browser WASM, cloud-run = native server, glpk = fallback. NULL for waterfall engine.';
 
 
+

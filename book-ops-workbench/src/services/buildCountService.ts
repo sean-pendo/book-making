@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { SUPABASE_LIMITS } from '@/_domain';
 
 export interface BuildCounts {
   accounts: number;
@@ -57,20 +58,21 @@ class BuildCountService {
           .neq('owner_id', '')
       ]);
 
-      // For data quality metrics, we need some actual data (but with limits to avoid issues)
+      // For data quality metrics, we need some actual data
+      // Uses SSOT pagination limit from @/_domain
       const [accountsWithAccountIds, opportunities, salesReps] = await Promise.all([
         supabase.from('accounts')
           .select('sfdc_account_id, owner_id')
           .eq('build_id', buildId)
-          .limit(50000),
+          .limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE),
         supabase.from('opportunities')
           .select('sfdc_account_id, owner_id')
           .eq('build_id', buildId)
-          .limit(50000),
+          .limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE),
         supabase.from('sales_reps')
           .select('rep_id')
           .eq('build_id', buildId)
-          .limit(10000)
+          .limit(SUPABASE_LIMITS.FETCH_PAGE_SIZE)
       ]);
 
       const accounts = accountsWithAccountIds.data || [];

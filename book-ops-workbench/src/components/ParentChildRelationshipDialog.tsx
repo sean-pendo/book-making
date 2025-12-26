@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getAccountARR } from '@/_domain';
 import {
   Dialog,
   DialogContent,
@@ -315,7 +316,7 @@ export const ParentChildRelationshipDialog = ({
                   <p className="text-lg font-semibold">{childAccount.account_name}</p>
                   <p className="text-sm text-muted-foreground mt-1">
                     {childAccount.is_customer ? (
-                      <>ARR: {formatCurrency(childAccount.arr || 0)}</>
+                      <>ARR: {formatCurrency(getAccountARR(childAccount))}</>
                     ) : (
                       <>Net ARR: <span className={getNetARRColorClass(getNetARR(childAccount.sfdc_account_id))}>{formatNetARR(getNetARR(childAccount.sfdc_account_id))}</span></>
                     )}
@@ -377,7 +378,7 @@ export const ParentChildRelationshipDialog = ({
                             </p>
                           </div>
                           <div className="text-right text-sm">
-                            <p className="font-medium">{formatCurrency(parent.calculated_arr || 0)}</p>
+                            <p className="font-medium">{formatCurrency(getAccountARR(parent))}</p>
                           </div>
                         </div>
                       </button>
